@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>vlint tab-label-single-line fixture</title>
+  <style>
+    html { color-scheme: light; }
+    body {
+      margin: 16px;
+      font: 16px/1.5 sans-serif;
+      color: #111;
+      background: #fff;
+    }
+    .tab {
+      display: inline-block;
+      max-width: 76px;
+      white-space: normal;
+      vertical-align: top;
+      padding: 4px 8px;
+      border: 1px solid #ccc;
+      background: #f6f6f6;
+    }
+    .wide { max-width: none; }
+    sup { font-size: 0.75em; vertical-align: super; line-height: 0; }
+    .badge {
+      display: inline-block;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: #d0e0ff;
+      font-size: 0.8em;
+    }
+    .display-none { display: none; }
+    .visibility-hidden { visibility: hidden; }
+    .content-visibility-hidden { content-visibility: hidden; }
+    .opacity-zero { opacity: 0; }
+    .shifted { transform: translateY(7.5px); }
+    .empty-after::after { content: ""; }
+  </style>
+</head>
+<body>
+
+  <!-- AE1: clean single-line tabs (selected, unselected, disabled) -->
+  <section id="clean">
+    <div role="tablist">
+      <button role="tab" class="tab wide" aria-selected="true" data-testid="tab-selected">Overview</button>
+      <button role="tab" class="tab wide" aria-selected="false" data-testid="tab-unselected">Details</button>
+      <button role="tab" class="tab wide" aria-disabled="true" data-testid="tab-disabled">Archived</button>
+    </div>
+  </section>
+
+  <!-- AE1: multi-line wrap violations, collected in document order -->
+  <section id="wraps">
+    <div role="tablist">
+      <button role="tab" class="tab" data-testid="wrap-alpha">Account Settings</button>
+      <button role="tab" class="tab" data-testid="wrap-beta">Notification Preferences</button>
+    </div>
+  </section>
+
+  <!-- superscript and badge on the same line stay clean -->
+  <section id="same-line">
+    <div role="tablist">
+      <button role="tab" class="tab wide" data-testid="sup-tab">Items<sup>2</sup></button>
+      <button role="tab" class="tab wide" data-testid="badge-tab">Inbox <span class="badge">3</span></button>
+    </div>
+  </section>
+
+  <!-- tall badge spanning two wrapped text lines must not bridge them -->
+  <section id="tall-bridge">
+    <div role="tablist">
+      <span role="tab" class="tab" data-testid="tall-tab" style="position: relative;">
+        Bridge Label
+        <span style="position: absolute; left: 84px; top: 0; line-height: 46px;">NEW</span>
+      </span>
+    </div>
+  </section>
+
+  <!-- CSS transform producing fractional geometry -->
+  <section id="transform">
+    <div role="tablist">
+      <button role="tab" class="tab wide shifted" data-testid="shifted-tab">Translated</button>
+    </div>
+  </section>
+
+  <!-- hidden / non-measurable states: all excluded from label count -->
+  <section id="hidden-states">
+    <div role="tablist">
+      <button role="tab" class="tab display-none" data-testid="hs-display-none">Hidden One</button>
+      <button role="tab" class="tab visibility-hidden" data-testid="hs-visibility">Invisible Two</button>
+      <button role="tab" class="tab content-visibility-hidden" data-testid="hs-content">CV Three</button>
+      <button role="tab" class="tab opacity-zero" data-testid="hs-opacity">Opaque Zero</button>
+      <button role="tab" class="tab wide" data-testid="hs-icon-only">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"></circle></svg>
+      </button>
+      <button role="tab" class="tab wide" data-testid="hs-aria-only" aria-label="Settings"></button>
+      <button role="tab" class="tab wide" data-testid="hs-whitespace">   </button>
+    </div>
+  </section>
+
+  <!-- empty quoted generated content is allowed (not unsupported) -->
+  <section id="empty-generated">
+    <div role="tablist">
+      <button role="tab" class="tab wide empty-after" data-testid="empty-after-tab">Reports</button>
+    </div>
+  </section>
+
+  <!-- intentional multi-line tab excluded by selector -->
+  <section id="exclude">
+    <div role="tablist">
+      <button role="tab" class="tab intentional-multiline" data-testid="excluded-wrap">Deliberately Wrapped Long Label</button>
+      <button role="tab" class="tab wide" data-testid="after-exclude">Following</button>
+    </div>
+  </section>
+
+  <!-- locator scenarios: shared id + shared testid (path fallback) and a unique target -->
+  <section id="locator">
+    <div role="tablist">
+      <button role="tab" class="tab" id="dupe-id" data-testid="dupe">One Wrap Label</button>
+      <button role="tab" class="tab" id="dupe-id" data-testid="dupe">Two Wrap Label</button>
+      <button role="tab" class="tab wide" data-testid="unique-locator" aria-label="Loc">Locator</button>
+    </div>
+  </section>
+
+  <!-- section with no role=tab at all (AE4: zero candidates) -->
+  <section id="no-tabs">
+    <div><button type="button">Just a button</button></div>
+  </section>
+
+</body>
+</html>

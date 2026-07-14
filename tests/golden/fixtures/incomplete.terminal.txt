@@ -1,0 +1,9 @@
+vlint 0.1.0: incomplete
+targets resolved=1 complete=0 partial=0 failed=0 not-executed=1
+rules clean=0 violations=0 failed=0 disabled=1 not-executed=1
+matched=0 violations=0 failures=1
+target only: not-executed https://example.com/only viewport=1280x720@1
+  rule tabs: not-executed labels=0 violations=0
+  rule off: disabled labels=0 violations=0
+finalize tabs: not-executed labels=0
+failure browser-setup/browser-missing target=- rule=-: chromium not installed
