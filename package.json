@@ -1,0 +1,28 @@
+{
+  "name": "vlint",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": "1.3.14"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "check:architecture": "bun run scripts/check-architecture.ts",
+    "test:unit": "bun test tests/unit tests/golden",
+    "test:integration": "bun test tests/integration/browser-install.test.ts tests/integration/cli-acceptance.test.ts tests/integration/result-transitions.test.ts && bun test tests/integration/browser-lifecycle.test.ts && bun test tests/integration/readiness.test.ts && bun test tests/integration/tab-label-single-line.test.ts",
+    "test:acceptance": "bun test tests/acceptance",
+    "build:linux-x64": "bun run scripts/build.ts linux-x64",
+    "build:feasibility": "bun run scripts/build.ts feasibility",
+    "release:validate": "bun run scripts/release-validate.ts",
+    "build:fixture-server": "bun run scripts/build.ts fixture-server",
+    "test:feasibility": "bun run build:feasibility && bun run build:fixture-server && bun test tests/smoke/compiled-runtime.test.ts"
+  },
+  "dependencies": {
+    "playwright": "1.61.1"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.3"
+  }
+}

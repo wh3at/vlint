@@ -1,0 +1,418 @@
+# vlint Linux x64 release pipeline (unit U6).
+#
+# Provenance, build, and validation all run BEFORE any publication. The binary
+# that is published is produced once from a frozen checkout, digested, carried
+# forward as an immutable Actions artifact, re-verified at every boundary, and
+# only then attached to a protected tag. The publish job holds the only
+# contents:write token, never checks out repository code, and runs no
+# repository scripts. A final permissions-empty job re-downloads the published
+# asset anonymously and confirms the checksum still matches.
+#
+# Repository prerequisites (configured outside this workflow):
+#   - default branch protection with required status checks
+#   - a protected `v*` tag ruleset
+#   - a `release` GitHub Environment with required reviewers (approval gate)
+#
+# All third-party actions are pinned to immutable commit SHAs, not mutable tags.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Tag push only: release is driven by the protected `v*` tag ruleset. A manual
+  # dispatch would desync github.sha from the tag commit and is intentionally not
+  # supported; re-trigger by re-pushing the tag.
+
+# One release pipeline per tag; never cancel an in-flight release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Least privilege by default; each job widens only what it needs.
+permissions:
+  contents: read
+
+env:
+  # For a tag push, github.ref_name is the bare tag name, e.g. "v0.1.0".
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Provenance gate (read-only).
+  #    The tag commit must live on the protected default branch, every required
+  #    status check must have succeeded at that exact SHA, and the version
+  #    embedded in package.json must equal the tag's semver. Nothing is built
+  #    or signed until provenance clears.
+  # ---------------------------------------------------------------------------
+  provenance:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      semver: ${{ steps.meta.outputs.semver }}
+      archive: ${{ steps.meta.outputs.archive }}
+    steps:
+      - name: Resolve tag metadata
+        id: meta
+        run: |
+          case "$TAG" in
+            v*) ;;
+            *) echo "::error::ref '$TAG' is not a version tag (expected v<semver>)"; exit 1 ;;
+          esac
+          SEMVER="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "semver=$SEMVER" >> "$GITHUB_OUTPUT"
+          echo "archive=vlint-${TAG}-linux-x64.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout tag commit (full history for ancestry check)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.meta.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Verify default-branch provenance, required checks, and version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REPO: ${{ github.repository }}
+          SEMVER: ${{ steps.meta.outputs.semver }}
+        run: |
+          set -euo pipefail
+
+          # (a) Embedded version must match the tag.
+          PKG_VERSION="$(jq -r '.version' package.json)"
+          if [ "$PKG_VERSION" != "$SEMVER" ]; then
+            echo "::error::package.json version '$PKG_VERSION' != tag semver '$SEMVER'"
+            exit 1
+          fi
+
+          # (b) The tag commit must be reachable from the protected default branch.
+          if ! git merge-base --is-ancestor "$SHA" "refs/remotes/origin/$DEFAULT_BRANCH"; then
+            echo "::error::tag commit $SHA is not on the $DEFAULT_BRANCH history"
+            exit 1
+          fi
+
+          # (c) Collect required status-check contexts (rulesets, then classic
+          #     branch protection as a fallback). Release is refused if none are
+          #     configured: the gate must be real, not absent.
+          REQUIRED="$(
+            { gh api "/repos/$REPO/rules/branches/$DEFAULT_BRANCH" --paginate 2>/dev/null \
+                | jq -r 'map(select(.type=="required_status_checks")
+                          | .parameters.required_status_checks[].context) | unique | .[]?' 2>/dev/null \
+                  || true; }
+            { gh api "/repos/$REPO/branches/$DEFAULT_BRANCH/protection" 2>/dev/null \
+                | jq -r '(.required_status_checks.contexts // [])[]?' 2>/dev/null \
+                  || true; }
+          )"
+          if [ -z "$(printf '%s' "$REQUIRED" | tr -d '[:space:]')" ]; then
+            echo "::error::no required status checks configured on $DEFAULT_BRANCH; refusing to release"
+            exit 1
+          fi
+
+          # (d) Every required context must have reported success at this SHA.
+          PASSED_RUNS="$(gh api "/repos/$REPO/commits/$SHA/check-runs?per_page=100" --paginate 2>/dev/null \
+            | jq -r '.check_runs[]? | select(.conclusion=="success") | .name' 2>/dev/null || true)"
+          PASSED_STATUSES="$(gh api "/repos/$REPO/commits/$SHA/status?per_page=100" 2>/dev/null \
+            | jq -r '.statuses[]? | select(.state=="success") | .context' 2>/dev/null || true)"
+          ALL_PASSED="$(printf '%s\n%s\n' "$PASSED_RUNS" "$PASSED_STATUSES" | sed '/^$/d' | sort -u)"
+
+          missing=0
+          while IFS= read -r ctx; do
+            [ -n "$ctx" ] || continue
+            if ! printf '%s\n' "$ALL_PASSED" | grep -Fqx -- "$ctx"; then
+              echo "::error::required check '$ctx' did not report success at $SHA"
+              missing=1
+            fi
+          done <<EOF
+          $REQUIRED
+          EOF
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+
+          echo "Provenance gate passed for $TAG @ $SHA"
+
+  # ---------------------------------------------------------------------------
+  # 2. Build (secret-free, contents:read).
+  #    Reproducibly compiles the Linux x64 baseline binary from the frozen tag
+  #    commit, stages the versioned archive + SHA256SUMS, and uploads a single
+  #    immutable Actions artifact. The archive digest is exported and threaded
+  #    through every downstream job as the immutable handoff.
+  # ---------------------------------------------------------------------------
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    needs: provenance
+    outputs:
+      archive_sha256: ${{ steps.digest.outputs.archive_sha256 }}
+      archive_name: ${{ steps.meta.outputs.archive }}
+    steps:
+      - name: Checkout tag commit (frozen build inputs)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.provenance.outputs.tag }}
+
+      - name: Setup Bun (pinned)
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install dependencies (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Build production CLI and release fixture
+        run: |
+          set -euo pipefail
+          # Production single executable (embeds Playwright library code).
+          bun run build:linux-x64
+          # Single-line tab fixture for the production happy-path check.
+          # Compiled directly (not via scripts/build.ts) so the build target map
+          # stays unchanged; this binary is test-only and not shipped.
+          bun build tests/release/release-fixture-server.ts \
+            --compile --target bun-linux-x64-baseline \
+            --outfile dist/vlint-release-fixture-server
+
+      - name: Stage versioned archive and checksum
+        id: meta
+        env:
+          ARCHIVE: ${{ needs.provenance.outputs.archive }}
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          cp dist/vlint-linux-x64 stage/vlint
+          chmod 0755 stage/vlint
+          cp README.md stage/README.md
+          # Archive root contains exactly: vlint (0755) and README.md.
+          ( cd stage && tar --owner=0 --group=0 --numeric-owner -czf "../$ARCHIVE" vlint README.md )
+          # SHA256SUMS records the archive's own digest (filename-relative).
+          sha256sum "$ARCHIVE" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Record immutable archive digest
+        id: digest
+        env:
+          ARCHIVE: ${{ needs.provenance.outputs.archive }}
+        run: |
+          set -euo pipefail
+          sha="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+          echo "archive_sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "Immutable archive digest: $sha"
+
+      - name: Upload immutable release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vlint-release-${{ needs.provenance.outputs.tag }}
+          path: |
+            ${{ needs.provenance.outputs.archive }}
+            SHA256SUMS
+            dist/vlint-release-fixture-server
+          retention-days: 7
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 3. Validate (credential-free clean Ubuntu 24.04 guest).
+  #    Re-derives the archive digest from the downloaded artifact and confirms
+  #    it equals the build job's digest (immutable handoff), then runs the full
+  #    release validator in a fresh, network-isolated guest.
+  # ---------------------------------------------------------------------------
+  validate:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    needs: [provenance, build]
+    steps:
+      - name: Checkout validator scripts only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.provenance.outputs.tag }}
+
+      - name: Download immutable artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vlint-release-${{ needs.provenance.outputs.tag }}
+          path: release-artifacts
+
+      - name: Verify immutable digest handoff
+        env:
+          EXPECTED: ${{ needs.build.outputs.archive_sha256 }}
+          ARCHIVE: release-artifacts/${{ needs.provenance.outputs.archive }}
+        run: |
+          set -euo pipefail
+          actual="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "::error::digest mismatch after download: expected $EXPECTED got $actual"
+            exit 1
+          fi
+          echo "Immutable digest confirmed: $actual"
+
+      - name: Validate release in clean Ubuntu 24.04 guest
+        env:
+          ARCHIVE: release-artifacts/${{ needs.provenance.outputs.archive }}
+          CHECKSUM: release-artifacts/SHA256SUMS
+          FIXTURE: release-artifacts/vlint-release-fixture-server
+        run: |
+          sh tests/release/validate.sh release "$ARCHIVE" "$CHECKSUM" "$FIXTURE"
+
+  # ---------------------------------------------------------------------------
+  # 4. Publish (approval-gated; the only contents:write token; no checkout).
+  #    Re-downloads the exact validated artifact, re-verifies the digest,
+  #    refuses to overwrite any existing release/asset, uploads to a draft
+  #    release, confirms the server-side bytes match, then publishes. The token
+  #    is consumed only by fixed GitHub API/upload steps.
+  # ---------------------------------------------------------------------------
+  publish:
+    runs-on: ubuntu-24.04
+    needs: [provenance, build, validate]
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Download validated artifact (no repository checkout)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vlint-release-${{ needs.provenance.outputs.tag }}
+          path: release-artifacts
+
+      - name: Re-verify digest before publication
+        env:
+          EXPECTED: ${{ needs.build.outputs.archive_sha256 }}
+          ARCHIVE: release-artifacts/${{ needs.provenance.outputs.archive }}
+        run: |
+          set -euo pipefail
+          actual="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "::error::publish digest mismatch: expected $EXPECTED got $actual"
+            exit 1
+          fi
+
+      - name: Reject mutable tag and existing release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.provenance.outputs.tag }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Pin the release to the resolved commit, never to the (mutable) tag name.
+          # Dereference both lightweight and annotated tags to the underlying commit.
+          obj="$(gh api "/repos/$REPO/git/ref/tags/$TAG" --jq '.object')"
+          obj_type="$(printf '%s' "$obj" | jq -r '.type')"
+          TAG_SHA="$(printf '%s' "$obj" | jq -r '.sha')"
+          if [ "$obj_type" = "tag" ]; then
+            TAG_SHA="$(gh api "/repos/$REPO/git/tags/$TAG_SHA" --jq '.object.sha')"
+          fi
+          if [ "$TAG_SHA" != "$SHA" ]; then
+            echo "::error::tag points at commit $TAG_SHA, expected release commit $SHA"
+            exit 1
+          fi
+          # Refuse to clobber an already-published release.
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "::error::release $TAG already exists; refusing to overwrite"
+            exit 1
+          fi
+
+      - name: Create draft release and upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.provenance.outputs.tag }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          ARCHIVE: release-artifacts/${{ needs.provenance.outputs.archive }}
+          NOTES_DIR: release-artifacts
+        run: |
+          set -euo pipefail
+          printf '## vlint %s\n\nLinux x64 single executable. See README for install and verification.\n' \
+            "${TAG#v}" > "$NOTES_DIR/RELEASE_NOTES.md"
+          gh release create "$TAG" \
+            --repo "$REPO" \
+            --target "$SHA" \
+            --title "vlint ${TAG#v}" \
+            --notes-file "$NOTES_DIR/RELEASE_NOTES.md" \
+            --draft
+          # upload without --clobber so a name collision is a hard failure.
+          gh release upload "$TAG" \
+            --repo "$REPO" \
+            "$ARCHIVE" release-artifacts/SHA256SUMS
+
+      - name: Verify server-side asset bytes, then publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.provenance.outputs.tag }}
+          REPO: ${{ github.repository }}
+          EXPECTED: ${{ needs.build.outputs.archive_sha256 }}
+          ARCHIVE: ${{ needs.provenance.outputs.archive }}
+        run: |
+          set -euo pipefail
+          ASSET_URL="$(gh release view "$TAG" --repo "$REPO" --json assets \
+            --jq ".assets[] | select(.name==\"$ARCHIVE\") | .url")"
+          gh api "$ASSET_URL" > server-asset.bin
+          actual="$(sha256sum server-asset.bin | awk '{print $1}')"
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "::error::server-side asset digest $actual != expected $EXPECTED"
+            exit 1
+          fi
+          # Checksum tampering guard: the published SHA256SUMS must match the asset.
+          gh release download "$TAG" --repo "$REPO" --pattern "SHA256SUMS" --dir verify-checksum
+          ( cd verify-checksum && grep -Fqx "$(echo "$EXPECTED  $ARCHIVE")" SHA256SUMS ) \
+            || { echo "::error::published SHA256SUMS does not match the asset digest"; exit 1; }
+          gh release edit "$TAG" --repo "$REPO" --draft=false
+          echo "Published $TAG"
+
+  # ---------------------------------------------------------------------------
+  # 5. Anonymous re-download verification (permissions-empty, no token).
+  #    Proves a public, credential-free consumer can fetch the published asset
+  #    by URL alone and reproduce the exact checksum.
+  # ---------------------------------------------------------------------------
+  verify-public:
+    runs-on: ubuntu-24.04
+    permissions: {}
+    needs: [provenance, build, publish]
+    steps:
+      - name: Anonymous download and checksum match
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.provenance.outputs.tag }}
+          ARCHIVE: ${{ needs.provenance.outputs.archive }}
+          EXPECTED: ${{ needs.build.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/$REPO/releases/download/$TAG"
+          # No Authorization header, no GITHUB_TOKEN: pure anonymous public fetch.
+          curl -fsSL "$base/$ARCHIVE" -o public-archive.tar.gz
+          curl -fsSL "$base/SHA256SUMS" -o public-SHA256SUMS
+          actual="$(sha256sum public-archive.tar.gz | awk '{print $1}')"
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "::error::public download digest $actual != expected $EXPECTED"
+            exit 1
+          fi
+          grep -Fqx "$(echo "$EXPECTED  $ARCHIVE")" public-SHA256SUMS \
+            || { echo "::error::public SHA256SUMS entry mismatch"; exit 1; }
+          echo "Anonymous re-download verified: $actual"
+
+  # ---------------------------------------------------------------------------
+  # 6. Failure-only cleanup.
+  #    Runs only when publish or verify failed. Deletes a partially or fully
+  #    published release so a bad artifact never stays live. No repository
+  #    checkout; only fixed GitHub API calls.
+  # ---------------------------------------------------------------------------
+  cleanup-on-failure:
+    runs-on: ubuntu-24.04
+    needs: [publish, verify-public]
+    if: failure()
+    permissions:
+      contents: write
+    steps:
+      - name: Delete release if it was created
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -x
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release delete "$TAG" --repo "$REPO" --yes
+            echo "Removed release $TAG after pipeline failure"
+          fi
