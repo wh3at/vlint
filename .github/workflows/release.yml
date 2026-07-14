@@ -248,6 +248,8 @@ jobs:
           CHECKSUM: release-artifacts/SHA256SUMS
           FIXTURE: release-artifacts/vlint-release-fixture-server
         run: |
+          # actions/download-artifact does not preserve executable mode.
+          chmod 0755 "$FIXTURE"
           sh tests/release/validate.sh release "$ARCHIVE" "$CHECKSUM" "$FIXTURE"
 
   # ---------------------------------------------------------------------------
