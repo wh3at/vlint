@@ -21,9 +21,8 @@ on:
   push:
     tags:
       - "v*"
-  # Tag push only: release is driven by the protected `v*` tag ruleset. A manual
-  # dispatch would desync github.sha from the tag commit and is intentionally not
-  # supported; re-trigger by re-pushing the tag.
+  # Tag push only. The provenance gate below validates that the tag points to
+  # the protected default branch and that every release-required CI job passed.
 
 # One release pipeline per tag; never cancel an in-flight release.
 concurrency:
@@ -49,7 +48,9 @@ jobs:
   provenance:
     runs-on: ubuntu-24.04
     permissions:
+      checks: read
       contents: read
+      statuses: read
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       semver: ${{ steps.meta.outputs.semver }}
@@ -96,22 +97,15 @@ jobs:
             exit 1
           fi
 
-          # (c) Collect required status-check contexts (rulesets, then classic
-          #     branch protection as a fallback). Release is refused if none are
-          #     configured: the gate must be real, not absent.
-          REQUIRED="$(
-            { gh api "/repos/$REPO/rules/branches/$DEFAULT_BRANCH" --paginate 2>/dev/null \
-                | jq -r 'map(select(.type=="required_status_checks")
-                          | .parameters.required_status_checks[].context) | unique | .[]?' 2>/dev/null \
-                  || true; }
-            { gh api "/repos/$REPO/branches/$DEFAULT_BRANCH/protection" 2>/dev/null \
-                | jq -r '(.required_status_checks.contexts // [])[]?' 2>/dev/null \
-                  || true; }
-          )"
-          if [ -z "$(printf '%s' "$REQUIRED" | tr -d '[:space:]')" ]; then
-            echo "::error::no required status checks configured on $DEFAULT_BRANCH; refusing to release"
-            exit 1
-          fi
+          # (c) GitHub's workflow token cannot read branch-protection settings,
+          #     even though it can read checks. Keep this release gate aligned
+          #     with the required contexts configured on `main`.
+          REQUIRED='typecheck
+          architecture
+          unit
+          build
+          browser-tests
+          release-validate'
 
           # (d) Every required context must have reported success at this SHA.
           PASSED_RUNS="$(gh api "/repos/$REPO/commits/$SHA/check-runs?per_page=100" --paginate 2>/dev/null \
