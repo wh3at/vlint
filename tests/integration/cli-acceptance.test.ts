@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { RunResultV1 } from "../../src/contracts/result";
+import type { RunResultV2 } from "../../src/contracts/result";
 import { boundarySuccess } from "../../src/contracts/failure";
 import { runCli, type BrowserInstallResult, type CliIo, type CliRuntime } from "../../src/cli";
 import { runCheckCommand } from "../../src/commands/check";
+import { runInitCommand } from "../../src/commands/init";
+import type { SetupResult } from "../../src/commands/setup";
+import { loadConfig } from "../../src/config/load";
 
 /**
  * CLI acceptance boundary (U5/U7). Every scenario here drives the REAL check
@@ -36,6 +39,15 @@ async function writeConfig(directory: string, value: unknown): Promise<void> {
   await writeFile(join(directory, "vlint.config.json"), typeof value === "string" ? value : JSON.stringify(value));
 }
 
+const MINIMAL_DEVICE = {
+  name: "standard",
+  viewport: { width: 1280, height: 720 },
+  screen: { width: 1280, height: 720 },
+  deviceScaleFactor: 1,
+  isMobile: false,
+  hasTouch: false,
+} as const;
+
 afterEach(async () => {
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
@@ -60,6 +72,19 @@ function runtimeFor(cwd: string, version = "0.1.0"): CliRuntime {
   return {
     version,
     check: (url, signal) => runCheckCommand(cwd, url, process.env, version, signal),
+    init: () => runInitCommand(cwd),
+    setup: async () => boundarySuccess<SetupResult>({
+      config: "already-present",
+      browser: {
+        kind: "already-present",
+        browser: {
+          name: "chromium-headless-shell",
+          revision: "test",
+          browserVersion: "test",
+          executablePath: "/test/chromium",
+        },
+      },
+    }),
     // No scenario in this file invokes `browser install`; the fake exists only
     // to satisfy the CliRuntime contract deterministically.
     install: async () =>
@@ -76,12 +101,16 @@ async function runCheck(
   return { exit, output: harness.output() };
 }
 
-function jsonResult(output: Captured): RunResultV1 {
+function jsonResult(output: Captured): RunResultV2 {
   expect(output.stdout).toHaveLength(1);
   expect(output.stderr).toEqual([]);
   const line = output.stdout[0]!;
   expect(line.endsWith("\n")).toBe(true);
-  return JSON.parse(line) as RunResultV1;
+  return JSON.parse(line) as RunResultV2;
+}
+
+function runFailure(output: Captured): RunResultV2["failures"][number] | undefined {
+  return jsonResult(output).failures[0];
 }
 
 describe("CLI version and invalid-argument boundary", () => {
@@ -117,8 +146,8 @@ describe("valid check boundary: exactly one stdout result, no stderr", () => {
     expect(exit).toBe(2);
     const result = jsonResult(output);
     expect(result.status).toBe("incomplete");
-    expect(result.failure).toMatchObject({ stage: "config", code: "config-not-found" });
-    expect(result.targets).toEqual([]);
+    expect(result.failures[0]).toMatchObject({ stage: "config", code: "config-not-found" });
+    expect(result.cases).toEqual([]);
   });
 
   test("no config and no url renders the terminal view", async () => {
@@ -140,15 +169,15 @@ describe("config failure matrix maps to exit 2 with the correct code", () => {
     await writeConfig(cwd, "not json");
     const { exit, output } = await runCheck(cwd, ["check", "--format", "json"]);
     expect(exit).toBe(2);
-    expect(jsonResult(output).failure).toMatchObject({ code: "config-invalid-json" });
+    expect(runFailure(output)).toMatchObject({ code: "config-invalid-json" });
   });
 
   test("config-schema-invalid (empty static targets)", async () => {
     const cwd = await temporaryDirectory();
-    await writeConfig(cwd, { schemaVersion: 1, provider: { type: "static", targets: [] } });
+    await writeConfig(cwd, { schemaVersion: 2, devices: [MINIMAL_DEVICE], provider: { type: "static", targets: [] } });
     const { exit, output } = await runCheck(cwd, ["check", "--format", "json"]);
     expect(exit).toBe(2);
-    expect(jsonResult(output).failure).toMatchObject({ code: "config-schema-invalid" });
+    expect(runFailure(output)).toMatchObject({ code: "config-schema-invalid" });
   });
 
   test("config-too-large (file exceeds 8 MiB before parsing)", async () => {
@@ -156,14 +185,15 @@ describe("config failure matrix maps to exit 2 with the correct code", () => {
     await writeFile(join(cwd, "vlint.config.json"), "x".repeat(8 * 1024 * 1024 + 1));
     const { exit, output } = await runCheck(cwd, ["check", "--format", "json"]);
     expect(exit).toBe(2);
-    expect(jsonResult(output).failure).toMatchObject({ code: "config-too-large" });
+    expect(runFailure(output)).toMatchObject({ code: "config-too-large" });
   });
 });
 
 describe("provider failure matrix maps to exit 2 with the correct code", () => {
   function commandConfig(executable: string, args: readonly string[]) {
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      devices: [MINIMAL_DEVICE],
       provider: { type: "command" as const, executable, args, timeoutMs: 5000 },
     };
   }
@@ -177,7 +207,7 @@ describe("provider failure matrix maps to exit 2 with the correct code", () => {
     await writeConfig(cwd, commandConfig(process.execPath, [providerFixture, mode]));
     const { exit, output } = await runCheck(cwd, ["check", "--format", "json"]);
     expect(exit).toBe(2);
-    expect(jsonResult(output).failure).toMatchObject({ stage: "provider", code });
+    expect(runFailure(output)).toMatchObject({ stage: "provider", code });
   });
 
   test("classifies provider-spawn-failed for a missing executable", async () => {
@@ -185,10 +215,48 @@ describe("provider failure matrix maps to exit 2 with the correct code", () => {
     await writeConfig(cwd, commandConfig(join(cwd, "does-not-exist"), []));
     const { exit, output } = await runCheck(cwd, ["check", "--format", "json"]);
     expect(exit).toBe(2);
-    expect(jsonResult(output).failure).toMatchObject({ code: "provider-spawn-failed" });
+    expect(runFailure(output)).toMatchObject({ code: "provider-spawn-failed" });
   });
 
   // provider-timeout is deliberately omitted: exercising it requires a wall-clock
   // sleep in the provider fixture, which the deterministic-test constraint forbids.
+});
+
+describe("init boundary: non-destructive standard config generation", () => {
+  test("creates a stable config on stdout only with exit 0 (AE1)", async () => {
+    const cwd = await temporaryDirectory();
+    const { exit, output } = await runCheck(cwd, ["init"]);
+    expect(exit).toBe(0);
+    expect(output.stdout).toEqual(["vlint init: created vlint.config.json\n"]);
+    expect(output.stderr).toEqual([]);
+
+    const configPath = join(cwd, "vlint.config.json");
+    const created = await readFile(configPath, "utf8");
+    // The generated file is accepted by the usual loader and schema parser.
+    const loaded = await loadConfig(cwd);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.value.devices).toHaveLength(2);
+    expect(loaded.value.provider).toBeUndefined();
+    // No Chromium-incompatible browser type leaks into the generated file.
+    expect(created.includes("defaultBrowserType")).toBe(false);
+  });
+
+  test("refuses to overwrite an existing config with exit 2 (AE2)", async () => {
+    const cwd = await temporaryDirectory();
+    const configPath = join(cwd, "vlint.config.json");
+    const prior = "prior-bytes";
+    await writeFile(configPath, prior);
+
+    const { exit, output } = await runCheck(cwd, ["init"]);
+    expect(exit).toBe(2);
+    expect(output.stdout).toEqual([]);
+    expect(output.stderr).toHaveLength(1);
+    expect(output.stderr[0]?.endsWith("\n")).toBe(true);
+    expect(output.stderr[0]).toContain("config-already-exists");
+
+    const after = await readFile(configPath, "utf8");
+    expect(after).toBe(prior);
+  });
 });
 

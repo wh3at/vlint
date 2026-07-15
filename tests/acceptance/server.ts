@@ -44,6 +44,27 @@ const FIXED_SETTINGS_HTML = `<!doctype html>
 </body>
 </html>`;
 
+/**
+ * Mobile-only regression fixture: a single tab whose label is wide enough to
+ * wrap on a 402px iPhone viewport but fit on one line at the 1470px MacBook
+ * viewport. The button is reset to border-box with no padding/border so its
+ * content width equals the viewport width deterministically.
+ */
+const MOBILE_ONLY_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>mobile-only layout</title>
+<style>
+  body { margin: 0; font: 16px/1.4 sans-serif; }
+  [role="tab"] { display: block; width: 100%; white-space: normal; box-sizing: border-box; padding: 0; border: 0; }
+</style>
+</head>
+<body>
+<div role="tablist">
+<button role="tab" data-testid="responsive" aria-selected="true">Account Notification Preferences and Privacy Configuration Settings Dashboard Panel</button>
+</div>
+</body>
+</html>`;
+
 export interface AcceptanceServer {
   readonly url: string;
   readonly port: number;
@@ -62,6 +83,10 @@ export function startAcceptanceServer(): AcceptanceServer {
 
       if (pathname === "/clean") {
         return new Response(CLEAN_TABS_HTML, { headers: HTML_HEADERS });
+      }
+
+      if (pathname === "/mobile-only") {
+        return new Response(MOBILE_ONLY_HTML, { headers: HTML_HEADERS });
       }
 
       if (pathname === "/settings") {

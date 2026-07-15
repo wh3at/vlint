@@ -26,8 +26,11 @@ RUN apt-get update \
         libxfixes3 \
         libxkbcommon0 \
         libxrandr2 \
+        sudo \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 10001 --shell /bin/sh vlint
+    && useradd --create-home --uid 10001 --shell /bin/sh vlint \
+    && printf 'vlint ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/vlint \
+    && chmod 0440 /etc/sudoers.d/vlint
 
 USER vlint
 ENV HOME=/home/vlint

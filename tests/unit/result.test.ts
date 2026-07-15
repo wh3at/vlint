@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type {
+  EffectiveAuditCase,
   EffectiveRule,
   EffectiveRuleForTarget,
   EffectiveTarget,
@@ -7,6 +8,7 @@ import type {
 } from "../../src/contracts/config";
 import type { RuleEvaluationOutcome } from "../../src/contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type Failure } from "../../src/contracts/failure";
+import type { RunResultV2 } from "../../src/contracts/result";
 import {
   exitCodeForResult,
   type CheckDependencies,
@@ -49,10 +51,32 @@ function target(name: string, rules: readonly EffectiveRule[], disabled: readonl
   };
 }
 
+function makeCase(t: EffectiveTarget): EffectiveAuditCase {
+  return {
+    name: t.name,
+    url: t.url,
+    deviceName: "desktop",
+    viewport: t.viewport,
+    screen: t.viewport,
+    deviceScaleFactor: t.deviceScaleFactor,
+    isMobile: false,
+    hasTouch: false,
+    userAgent: null,
+    locale: t.locale,
+    timezoneId: t.timezoneId,
+    timeoutMs: t.timeoutMs,
+    browserState: t.browserState,
+    readyCondition: t.readyCondition,
+    rules: t.rules,
+  };
+}
+
 function plan(targetNames: readonly string[], rules: readonly EffectiveRule[], disabled: Readonly<Record<string, readonly string[]>> = {}): ResolvedCheckPlan {
+  const targets = targetNames.map((name) => target(name, rules, disabled[name] ?? []));
   return {
     rules,
-    targets: targetNames.map((name) => target(name, rules, disabled[name] ?? [])),
+    targets,
+    cases: targets.map(makeCase),
   };
 }
 
@@ -70,7 +94,7 @@ function dependencies(options: DependencyOptions = {}): CheckDependencies<string
       if (options.launchFailure !== undefined) return boundaryFailure(options.launchFailure);
       return boundarySuccess({
         browserVersion: "149.0.7827.55",
-        async openTarget(item) {
+        async openCase(item) {
           const failure = options.openFailure?.[item.name];
           if (failure !== undefined) return boundaryFailure(failure);
           return boundarySuccess({
@@ -96,11 +120,21 @@ function dependencies(options: DependencyOptions = {}): CheckDependencies<string
   };
 }
 
+function firstFailure(result: RunResultV2): Failure | undefined {
+  return (
+    result.failures[0] ??
+    result.cases.flatMap((c) => c.failures)[0] ??
+    result.cases.flatMap((c) => c.rules.map((r) => r.failure).filter((f): f is Failure => f !== null))[0] ??
+    result.ruleFinalizations.map((f) => f.failure).filter((f): f is Failure => f !== null)[0]
+  );
+}
+
 const navigationFailure: Failure = {
   stage: "navigation",
   code: "navigation-network",
   message: "navigation failed",
   target: null,
+  device: null,
   rule: null,
 };
 
@@ -111,9 +145,10 @@ describe("orchestrator result model", () => {
     });
     expect(result.status).toBe("clean");
     expect(exitCodeForResult(result)).toBe(0);
-    expect(result.targets.map((item) => item.status)).toEqual(["complete", "complete"]);
+    expect(result.cases.map((item) => item.status)).toEqual(["complete", "complete"]);
     expect(result.summary).toMatchObject({
-      targets: { resolved: 2, complete: 2, partial: 0, failed: 0, notExecuted: 0 },
+      targets: { resolved: 2 },
+      cases: { resolved: 2, complete: 2, partial: 0, failed: 0, notExecuted: 0 },
       ruleEvaluations: { clean: 2, violations: 0, failed: 0, disabled: 0, notExecuted: 0 },
       violations: 0,
       matchedElements: 2,
@@ -147,7 +182,7 @@ describe("orchestrator result model", () => {
     );
     expect(result.status).toBe("violations");
     expect(exitCodeForResult(result)).toBe(1);
-    expect(result.targets.flatMap((item) => item.rules.flatMap((entry) => entry.violations.map((violation) => violation.text)))).toEqual([
+    expect(result.cases.flatMap((item) => item.rules.flatMap((entry) => entry.violations.map((violation) => violation.text)))).toEqual([
       "a:first",
       "a:second",
       "b:first",
@@ -155,7 +190,7 @@ describe("orchestrator result model", () => {
     ]);
   });
 
-  test("retains earlier violations and fail-fasts on target precondition failure", async () => {
+  test("collects all cases after a navigation precondition failure", async () => {
     const result = await runResolvedCheck(
       plan(["first", "broken", "later"], [rule("tabs")]),
       dependencies({
@@ -183,13 +218,15 @@ describe("orchestrator result model", () => {
     );
     expect(result.status).toBe("incomplete");
     expect(exitCodeForResult(result)).toBe(2);
-    expect(result.targets.map((item) => item.status)).toEqual(["complete", "failed", "not-executed"]);
-    expect(result.targets[0]?.rules[0]?.violations).toHaveLength(1);
-    expect(result.targets[1]?.rules[0]?.status).toBe("not-executed");
-    expect(result.failure).toMatchObject({ target: "broken", rule: null });
+    // collect-all: the failing case does not stop the unstarted later case.
+    expect(result.cases.map((item) => item.status)).toEqual(["complete", "failed", "complete"]);
+    expect(result.cases[0]?.rules[0]?.violations).toHaveLength(1);
+    expect(result.cases[1]?.rules[0]?.status).toBe("not-executed");
+    expect(result.cases[2]?.rules[0]?.status).toBe("clean");
+    expect(firstFailure(result)).toMatchObject({ target: "broken", rule: null });
   });
 
-  test("keeps evaluator facts and marks only mixed attempted/not-executed targets partial", async () => {
+  test("keeps evaluator facts and marks mixed attempted/not-executed cases partial across all cases", async () => {
     const rules = [rule("first"), rule("fails"), rule("later")];
     const result = await runResolvedCheck(
       plan(["a", "b"], rules),
@@ -213,6 +250,7 @@ describe("orchestrator result model", () => {
               code: "rule-script-failed",
               message: "measurement failed",
               target: null,
+              device: null,
               rule: null,
             },
           };
@@ -220,13 +258,15 @@ describe("orchestrator result model", () => {
       }),
       { toolVersion: "0.1.0" },
     );
-    expect(result.targets.map((item) => item.status)).toEqual(["partial", "not-executed"]);
-    expect(result.targets[0]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "not-executed"]);
-    expect(result.targets[0]?.rules[1]).toMatchObject({ labelsInspected: 2, violations: [{ text: "observed-before-failure" }] });
-    expect(result.failure).toMatchObject({ target: "a", rule: "fails" });
+    // collect-all: both cases run; the failing rule makes each case partial.
+    expect(result.cases.map((item) => item.status)).toEqual(["partial", "partial"]);
+    expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "not-executed"]);
+    expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "not-executed"]);
+    expect(result.cases[0]?.rules[1]).toMatchObject({ labelsInspected: 2, violations: [{ text: "observed-before-failure" }] });
+    expect(firstFailure(result)).toMatchObject({ target: "a", rule: "fails" });
   });
 
-  test("keeps disabled pairs distinct from fail-fast pairs", async () => {
+  test("keeps disabled pairs distinct from failed pairs across all cases", async () => {
     const rules = [rule("disabled"), rule("fails"), rule("later")];
     const resolved = plan(["a", "b"], rules, { a: ["disabled"], b: ["disabled"] });
     const result = await runResolvedCheck(
@@ -241,6 +281,7 @@ describe("orchestrator result model", () => {
                   code: "minimum-labels-unmet",
                   message: "minimum unmet",
                   target: null,
+                  device: null,
                   rule: null,
                 },
               }
@@ -249,14 +290,15 @@ describe("orchestrator result model", () => {
       }),
       { toolVersion: "0.1.0" },
     );
-    expect(result.targets[0]?.rules.map((item) => item.status)).toEqual(["disabled", "failed", "not-executed"]);
-    expect(result.targets[1]?.rules.map((item) => item.status)).toEqual(["disabled", "not-executed", "not-executed"]);
+    // collect-all: the second case runs and its failing rule fails too.
+    expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["disabled", "failed", "not-executed"]);
+    expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["disabled", "failed", "not-executed"]);
     expect(result.summary.ruleEvaluations).toEqual({
       clean: 0,
       violations: 0,
-      failed: 1,
+      failed: 2,
       disabled: 2,
-      notExecuted: 3,
+      notExecuted: 2,
     });
   });
 
@@ -269,13 +311,14 @@ describe("orchestrator result model", () => {
           code: "browser-missing",
           message: "browser missing",
           target: null,
+          device: null,
           rule: null,
         },
       }),
       { toolVersion: "0.1.0" },
     );
-    expect(result.targets.map((item) => item.status)).toEqual(["not-executed", "not-executed"]);
-    expect(result.targets.flatMap((item) => item.rules.map((entry) => entry.status))).toEqual([
+    expect(result.cases.map((item) => item.status)).toEqual(["not-executed", "not-executed"]);
+    expect(result.cases.flatMap((item) => item.rules.map((entry) => entry.status))).toEqual([
       "not-executed",
       "disabled",
       "not-executed",
@@ -291,9 +334,9 @@ describe("orchestrator result model", () => {
       dependencies({ evaluate: () => ({ facts: { labelsInspected: 0, violations: [] }, failure: null }) }),
       { toolVersion: "0.1.0" },
     );
-    expect(result.targets[0]?.status).toBe("complete");
+    expect(result.cases[0]?.status).toBe("complete");
     expect(result.ruleFinalizations.map((item) => item.status)).toEqual(["failed", "not-executed"]);
-    expect(result.failure).toMatchObject({ code: "zero-labels-global", target: null, rule: "empty-first" });
+    expect(firstFailure(result)).toMatchObject({ code: "zero-labels-global", target: null, rule: "empty-first" });
   });
 
   test.each([
@@ -323,7 +366,7 @@ describe("orchestrator result model", () => {
     ]);
   });
 
-  test("marks target cleanup failure without discarding completed rule facts", async () => {
+  test("marks a target cleanup failure and still completes the unfailed case", async () => {
     const result = await runResolvedCheck(
       plan(["a", "b"], [rule("tabs")]),
       dependencies({
@@ -333,6 +376,7 @@ describe("orchestrator result model", () => {
             code: "browser-cleanup-failed",
             message: "target cleanup failed",
             target: null,
+            device: null,
             rule: null,
           },
         },
@@ -340,9 +384,10 @@ describe("orchestrator result model", () => {
       { toolVersion: "0.1.0" },
     );
     expect(result.status).toBe("incomplete");
-    expect(result.targets.map((item) => item.status)).toEqual(["failed", "not-executed"]);
-    expect(result.targets[0]?.rules[0]?.status).toBe("clean");
-    expect(result.failure).toMatchObject({ target: "a", rule: null });
+    // collect-all: the cleanup failure on case a does not stop case b.
+    expect(result.cases.map((item) => item.status)).toEqual(["failed", "complete"]);
+    expect(result.cases[0]?.rules[0]?.status).toBe("clean");
+    expect(firstFailure(result)).toMatchObject({ target: "a", rule: null });
     expect(result.ruleFinalizations[0]?.status).toBe("not-executed");
   });
 
@@ -355,15 +400,65 @@ describe("orchestrator result model", () => {
           code: "browser-cleanup-failed",
           message: "cleanup failed",
           target: null,
+          device: null,
           rule: null,
         },
       }),
       { toolVersion: "0.1.0" },
     );
     expect(result.status).toBe("incomplete");
-    expect(result.targets[0]?.status).toBe("complete");
-    expect(result.targets[0]?.rules[0]?.status).toBe("clean");
+    expect(result.cases[0]?.status).toBe("complete");
+    expect(result.cases[0]?.rules[0]?.status).toBe("clean");
+    // A run-wide cleanup failure does not gate finalization: the case completed.
     expect(result.ruleFinalizations[0]?.status).toBe("passed");
-    expect(result.failure).toMatchObject({ code: "browser-cleanup-failed", target: null, rule: null });
+    expect(firstFailure(result)).toMatchObject({ code: "browser-cleanup-failed", target: null, rule: null });
+  });
+
+  test("preserves both a rule failure and a cleanup failure on the same case", async () => {
+    const result = await runResolvedCheck(
+      plan(["a"], [rule("fails")]),
+      dependencies({
+        evaluate() {
+          return {
+            facts: { labelsInspected: 0, violations: [] },
+            failure: {
+              stage: "rule-evaluation",
+              code: "rule-script-failed",
+              message: "rule threw",
+              target: null,
+              device: null,
+              rule: null,
+            },
+          };
+        },
+        targetCloseFailure: {
+          a: {
+            stage: "browser-setup",
+            code: "browser-cleanup-failed",
+            message: "context close failed",
+            target: null,
+            device: null,
+            rule: null,
+          },
+        },
+      }),
+      { toolVersion: "0.1.0" },
+    );
+    expect(result.status).toBe("incomplete");
+    expect(result.cases[0]?.status).toBe("failed");
+    // Both failures coexist losslessly on their respective fields.
+    expect(result.cases[0]?.rules[0]?.status).toBe("failed");
+    expect(result.cases[0]?.rules[0]?.failure).toMatchObject({ code: "rule-script-failed", target: "a", rule: "fails" });
+    expect(result.cases[0]?.failures).toContainEqual(expect.objectContaining({ code: "browser-cleanup-failed", target: "a" }));
+    expect(result.ruleFinalizations[0]?.status).toBe("not-executed");
+  });
+
+  test("completes a single-case plan with one worker", async () => {
+    const result = await runResolvedCheck(plan(["solo"], [rule("tabs")]), dependencies(), {
+      toolVersion: "0.1.0",
+    });
+    expect(result.status).toBe("clean");
+    expect(result.cases.map((item) => item.status)).toEqual(["complete"]);
+    expect(result.summary.cases).toMatchObject({ resolved: 1, complete: 1 });
   });
 });

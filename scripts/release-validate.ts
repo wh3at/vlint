@@ -1,11 +1,9 @@
 /**
  * One-command local release validation (U6/U7).
  *
- * Builds the exact production binary and release fixture from the current
- * checkout, stages the versioned archive (vlint mode 0755 + README.md) and a
- * filename-relative SHA256SUMS, invokes the clean Ubuntu 24.04 release
- * validator (tests/release/validate.sh), and always removes temporary
- * staging — even on failure or signal.
+ * Builds the production binary and release fixture, packages the versioned
+ * tarball, Ubuntu .deb, tag-fixed installer, and SHA256SUMS, invokes the clean
+ * Ubuntu 24.04 release validator, and always removes temporary staging.
  *
  * Design:
  *   - Immutable inputs: reads only from the current checkout (package.json,
@@ -24,15 +22,15 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { packageRelease } from "./package-release";
 
 const root = resolve(import.meta.dir, "..");
 const BUN = process.execPath;
 
 const BUILD_TIMEOUT_MS = 5 * 60_000;
-const STAGE_TIMEOUT_MS = 60_000;
 const VALIDATE_TIMEOUT_MS = 20 * 60_000;
 
 // ---------------------------------------------------------------------------
@@ -89,12 +87,6 @@ function run(cmd: string, args: readonly string[], cwd: string, timeoutMs: numbe
   assertOk(result, label, timeoutMs);
 }
 
-/** Runs a subprocess with piped stdout and returns the captured output. */
-function capture(cmd: string, args: readonly string[], cwd: string, timeoutMs: number, label: string): string {
-  const result = spawnSync(cmd, [...args], { cwd, stdio: "pipe", timeout: timeoutMs });
-  assertOk(result, label, timeoutMs);
-  return result.stdout.toString();
-}
 
 // ---------------------------------------------------------------------------
 // Main.
@@ -106,8 +98,7 @@ async function main(): Promise<void> {
   if (typeof pkg.version !== "string" || pkg.version.length === 0) {
     throw new Error("package.json: version is missing or empty");
   }
-  const archiveName = `vlint-v${pkg.version}-linux-x64.tar.gz`;
-  console.error(`release-validate: staging ${archiveName}`);
+  console.error(`release-validate: staging release assets for ${pkg.version}`);
 
   // Pre-flight: Docker is required by the validator.
   const dockerCheck = spawnSync("docker", ["--version"], { stdio: "ignore", timeout: 10_000 });
@@ -146,38 +137,23 @@ async function main(): Promise<void> {
   if (!existsSync(fixturePath)) throw new Error(`fixture build: expected ${fixturePath}`);
   if (!existsSync(join(root, "README.md"))) throw new Error("README.md: not found in repository root");
 
-  // ---- Stage archive + checksum in a temporary directory.
+  // ---- Stage the complete release asset set in a temporary directory.
   stageDir = mkdtempSync(join(tmpdir(), "vlint-release-"));
   try {
-    // Stage: vlint (mode 0755) + README.md.
-    copyFileSync(binaryPath, join(stageDir, "vlint"));
-    chmodSync(join(stageDir, "vlint"), 0o755);
-    copyFileSync(join(root, "README.md"), join(stageDir, "README.md"));
-
-    // Archive root: exactly vlint and README.md with deterministic ownership.
-    const archivePath = join(stageDir, archiveName);
-    console.error(`release-validate: creating archive ${archiveName}`);
-    run(
-      "tar",
-      ["--owner=0", "--group=0", "--numeric-owner", "-czf", archivePath, "-C", stageDir, "vlint", "README.md"],
+    const names = await packageRelease({
       root,
-      STAGE_TIMEOUT_MS,
-      "archive staging",
-    );
-
-    // Filename-relative SHA256SUMS: run sha256sum from within the stage
-    // directory so the recorded path is the bare archive name.
-    console.error("release-validate: generating checksum");
-    const checksumLine = capture("sha256sum", [archiveName], stageDir, STAGE_TIMEOUT_MS, "checksum generation");
-    if (checksumLine.trim().length === 0) {
-      throw new Error("checksum generation: sha256sum produced no output");
-    }
-    await Bun.write(join(stageDir, "SHA256SUMS"), checksumLine);
+      outputDirectory: stageDir,
+      version: pkg.version,
+      repository: "wh3at/vlint",
+      binaryPath,
+    });
+    const archivePath = join(stageDir, names.archive);
+    const debPath = join(stageDir, names.deb);
+    const installerPath = join(stageDir, names.installer);
 
     // ---- Invoke the clean Ubuntu 24.04 release validator.
-    // validate.sh resolves absolute mount paths for the Docker guests and
-    // exercises checksum verification, extraction, browser install, idempotent
-    // re-install, force repair, offline check, and missing-browser failure.
+    // The guest verifies all manifest entries, archive extraction, .deb install,
+    // tag-fixed installer behavior, browser setup, and offline check behavior.
     console.error("release-validate: running clean-guest validation (Docker)");
     run(
       "sh",
@@ -187,6 +163,8 @@ async function main(): Promise<void> {
         archivePath,
         join(stageDir, "SHA256SUMS"),
         fixturePath,
+        debPath,
+        installerPath,
       ],
       root,
       VALIDATE_TIMEOUT_MS,

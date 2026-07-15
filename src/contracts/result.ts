@@ -2,7 +2,7 @@ import type { RuleFinalization, Violation } from "./evaluation";
 import type { Failure } from "./failure";
 
 export type RunStatus = "clean" | "violations" | "incomplete";
-export type TargetStatus = "complete" | "partial" | "failed" | "not-executed";
+export type CaseStatus = "complete" | "partial" | "failed" | "not-executed";
 export type RuleResultStatus = "clean" | "violations" | "failed" | "disabled" | "not-executed";
 
 export interface RuleResult {
@@ -11,21 +11,49 @@ export interface RuleResult {
   readonly status: RuleResultStatus;
   readonly labelsInspected: number;
   readonly violations: readonly Violation[];
+  readonly failure: Failure | null;
 }
 
-export interface TargetResult {
+/**
+ * Identity of the logical target for one audit case. Kept separate from
+ * device so consumers can correlate results across devices without conflating
+ * the two identities (R17).
+ */
+export interface CaseTarget {
   readonly name: string;
   readonly url: string;
+}
+
+/**
+ * Concrete device emulation applied to one audit case. Carries the full
+ * profile from the ordered device list so the result is self-describing
+ * without referring back to configuration (R18).
+ */
+export interface CaseDevice {
+  readonly name: string;
   readonly viewport: { readonly width: number; readonly height: number };
+  readonly screen: { readonly width: number; readonly height: number };
   readonly deviceScaleFactor: number;
+  readonly isMobile: boolean;
+  readonly hasTouch: boolean;
+  readonly userAgent: string | null;
+}
+
+export interface CaseResult {
+  readonly target: CaseTarget;
+  readonly device: CaseDevice;
   readonly locale: string;
   readonly timezoneId: string;
-  readonly status: TargetStatus;
+  readonly status: CaseStatus;
   readonly rules: readonly RuleResult[];
+  readonly failures: readonly Failure[];
 }
 
 export interface RunSummary {
-  readonly targets: {
+  /** Logical target count, independent of how many devices each was audited on (KTD6). */
+  readonly targets: { readonly resolved: number };
+  /** Case execution partition. `resolved` equals the total planned case count. */
+  readonly cases: {
     readonly resolved: number;
     readonly complete: number;
     readonly partial: number;
@@ -46,11 +74,12 @@ export interface RunSummary {
   };
   readonly violations: number;
   readonly matchedElements: number;
+  /** Total failures across run-wide, case-level, rule-level, and finalization sources. */
   readonly executionFailures: number;
 }
 
-export interface RunResultV1 {
-  readonly schemaVersion: 1;
+export interface RunResultV2 {
+  readonly schemaVersion: 2;
   readonly status: RunStatus;
   readonly tool: { readonly name: "vlint"; readonly version: string };
   readonly environment: {
@@ -59,7 +88,8 @@ export interface RunResultV1 {
     readonly browser: { readonly name: "chromium"; readonly version: string | null };
   };
   readonly summary: RunSummary;
-  readonly targets: readonly TargetResult[];
+  readonly cases: readonly CaseResult[];
   readonly ruleFinalizations: readonly RuleFinalization[];
-  readonly failure: Failure | null;
+  /** Ordered run-wide failures: config, provider, browser launch, browser-wide cleanup, interrupt. */
+  readonly failures: readonly Failure[];
 }

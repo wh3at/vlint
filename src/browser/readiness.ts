@@ -44,16 +44,17 @@ export function interruptFailure(): Failure {
     code: "signal-interrupt",
     message: "operation cancelled",
     target: null,
+    device: null,
     rule: null,
   };
 }
 
 function readyFailure(code: Failure["code"], message: string): Failure {
-  return { stage: "ready-condition", code, message, target: null, rule: null };
+  return { stage: "ready-condition", code, message, target: null, device: null, rule: null };
 }
 
 function fontFailure(code: Failure["code"], message: string): Failure {
-  return { stage: "web-font", code, message, target: null, rule: null };
+  return { stage: "web-font", code, message, target: null, device: null, rule: null };
 }
 
 export function isTimeoutError(error: unknown): boolean {

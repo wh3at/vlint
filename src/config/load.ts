@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import type { LoadedConfig } from "../contracts/config";
@@ -14,14 +15,14 @@ const CONFIG_NAME = "vlint.config.json";
 const MAX_CONFIG_BYTES = 8 * 1024 * 1024;
 
 function configFailure(code: Failure["code"], message: string): BoundaryResult<LoadedConfig> {
-  return boundaryFailure({ stage: "config", code, message, target: null, rule: null });
+  return boundaryFailure({ stage: "config", code, message, target: null, device: null, rule: null });
 }
 
 export async function loadConfig(cwd: string): Promise<BoundaryResult<LoadedConfig>> {
   const path = resolve(cwd, CONFIG_NAME);
   let handle;
   try {
-    handle = await open(path, "r");
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch (error) {
     const code = error instanceof Error && "code" in error ? String(error.code) : "";
     return configFailure(
@@ -51,7 +52,8 @@ export async function loadConfig(cwd: string): Promise<BoundaryResult<LoadedConf
     return boundarySuccess({
       path,
       directory: dirname(path),
-      provider: parsed.value.provider,
+      devices: parsed.value.devices,
+      ...(parsed.value.provider !== undefined ? { provider: parsed.value.provider } : {}),
       defaults: parsed.value.defaults ?? {},
       rules: normalizeRules(parsed.value.rules),
     });

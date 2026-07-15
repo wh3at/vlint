@@ -1,11 +1,10 @@
 import type { Page } from "playwright";
-import { resolve } from "node:path";
-import type { EffectiveRuleForTarget, LoadedConfig, ResolvedCheckPlan } from "../contracts/config";
+import type { EffectiveRuleForTarget, ResolvedCheckPlan } from "../contracts/config";
 import type { RuleEvaluationOutcome } from "../contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../contracts/failure";
-import type { RunResultV1 } from "../contracts/result";
+import type { RunResultV2 } from "../contracts/result";
 import { loadConfig } from "../config/load";
-import { normalizeRules, resolveAdHocTarget, resolveTargets } from "../config/merge";
+import { resolveAdHocTarget, resolveTargets } from "../config/merge";
 import { resolveCommandProvider } from "../providers/command";
 import { resolveStaticProvider } from "../providers/static";
 import { createBrowserRunScope } from "../browser/lifecycle";
@@ -16,16 +15,6 @@ import {
   type CheckDependencies,
 } from "../run/orchestrator";
 
-function implicitConfig(cwd: string): LoadedConfig {
-  return {
-    path: resolve(cwd, "vlint.config.json"),
-    directory: cwd,
-    provider: { type: "static", targets: [] },
-    defaults: {},
-    rules: normalizeRules(undefined),
-  };
-}
-
 export async function resolveCheckPlan(
   cwd: string,
   url: string | null,
@@ -33,14 +22,18 @@ export async function resolveCheckPlan(
   signal?: AbortSignal,
 ): Promise<BoundaryResult<ResolvedCheckPlan>> {
   const loaded = await loadConfig(cwd);
-  if (url !== null) {
-    if (!loaded.ok) {
-      if (loaded.failure.code !== "config-not-found") return boundaryFailure(loaded.failure);
-      return boundarySuccess(resolveAdHocTarget(implicitConfig(cwd), url));
-    }
-    return boundarySuccess(resolveAdHocTarget(loaded.value, url));
-  }
   if (!loaded.ok) return boundaryFailure(loaded.failure);
+  if (url !== null) return boundarySuccess(resolveAdHocTarget(loaded.value, url));
+  if (loaded.value.provider === undefined) {
+    return boundaryFailure({
+      stage: "config",
+      code: "targets-empty",
+      message: "no audit targets: provide --url or configure a target provider",
+      target: null,
+      device: null,
+      rule: null,
+    });
+  }
   const context = {
     directory: loaded.value.directory,
     rules: loaded.value.rules,
@@ -66,6 +59,7 @@ function interruptedOutcome(rule: EffectiveRuleForTarget): RuleEvaluationOutcome
     code: "signal-interrupt",
     message: "operation interrupted by signal",
     target: null,
+    device: null,
     rule: rule.name,
   };
   return { facts: { labelsInspected: 0, violations: [] }, failure };
@@ -99,7 +93,7 @@ function productionDependencies(): CheckDependencies<Page> {
       const scope = created.value;
       return boundarySuccess({
         browserVersion: scope.browserVersion,
-        openTarget: (target, targetSignal) => scope.acquireTarget(target, targetSignal),
+        openCase: (auditCase, caseSignal) => scope.acquireCase(auditCase, caseSignal),
         close: () => scope.close(),
       });
     },
@@ -113,13 +107,14 @@ export async function runCheckCommand(
   environment: Readonly<Record<string, string | undefined>>,
   toolVersion: string,
   signal?: AbortSignal,
-): Promise<RunResultV1> {
+): Promise<RunResultV2> {
   if (signalAborted(signal)) {
     return resultForResolutionFailure(toolVersion, {
       stage: "interrupt",
       code: "signal-interrupt",
       message: "operation interrupted by signal",
       target: null,
+      device: null,
       rule: null,
     });
   }
@@ -131,6 +126,7 @@ export async function runCheckCommand(
       code: "signal-interrupt",
       message: "operation interrupted by signal",
       target: null,
+      device: null,
       rule: null,
     });
   }

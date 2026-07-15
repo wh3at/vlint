@@ -24,7 +24,7 @@ interface ProviderProcessResult {
 }
 
 function providerFailure(code: Failure["code"], message: string): BoundaryResult<readonly Target[]> {
-  return boundaryFailure({ stage: "provider", code, message, target: null, rule: null });
+  return boundaryFailure({ stage: "provider", code, message, target: null, device: null, rule: null });
 }
 
 async function readBounded(
@@ -148,6 +148,7 @@ export async function resolveCommandProvider(
         code: "signal-interrupt",
         message: "target provider interrupted",
         target: null,
+        device: null,
         rule: null,
       });
     }

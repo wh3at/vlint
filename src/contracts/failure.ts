@@ -15,6 +15,10 @@ export type FailureCode =
   | "config-too-large"
   | "config-invalid-json"
   | "config-schema-invalid"
+  | "config-already-exists"
+  | "config-write-failed"
+  | "init-device-unavailable"
+  | "targets-empty"
   | "provider-spawn-failed"
   | "provider-exit-nonzero"
   | "provider-timeout"
@@ -62,6 +66,7 @@ export interface Failure {
   readonly code: FailureCode;
   readonly message: string;
   readonly target: string | null;
+  readonly device: string | null;
   readonly rule: string | null;
 }
 

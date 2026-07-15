@@ -2,6 +2,9 @@ import { expect, test } from "bun:test";
 import {
   findManagedBrowser,
   installBrowser,
+  installBrowserDependencies,
+  isDependenciesInstallerWorkerInvocation,
+  isDependenciesSupervisorWorkerInvocation,
   isInstallerWorkerInvocation,
   isOopDownloaderInvocation,
   rejectAmbientBrowserOverrides,
@@ -167,14 +170,106 @@ test("installBrowser returns signal-interrupt when aborted during the install ac
   if (!resolved.ok) expect(resolved.failure.code).toBe("signal-interrupt");
 });
 
-test("parseBrowserInstallArgs accepts bare and --force and rejects unknown arguments", () => {
-  expect(parseBrowserInstallArgs([]).ok).toBe(true);
-  const force = parseBrowserInstallArgs(["--force"]);
-  if (force.ok) expect(force.value.force).toBe(true);
-  const unknown = parseBrowserInstallArgs(["--bogus"]);
-  if (!unknown.ok) expect(unknown.failure.code).toBe("config-schema-invalid");
+test("parseBrowserInstallArgs accepts force/with-deps once and rejects invalid arguments", () => {
+  const bare = parseBrowserInstallArgs([]);
+  if (bare.ok) expect(bare.value).toEqual({ force: false, withDeps: false });
+  const both = parseBrowserInstallArgs(["--with-deps", "--force"]);
+  if (both.ok) expect(both.value).toEqual({ force: true, withDeps: true });
+  for (const args of [["--bogus"], ["--force", "--force"], ["--with-deps", "--with-deps"]]) {
+    const invalid = parseBrowserInstallArgs(args);
+    if (!invalid.ok) expect(invalid.failure.code).toBe("config-schema-invalid");
+  }
 });
 
+
+test("runBrowserInstall installs system dependencies before the browser payload", async () => {
+  const calls: string[] = [];
+  const result = await runBrowserInstall({
+    args: ["--with-deps"],
+    environment: CLEAN_ENV,
+    dependenciesInstaller: async () => {
+      calls.push("dependencies");
+      return { ok: true, value: undefined };
+    },
+    browserInstaller: async (options) => {
+      calls.push("browser");
+      expect(options.force).toBe(false);
+      return {
+        ok: true,
+        value: {
+          kind: "installed",
+          browser: {
+            name: "chromium-headless-shell",
+            revision: "1234",
+            browserVersion: "123.0.0.0",
+            executablePath: "/cache/chromium",
+          },
+        },
+      };
+    },
+  });
+  expect(result.ok).toBe(true);
+  expect(calls).toEqual(["dependencies", "browser"]);
+});
+
+test("runBrowserInstall stops when system dependency installation fails", async () => {
+  let browserCalled = false;
+  const result = await runBrowserInstall({
+    args: ["--with-deps"],
+    dependenciesInstaller: async () => ({
+      ok: false,
+      failure: {
+        stage: "browser-setup",
+        code: "browser-install-failed",
+        message: "dependency failure",
+        target: null,
+        device: null,
+        rule: null,
+      },
+    }),
+    browserInstaller: async () => {
+      browserCalled = true;
+      throw new Error("must not run");
+    },
+  });
+  expect(result.ok).toBe(false);
+  expect(browserCalled).toBe(false);
+});
+
+test("installBrowserDependencies classifies success, failure, and cancellation", async () => {
+  expect((await installBrowserDependencies({ installAction: async () => undefined })).ok).toBe(true);
+  const failed = await installBrowserDependencies({
+    installAction: async () => {
+      throw new Error("raw");
+    },
+  });
+  expect(failed.ok).toBe(false);
+  if (!failed.ok) expect(failed.failure.code).toBe("browser-install-failed");
+
+  const controller = new AbortController();
+  controller.abort();
+  const aborted = await installBrowserDependencies({
+    signal: controller.signal,
+    installAction: async () => undefined,
+  });
+  expect(aborted.ok).toBe(false);
+  if (!aborted.ok) expect(aborted.failure.code).toBe("signal-interrupt");
+});
+
+test("runBrowserInstall rejects environment overrides before installing dependencies", async () => {
+  let dependenciesCalled = false;
+  const result = await runBrowserInstall({
+    args: ["--with-deps"],
+    environment: { PLAYWRIGHT_BROWSERS_PATH: "/tmp/other" },
+    dependenciesInstaller: async () => {
+      dependenciesCalled = true;
+      return { ok: true, value: undefined };
+    },
+  });
+  expect(result.ok).toBe(false);
+  expect(dependenciesCalled).toBe(false);
+  if (!result.ok) expect(result.failure.code).toBe("browser-cache-override-unsupported");
+});
 
 test("runBrowserInstall returns signal-interrupt when the signal is already aborted", async () => {
   const controller = new AbortController();
@@ -183,9 +278,37 @@ test("runBrowserInstall returns signal-interrupt when the signal is already abor
   if (!result.ok) expect(result.failure.code).toBe("signal-interrupt");
 });
 
-test("worker and OOP downloader invocations are detected", () => {
-  expect(isInstallerWorkerInvocation(["__vlint_internal_browser_installer_worker__", "--force"])).toBe(true);
-  expect(isInstallerWorkerInvocation(["install"])).toBe(false);
+test("worker and OOP downloader invocations require their exact internal shape", () => {
+  expect(isInstallerWorkerInvocation([
+    "/opt/vlint",
+    "/$bunfs/root/src/cli.ts",
+    "__vlint_internal_browser_installer_worker__",
+    "--force",
+  ])).toBe(true);
+  expect(isInstallerWorkerInvocation([
+    "/opt/vlint",
+    "/$bunfs/root/src/cli.ts",
+    "__vlint_internal_browser_installer_worker__",
+    "--no-force",
+  ])).toBe(true);
+  expect(isDependenciesInstallerWorkerInvocation([
+    "/opt/vlint",
+    "/$bunfs/root/src/cli.ts",
+    "__vlint_internal_browser_dependencies_installer_worker__",
+  ])).toBe(true);
+  expect(isDependenciesSupervisorWorkerInvocation([
+    "/opt/vlint",
+    "/$bunfs/root/src/cli.ts",
+    "__vlint_internal_browser_dependencies_supervisor_worker__",
+  ])).toBe(true);
+  expect(isInstallerWorkerInvocation(["/opt/vlint", "/$bunfs/root/src/cli.ts", "install"])).toBe(false);
+  expect(isDependenciesInstallerWorkerInvocation([
+    "/opt/vlint",
+    "/$bunfs/root/src/cli.ts",
+    "check",
+    "--url",
+    "__vlint_internal_browser_dependencies_installer_worker__",
+  ])).toBe(false);
   expect(isOopDownloaderInvocation("/some/path/oopBrowserDownload.js")).toBe(true);
   expect(isOopDownloaderInvocation(undefined)).toBe(false);
 });

@@ -3,7 +3,7 @@ import type { FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import type { Browser, BrowserContext, BrowserContextOptions, Page } from "playwright";
 import { chromium } from "playwright";
-import type { EffectiveTarget, Viewport } from "../contracts/config";
+import type { EffectiveAuditCase, ReadyState, Viewport } from "../contracts/config";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../contracts/failure";
 import { resolveManagedExecutableForCheck, type VersionProbe } from "./install";
 import {
@@ -21,32 +21,61 @@ import {
 /** Run-level launch budget (KTD7). Distinct from the per-target deadline. */
 const DEFAULT_LAUNCH_TIMEOUT_MS = 30_000;
 const MAX_STATE_BYTES = 8 * 1024 * 1024;
+/** Bounded budget for closing a page, context, or browser so a never-settling close cannot hang the CLI. */
+const DEFAULT_CLOSE_TIMEOUT_MS = 15_000;
 
 function browserSetupFailure(code: Failure["code"], message: string): Failure {
-  return { stage: "browser-setup", code, message, target: null, rule: null };
+  return { stage: "browser-setup", code, message, target: null, device: null, rule: null };
 }
 
 function authFailure(code: Failure["code"], message: string): Failure {
-  return { stage: "authentication", code, message, target: null, rule: null };
+  return { stage: "authentication", code, message, target: null, device: null, rule: null };
 }
 
 function navFailure(code: Failure["code"], message: string): Failure {
-  return { stage: "navigation", code, message, target: null, rule: null };
+  return { stage: "navigation", code, message, target: null, device: null, rule: null };
 }
 
-function cleanupFailure(target: string | null, message: string): Failure {
-  return { stage: "browser-setup", code: "browser-cleanup-failed", message, target, rule: null };
+function cleanupFailure(target: string | null, device: string | null, message: string): Failure {
+  return { stage: "browser-setup", code: "browser-cleanup-failed", message, target, device, rule: null };
 }
 
-/** Stamps the owning target name onto a failure produced while acquiring it. */
-function withTarget(target: EffectiveTarget, failure: Failure): Failure {
-  return failure.target === null ? { ...failure, target: target.name } : failure;
+/**
+ * Stamps the owning target and device onto a failure produced while acquiring a
+ * case, without overriding an identity the failure already carries.
+ */
+function stampIdentity(name: string, device: string | null, failure: Failure): Failure {
+  return {
+    ...failure,
+    target: failure.target === null ? name : failure.target,
+    device: failure.device === null ? device : failure.device,
+  };
 }
 
-/** Exact context options applied per target (R39). Verified byte-for-byte by tests. */
+/** Exact device-aware context options applied per audit case. Verified by integration tests. */
 export interface ContextOptions {
   readonly viewport: Viewport;
+  readonly screen: Viewport;
   readonly deviceScaleFactor: number;
+  readonly isMobile: boolean;
+  readonly hasTouch: boolean;
+  /** null omits the option so Playwright's Chromium default user agent is preserved. */
+  readonly userAgent: string | null;
+  readonly locale: string;
+  readonly timezoneId: string;
+}
+
+/**
+ * Structural source for {@link contextOptionsFor}. {@link EffectiveAuditCase}
+ * satisfies this; the legacy single-device path supplies a desktop-default view.
+ */
+interface DeviceContextSource {
+  readonly viewport: Viewport;
+  readonly screen: Viewport;
+  readonly deviceScaleFactor: number;
+  readonly isMobile: boolean;
+  readonly hasTouch: boolean;
+  readonly userAgent: string | null;
   readonly locale: string;
   readonly timezoneId: string;
 }
@@ -65,7 +94,7 @@ export interface BrowserTargetScope {
 /** Owns one Browser process shared across all targets in a run. */
 export interface BrowserRunScope {
   readonly browserVersion: string;
-  acquireTarget(target: EffectiveTarget, signal?: AbortSignal): Promise<BoundaryResult<BrowserTargetScope>>;
+  acquireCase(auditCase: EffectiveAuditCase, signal?: AbortSignal): Promise<BoundaryResult<BrowserTargetScope>>;
   close(): Promise<BoundaryResult<void>>;
 }
 
@@ -77,15 +106,34 @@ export interface CreateRunScopeOptions {
   readonly launch?: () => Promise<Browser>;
   /** Test seam overriding the actual-version probe used by the check-path resolution. */
   readonly versionProbe?: VersionProbe;
+  /** Bounded budget (ms) for closing the managed browser; defaults to a generous safety cap. */
+  readonly closeTimeoutMs?: number;
 }
 
-function contextOptionsFor(target: EffectiveTarget): ContextOptions {
+function contextOptionsFor(source: DeviceContextSource): ContextOptions {
   return {
-    viewport: target.viewport,
-    deviceScaleFactor: target.deviceScaleFactor,
-    locale: target.locale,
-    timezoneId: target.timezoneId,
+    viewport: source.viewport,
+    screen: source.screen,
+    deviceScaleFactor: source.deviceScaleFactor,
+    isMobile: source.isMobile,
+    hasTouch: source.hasTouch,
+    userAgent: source.userAgent,
+    locale: source.locale,
+    timezoneId: source.timezoneId,
   };
+}
+
+/** Identity and presentation for one acquisition, built from an audit case or legacy target. */
+interface AcquisitionRequest extends DeviceContextSource {
+  readonly name: string;
+  readonly deviceName: string | null;
+  readonly url: string;
+  readonly timeoutMs: number;
+  readonly browserState: string | null;
+  readonly readyCondition: {
+    readonly selector: string;
+    readonly state: ReadyState;
+  } | null;
 }
 
 async function raceTimeout<T>(task: Promise<T>, timeoutMs: number): Promise<T> {
@@ -106,6 +154,20 @@ async function raceTimeout<T>(task: Promise<T>, timeoutMs: number): Promise<T> {
     },
   );
   return promise;
+}
+/**
+ * Awaits a close operation within a bounded budget. Resolves false on error or
+ * timeout so a never-settling close surfaces as a typed failure rather than a
+ * hang. A late-settling close is left to clean itself up — page/context/browser
+ * closes hold no resource the caller must reap (unlike a late-launched browser).
+ */
+async function settleClose(task: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  try {
+    await raceTimeout(task, timeoutMs);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function defaultLaunch(executablePath: string, timeoutMs: number): Promise<Browser> {
@@ -146,21 +208,18 @@ export async function createBrowserRunScope(
   }
 
   let closed = false;
+  const closeTimeoutMs = options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
   const close = async (): Promise<BoundaryResult<void>> => {
     if (closed) return boundarySuccess(undefined);
     closed = true;
-    try {
-      await browser.close();
-      return boundarySuccess(undefined);
-    } catch {
-      return boundaryFailure(cleanupFailure(null, "failed to close the managed browser process"));
-    }
+    if (await settleClose(browser.close(), closeTimeoutMs)) return boundarySuccess(undefined);
+    return boundaryFailure(cleanupFailure(null, null, "failed to close the managed browser process"));
   };
   const version = browser.version();
 
   return boundarySuccess({
     browserVersion: version,
-    acquireTarget: (target, signal) => acquireTargetScope(browser, target, signal),
+    acquireCase: (auditCase, signal) => acquireCaseScope(browser, auditCase, signal),
     close,
   });
 }
@@ -252,27 +311,26 @@ export async function createBrowserContext(
   state: BrowserState | null,
 ): Promise<BoundaryResult<BrowserContext>> {
   try {
-    if (state === null) {
-      return boundarySuccess(
-        await browser.newContext({
-          viewport: options.viewport,
-          deviceScaleFactor: options.deviceScaleFactor,
-          locale: options.locale,
-          timezoneId: options.timezoneId,
-        }),
-      );
-    }
-    // Shape was validated on read; Playwright re-checks semantics and rejects malformed values.
-    const storageState = state as unknown as NonNullable<BrowserContextOptions["storageState"]>;
-    return boundarySuccess(
-      await browser.newContext({
-        viewport: options.viewport,
-        deviceScaleFactor: options.deviceScaleFactor,
-        locale: options.locale,
-        timezoneId: options.timezoneId,
-        storageState,
-      }),
-    );
+    // Stateful and stateless acquisitions share one options object (U3 unified
+    // path): device emulation plus presentation flow into a single newContext
+    // call; storageState is added only when a validated state was read.
+    const contextOptions: BrowserContextOptions = {
+      viewport: options.viewport,
+      screen: options.screen,
+      deviceScaleFactor: options.deviceScaleFactor,
+      isMobile: options.isMobile,
+      hasTouch: options.hasTouch,
+      locale: options.locale,
+      timezoneId: options.timezoneId,
+      ...(options.userAgent === null ? {} : { userAgent: options.userAgent }),
+      ...(state === null
+        ? {}
+        : {
+            // BrowserState was structurally validated on read; adapt to Playwright's storageState shape.
+            storageState: state as unknown as NonNullable<BrowserContextOptions["storageState"]>,
+          }),
+    };
+    return boundarySuccess(await browser.newContext(contextOptions));
   } catch {
     return boundaryFailure(
       browserSetupFailure("browser-context-failed", "failed to create an isolated browser context"),
@@ -325,25 +383,30 @@ async function closeTargetQuiet(page: Page, context: BrowserContext): Promise<vo
 
 /**
  * Builds a target scope that closes its page then context idempotently and
- * surfaces a typed `browser-cleanup-failed` (target-attributed) on close error.
- * Exported so the typed-close fault path is directly testable.
+ * surfaces a typed `browser-cleanup-failed` (target- and device-attributed) on
+ * close error. Exported so the typed-close fault path is directly testable.
  */
-export function makeTargetScope(page: Page, context: BrowserContext, targetName: string): BrowserTargetScope {
+export function makeTargetScope(
+  page: Page,
+  context: BrowserContext,
+  targetName: string,
+  deviceName: string | null = null,
+  closeTimeoutMs: number = DEFAULT_CLOSE_TIMEOUT_MS,
+): BrowserTargetScope {
   let closed = false;
   return {
     page,
     close: async (): Promise<BoundaryResult<void>> => {
       if (closed) return boundarySuccess(undefined);
       closed = true;
-      let failed = false;
-      await page.close().catch(() => {
-        failed = true;
-      });
-      await context.close().catch(() => {
-        failed = true;
-      });
-      if (failed) {
-        return boundaryFailure(cleanupFailure(targetName, "failed to close the target page or browser context"));
+      // Bounded so a never-settling Playwright close returns a typed cleanup
+      // failure instead of hanging the CLI.
+      const pageClosed = await settleClose(page.close(), closeTimeoutMs);
+      const contextClosed = await settleClose(context.close(), closeTimeoutMs);
+      if (!pageClosed || !contextClosed) {
+        return boundaryFailure(
+          cleanupFailure(targetName, deviceName, "failed to close the target page or browser context"),
+        );
       }
       return boundarySuccess(undefined);
     },
@@ -351,69 +414,99 @@ export function makeTargetScope(page: Page, context: BrowserContext, targetName:
 }
 
 /**
- * Runs the full target acquisition: state read, context/page setup, navigation,
- * ready condition, and fonts — each consuming only the remaining target budget
- * (KTD7). Any failure closes only the resources this scope already acquired,
- * in reverse order (KTD6), and never touches the shared browser.
+ * Runs the full acquisition: state read, context/page setup, navigation, ready
+ * condition, and fonts — each consuming only the remaining budget (KTD7). Any
+ * failure closes only the resources this scope already acquired, in reverse
+ * order (KTD6), and never touches the shared browser. Failures are stamped with
+ * the owning target/case name so identity is never lost.
  */
-async function acquireTargetScope(
+async function acquireScope(
   browser: Browser,
-  target: EffectiveTarget,
+  request: AcquisitionRequest,
   signal: AbortSignal | undefined,
 ): Promise<BoundaryResult<BrowserTargetScope>> {
   // KTD7: the monotonic deadline begins immediately before the state read.
-  const deadline = createDeadline(target.timeoutMs);
-  const options = contextOptionsFor(target);
+  const deadline = createDeadline(request.timeoutMs);
+  const options = contextOptionsFor(request);
 
   let state: BrowserState | null = null;
-  if (target.browserState !== null) {
-    if (signalAborted(signal)) return boundaryFailure(withTarget(target, interruptFailure()));
-    const read = await readBrowserState(target.browserState, signal);
-    if (!read.ok) return boundaryFailure(withTarget(target, read.failure));
+  if (request.browserState !== null) {
+    if (signalAborted(signal)) return boundaryFailure(stampIdentity(request.name, request.deviceName, interruptFailure()));
+    const read = await readBrowserState(request.browserState, signal);
+    if (!read.ok) return boundaryFailure(stampIdentity(request.name, request.deviceName, read.failure));
     state = read.value;
   }
 
-  if (signalAborted(signal)) return boundaryFailure(withTarget(target, interruptFailure()));
+  if (signalAborted(signal)) return boundaryFailure(stampIdentity(request.name, request.deviceName, interruptFailure()));
   const contextResult = await createBrowserContext(browser, options, state);
-  if (!contextResult.ok) return boundaryFailure(withTarget(target, contextResult.failure));
+  if (!contextResult.ok) return boundaryFailure(stampIdentity(request.name, request.deviceName, contextResult.failure));
   const context = contextResult.value;
 
   if (signalAborted(signal)) {
     await context.close().catch(() => undefined);
-    return boundaryFailure(withTarget(target, interruptFailure()));
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, interruptFailure()));
   }
   const pageResult = await createBrowserPage(context);
   if (!pageResult.ok) {
     await context.close().catch(() => undefined);
-    return boundaryFailure(withTarget(target, pageResult.failure));
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, pageResult.failure));
   }
   const page = pageResult.value;
 
-  const nav = await navigateToTarget(page, target.url, deadline, signal);
+  const nav = await navigateToTarget(page, request.url, deadline, signal);
   if (!nav.ok) {
     await closeTargetQuiet(page, context);
-    return boundaryFailure(withTarget(target, nav.failure));
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, nav.failure));
   }
 
-  if (target.readyCondition !== null) {
+  if (request.readyCondition !== null) {
     const ready = await waitForReadyCondition(
       page,
-      target.readyCondition.selector,
-      target.readyCondition.state,
+      request.readyCondition.selector,
+      request.readyCondition.state,
       deadline,
       signal,
     );
     if (!ready.ok) {
       await closeTargetQuiet(page, context);
-      return boundaryFailure(withTarget(target, ready.failure));
+      return boundaryFailure(stampIdentity(request.name, request.deviceName, ready.failure));
     }
   }
 
   const fonts = await waitForFonts(page, deadline, signal);
   if (!fonts.ok) {
     await closeTargetQuiet(page, context);
-    return boundaryFailure(withTarget(target, fonts.failure));
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, fonts.failure));
   }
 
-  return boundarySuccess(makeTargetScope(page, context, target.name));
+  return boundarySuccess(makeTargetScope(page, context, request.name, request.deviceName));
 }
+
+/** Device-aware acquisition from a resolved audit case (the scheduler's input). */
+async function acquireCaseScope(
+  browser: Browser,
+  auditCase: EffectiveAuditCase,
+  signal: AbortSignal | undefined,
+): Promise<BoundaryResult<BrowserTargetScope>> {
+  return acquireScope(
+    browser,
+    {
+      name: auditCase.name,
+      deviceName: auditCase.deviceName,
+      url: auditCase.url,
+      viewport: auditCase.viewport,
+      screen: auditCase.screen,
+      deviceScaleFactor: auditCase.deviceScaleFactor,
+      isMobile: auditCase.isMobile,
+      hasTouch: auditCase.hasTouch,
+      userAgent: auditCase.userAgent,
+      locale: auditCase.locale,
+      timezoneId: auditCase.timezoneId,
+      timeoutMs: auditCase.timeoutMs,
+      browserState: auditCase.browserState,
+      readyCondition: auditCase.readyCondition,
+    },
+    signal,
+  );
+}
+

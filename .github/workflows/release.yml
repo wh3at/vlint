@@ -55,6 +55,8 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       semver: ${{ steps.meta.outputs.semver }}
       archive: ${{ steps.meta.outputs.archive }}
+      deb: ${{ steps.meta.outputs.deb }}
+      installer: ${{ steps.meta.outputs.installer }}
     steps:
       - name: Resolve tag metadata
         id: meta
@@ -67,6 +69,8 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "semver=$SEMVER" >> "$GITHUB_OUTPUT"
           echo "archive=vlint-${TAG}-linux-x64.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "deb=vlint_${SEMVER}_amd64.deb" >> "$GITHUB_OUTPUT"
+          echo "installer=install-${TAG}.sh" >> "$GITHUB_OUTPUT"
 
       - name: Checkout tag commit (full history for ancestry check)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -130,10 +134,9 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 2. Build (secret-free, contents:read).
-  #    Reproducibly compiles the Linux x64 baseline binary from the frozen tag
-  #    commit, stages the versioned archive + SHA256SUMS, and uploads a single
-  #    immutable Actions artifact. The archive digest is exported and threaded
-  #    through every downstream job as the immutable handoff.
+  #    Reproducibly compiles the Linux x64 baseline binary, packages the tarball,
+  #    Ubuntu .deb, tag-fixed installer, and SHA256SUMS, then uploads one immutable
+  #    Actions artifact. The manifest digest is threaded through every boundary.
   # ---------------------------------------------------------------------------
   build:
     runs-on: ubuntu-24.04
@@ -141,8 +144,7 @@ jobs:
       contents: read
     needs: provenance
     outputs:
-      archive_sha256: ${{ steps.digest.outputs.archive_sha256 }}
-      archive_name: ${{ steps.meta.outputs.archive }}
+      manifest_sha256: ${{ steps.digest.outputs.manifest_sha256 }}
     steps:
       - name: Checkout tag commit (frozen build inputs)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -169,48 +171,34 @@ jobs:
             --compile --target bun-linux-x64-baseline \
             --outfile dist/vlint-release-fixture-server
 
-      - name: Stage versioned archive and checksum
-        id: meta
-        env:
-          ARCHIVE: ${{ needs.provenance.outputs.archive }}
+      - name: Package release assets
         run: |
           set -euo pipefail
-          mkdir -p stage
-          cp dist/vlint-linux-x64 stage/vlint
-          chmod 0755 stage/vlint
-          cp README.md stage/README.md
-          # Archive root contains exactly: vlint (0755) and README.md.
-          ( cd stage && tar --owner=0 --group=0 --numeric-owner -czf "../$ARCHIVE" vlint README.md )
-          # SHA256SUMS records the archive's own digest (filename-relative).
-          sha256sum "$ARCHIVE" > SHA256SUMS
-          cat SHA256SUMS
+          bun run package:release -- --output dist/release
+          cat dist/release/SHA256SUMS
 
-      - name: Record immutable archive digest
+      - name: Record immutable manifest digest
         id: digest
-        env:
-          ARCHIVE: ${{ needs.provenance.outputs.archive }}
         run: |
           set -euo pipefail
-          sha="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
-          echo "archive_sha256=$sha" >> "$GITHUB_OUTPUT"
-          echo "Immutable archive digest: $sha"
+          sha="$(sha256sum dist/release/SHA256SUMS | awk '{print $1}')"
+          echo "manifest_sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "Immutable manifest digest: $sha"
 
       - name: Upload immutable release artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vlint-release-${{ needs.provenance.outputs.tag }}
           path: |
-            ${{ needs.provenance.outputs.archive }}
-            SHA256SUMS
+            dist/release/
             dist/vlint-release-fixture-server
           retention-days: 7
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # 3. Validate (credential-free clean Ubuntu 24.04 guest).
-  #    Re-derives the archive digest from the downloaded artifact and confirms
-  #    it equals the build job's digest (immutable handoff), then runs the full
-  #    release validator in a fresh, network-isolated guest.
+  #    Re-derives the manifest digest and every listed asset digest, then runs
+  #    archive, installer, and .deb checks in a clean Ubuntu 24.04 guest.
   # ---------------------------------------------------------------------------
   validate:
     runs-on: ubuntu-24.04
@@ -229,35 +217,37 @@ jobs:
           name: vlint-release-${{ needs.provenance.outputs.tag }}
           path: release-artifacts
 
-      - name: Verify immutable digest handoff
+      - name: Verify immutable manifest handoff
         env:
-          EXPECTED: ${{ needs.build.outputs.archive_sha256 }}
-          ARCHIVE: release-artifacts/${{ needs.provenance.outputs.archive }}
+          EXPECTED: ${{ needs.build.outputs.manifest_sha256 }}
+          MANIFEST: release-artifacts/release/SHA256SUMS
         run: |
           set -euo pipefail
-          actual="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+          actual="$(sha256sum "$MANIFEST" | awk '{print $1}')"
           if [ "$actual" != "$EXPECTED" ]; then
-            echo "::error::digest mismatch after download: expected $EXPECTED got $actual"
+            echo "::error::manifest mismatch after download: expected $EXPECTED got $actual"
             exit 1
           fi
-          echo "Immutable digest confirmed: $actual"
+          ( cd "$(dirname "$MANIFEST")" && sha256sum -c SHA256SUMS )
+          echo "Immutable manifest confirmed: $actual"
 
       - name: Validate release in clean Ubuntu 24.04 guest
         env:
-          ARCHIVE: release-artifacts/${{ needs.provenance.outputs.archive }}
-          CHECKSUM: release-artifacts/SHA256SUMS
-          FIXTURE: release-artifacts/dist/vlint-release-fixture-server
+          ARCHIVE: release-artifacts/release/${{ needs.provenance.outputs.archive }}
+          DEB: release-artifacts/release/${{ needs.provenance.outputs.deb }}
+          INSTALLER: release-artifacts/release/${{ needs.provenance.outputs.installer }}
+          CHECKSUM: release-artifacts/release/SHA256SUMS
+          FIXTURE: release-artifacts/vlint-release-fixture-server
         run: |
           # actions/download-artifact does not preserve executable mode.
-          chmod 0755 "$FIXTURE"
-          sh tests/release/validate.sh release "$ARCHIVE" "$CHECKSUM" "$FIXTURE"
+          chmod 0755 "$FIXTURE" "$INSTALLER"
+          sh tests/release/validate.sh release \
+            "$ARCHIVE" "$CHECKSUM" "$FIXTURE" "$DEB" "$INSTALLER"
 
   # ---------------------------------------------------------------------------
   # 4. Publish (approval-gated; the only contents:write token; no checkout).
-  #    Re-downloads the exact validated artifact, re-verifies the digest,
-  #    refuses to overwrite any existing release/asset, uploads to a draft
-  #    release, confirms the server-side bytes match, then publishes. The token
-  #    is consumed only by fixed GitHub API/upload steps.
+  #    Re-downloads the validated asset set, re-verifies the manifest and every
+  #    asset, refuses overwrite, then verifies server-side bytes before publish.
   # ---------------------------------------------------------------------------
   publish:
     runs-on: ubuntu-24.04
@@ -272,17 +262,18 @@ jobs:
           name: vlint-release-${{ needs.provenance.outputs.tag }}
           path: release-artifacts
 
-      - name: Re-verify digest before publication
+      - name: Re-verify manifest before publication
         env:
-          EXPECTED: ${{ needs.build.outputs.archive_sha256 }}
-          ARCHIVE: release-artifacts/${{ needs.provenance.outputs.archive }}
+          EXPECTED: ${{ needs.build.outputs.manifest_sha256 }}
+          MANIFEST: release-artifacts/release/SHA256SUMS
         run: |
           set -euo pipefail
-          actual="$(sha256sum "$ARCHIVE" | awk '{print $1}')"
+          actual="$(sha256sum "$MANIFEST" | awk '{print $1}')"
           if [ "$actual" != "$EXPECTED" ]; then
-            echo "::error::publish digest mismatch: expected $EXPECTED got $actual"
+            echo "::error::publish manifest mismatch: expected $EXPECTED got $actual"
             exit 1
           fi
+          ( cd "$(dirname "$MANIFEST")" && sha256sum -c SHA256SUMS )
 
       - name: Reject mutable tag and existing release
         env:
@@ -316,11 +307,11 @@ jobs:
           TAG: ${{ needs.provenance.outputs.tag }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
-          ARCHIVE: release-artifacts/${{ needs.provenance.outputs.archive }}
+          ASSET_DIR: release-artifacts/release
           NOTES_DIR: release-artifacts
         run: |
           set -euo pipefail
-          printf '## vlint %s\n\nLinux x64 single executable. See README for install and verification.\n' \
+          printf '## vlint %s\n\nUbuntu 24.04 x64 tarball, .deb, and tag-fixed installer. See README for setup and verification.\n' \
             "${TAG#v}" > "$NOTES_DIR/RELEASE_NOTES.md"
           gh release create "$TAG" \
             --repo "$REPO" \
@@ -331,27 +322,23 @@ jobs:
           # upload without --clobber so a name collision is a hard failure.
           gh release upload "$TAG" \
             --repo "$REPO" \
-            "$ARCHIVE" release-artifacts/SHA256SUMS
+            "$ASSET_DIR"/*
 
       - name: Verify server-side asset bytes, then publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.provenance.outputs.tag }}
           REPO: ${{ github.repository }}
-          EXPECTED: ${{ needs.build.outputs.archive_sha256 }}
-          ARCHIVE: ${{ needs.provenance.outputs.archive }}
+          EXPECTED: ${{ needs.build.outputs.manifest_sha256 }}
         run: |
           set -euo pipefail
-          gh release download "$TAG" --repo "$REPO" --pattern "$ARCHIVE" --dir verify-asset
-          actual="$(sha256sum "verify-asset/$ARCHIVE" | awk '{print $1}')"
+          gh release download "$TAG" --repo "$REPO" --pattern "*" --dir verify-assets
+          actual="$(sha256sum verify-assets/SHA256SUMS | awk '{print $1}')"
           if [ "$actual" != "$EXPECTED" ]; then
-            echo "::error::server-side asset digest $actual != expected $EXPECTED"
+            echo "::error::server-side manifest digest $actual != expected $EXPECTED"
             exit 1
           fi
-          # Checksum tampering guard: the published SHA256SUMS must match the asset.
-          gh release download "$TAG" --repo "$REPO" --pattern "SHA256SUMS" --dir verify-checksum
-          ( cd verify-checksum && grep -Fqx "$(echo "$EXPECTED  $ARCHIVE")" SHA256SUMS ) \
-            || { echo "::error::published SHA256SUMS does not match the asset digest"; exit 1; }
+          ( cd verify-assets && sha256sum -c SHA256SUMS )
           gh release edit "$TAG" --repo "$REPO" --draft=false
           echo "Published $TAG"
 
@@ -370,21 +357,24 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ needs.provenance.outputs.tag }}
           ARCHIVE: ${{ needs.provenance.outputs.archive }}
-          EXPECTED: ${{ needs.build.outputs.archive_sha256 }}
+          DEB: ${{ needs.provenance.outputs.deb }}
+          INSTALLER: ${{ needs.provenance.outputs.installer }}
+          EXPECTED: ${{ needs.build.outputs.manifest_sha256 }}
         run: |
           set -euo pipefail
           base="https://github.com/$REPO/releases/download/$TAG"
+          mkdir public-assets
           # No Authorization header, no GITHUB_TOKEN: pure anonymous public fetch.
-          curl -fsSL "$base/$ARCHIVE" -o public-archive.tar.gz
-          curl -fsSL "$base/SHA256SUMS" -o public-SHA256SUMS
-          actual="$(sha256sum public-archive.tar.gz | awk '{print $1}')"
+          for asset in "$ARCHIVE" "$DEB" "$INSTALLER" SHA256SUMS; do
+            curl -fsSL "$base/$asset" -o "public-assets/$asset"
+          done
+          actual="$(sha256sum public-assets/SHA256SUMS | awk '{print $1}')"
           if [ "$actual" != "$EXPECTED" ]; then
-            echo "::error::public download digest $actual != expected $EXPECTED"
+            echo "::error::public manifest digest $actual != expected $EXPECTED"
             exit 1
           fi
-          grep -Fqx "$(echo "$EXPECTED  $ARCHIVE")" public-SHA256SUMS \
-            || { echo "::error::public SHA256SUMS entry mismatch"; exit 1; }
-          echo "Anonymous re-download verified: $actual"
+          ( cd public-assets && sha256sum -c SHA256SUMS )
+          echo "Anonymous asset set verified: $actual"
 
   # ---------------------------------------------------------------------------
   # 6. Failure-only cleanup.

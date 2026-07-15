@@ -18,6 +18,25 @@ async function writeConfig(directory: string, value: unknown): Promise<void> {
   await Bun.write(join(directory, "vlint.config.json"), JSON.stringify(value));
 }
 
+const DESKTOP_DEVICE = {
+  name: "desk",
+  viewport: { width: 1470, height: 956 },
+  screen: { width: 1470, height: 956 },
+  deviceScaleFactor: 2,
+  isMobile: false,
+  hasTouch: false,
+};
+
+const MOBILE_DEVICE = {
+  name: "phone",
+  viewport: { width: 402, height: 681 },
+  screen: { width: 402, height: 874 },
+  deviceScaleFactor: 3,
+  isMobile: true,
+  hasTouch: true,
+  userAgent: "Mozilla/5.0 (TestPhone)",
+};
+
 afterEach(async () => {
   await Promise.all(
     temporaryDirectories.splice(0).map(async (directory) => {
@@ -28,10 +47,41 @@ afterEach(async () => {
 });
 
 describe("configuration", () => {
-  test("loads minimal static config with deterministic built-in defaults", async () => {
+  test("loads a device-only version 2 config with deterministic presentation defaults", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, { schemaVersion: 2, devices: [DESKTOP_DEVICE] });
+    const loaded = await loadConfig(directory);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.value.provider).toBeUndefined();
+    expect(loaded.value.devices.map((device) => device.name)).toEqual(["desk"]);
+    expect(loaded.value.rules.map((rule) => rule.name)).toEqual(["tab-label-single-line"]);
+    const plan = resolveAdHocTarget(loaded.value, "http://127.0.0.1:4173/adhoc");
+    expect(plan.targets.map((target) => target.name)).toEqual(["adhoc"]);
+    expect(plan.cases).toHaveLength(1);
+    expect(plan.cases[0]).toMatchObject({
+      name: "adhoc",
+      url: "http://127.0.0.1:4173/adhoc",
+      deviceName: "desk",
+      viewport: { width: 1470, height: 956 },
+      screen: { width: 1470, height: 956 },
+      deviceScaleFactor: 2,
+      isMobile: false,
+      hasTouch: false,
+      userAgent: null,
+      locale: "en-US",
+      timezoneId: "UTC",
+      timeoutMs: 30_000,
+      browserState: null,
+      readyCondition: null,
+    });
+  });
+
+  test("resolves two targets by two devices into four cases in target-major device-minor order", async () => {
     const directory = await temporaryDirectory();
     await writeConfig(directory, {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
       provider: {
         type: "static",
         targets: [
@@ -41,30 +91,53 @@ describe("configuration", () => {
       },
     });
     const loaded = await loadConfig(directory);
-    expect(loaded.ok).toBe(true);
-    if (!loaded.ok) return;
-    expect(loaded.value.rules.map((rule) => rule.name)).toEqual(["tab-label-single-line"]);
-    if (loaded.value.provider.type !== "static") throw new Error("expected static provider");
+    if (!loaded.ok) throw new Error(loaded.failure.message);
+    if (loaded.value.provider === undefined || loaded.value.provider.type !== "static") {
+      throw new Error("expected static provider");
+    }
     const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
     expect(plan.targets.map((target) => target.name)).toEqual(["first", "second"]);
-    expect(plan.targets[0]).toMatchObject({
-      viewport: { width: 1280, height: 720 },
-      deviceScaleFactor: 1,
-      locale: "en-US",
-      timezoneId: "UTC",
-      timeoutMs: 30_000,
-      browserState: null,
-      readyCondition: null,
+    expect(plan.cases.map((c) => `${c.name}/${c.deviceName}`)).toEqual([
+      "first/desk",
+      "first/phone",
+      "second/desk",
+      "second/phone",
+    ]);
+    expect(plan.cases[1]).toMatchObject({
+      viewport: { width: 402, height: 681 },
+      isMobile: true,
+      userAgent: "Mozilla/5.0 (TestPhone)",
     });
   });
 
-  test("applies whole-object defaults and field-level rule overrides", async () => {
+  test("editing devices to one yields exactly one case per target", async () => {
     const directory = await temporaryDirectory();
     await writeConfig(directory, {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      devices: [DESKTOP_DEVICE],
+      provider: {
+        type: "static",
+        targets: [
+          { name: "first", url: "http://127.0.0.1:4173/first" },
+          { name: "second", url: "http://127.0.0.1:4173/second" },
+        ],
+      },
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok) throw new Error(loaded.failure.message);
+    if (loaded.value.provider === undefined || loaded.value.provider.type !== "static") {
+      throw new Error("expected static provider");
+    }
+    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    expect(plan.cases.map((c) => `${c.name}/${c.deviceName}`)).toEqual(["first/desk", "second/desk"]);
+  });
+
+  test("applies presentation defaults and rule overrides to every case regardless of device", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      schemaVersion: 2,
+      devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
       defaults: {
-        viewport: { width: 1440, height: 900 },
-        deviceScaleFactor: 2,
         locale: "fr-FR",
         timezoneId: "Europe/Paris",
         timeoutMs: 12_000,
@@ -86,50 +159,56 @@ describe("configuration", () => {
           {
             name: "settings",
             url: "https://example.com/settings",
-            viewport: { width: 800, height: 600 },
-            readyCondition: { selector: "#target" },
-            ruleOverrides: {
-              tabs: { excludeSelectors: [".target-exclude"], minimumLabels: 3 },
-            },
+            ruleOverrides: { tabs: { excludeSelectors: [".target-exclude"], minimumLabels: 3 } },
           },
         ],
       },
     });
     const loaded = await loadConfig(directory);
     if (!loaded.ok) throw new Error(loaded.failure.message);
-    if (loaded.value.provider.type !== "static") throw new Error("expected static provider");
-    const target = resolveTargets(loaded.value, loaded.value.provider.targets).targets[0];
-    expect(target).toMatchObject({
-      viewport: { width: 800, height: 600 },
-      deviceScaleFactor: 2,
-      locale: "fr-FR",
-      timezoneId: "Europe/Paris",
-      timeoutMs: 12_000,
-      browserState: join(directory, "state/auth.json"),
-      readyCondition: { selector: "#target", state: "visible" },
-    });
-    expect(target?.rules[0]).toMatchObject({
-      name: "tabs",
-      enabled: true,
-      additionalCandidateSelectors: [".tab"],
-      excludeSelectors: [".global-exclude", ".target-exclude"],
-      minimumLabels: 3,
-      allowZeroLabels: false,
-    });
+    if (loaded.value.provider === undefined || loaded.value.provider.type !== "static") {
+      throw new Error("expected static provider");
+    }
+    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    for (const c of plan.cases) {
+      expect(c).toMatchObject({
+        locale: "fr-FR",
+        timezoneId: "Europe/Paris",
+        timeoutMs: 12_000,
+        browserState: join(directory, "state/auth.json"),
+        readyCondition: { selector: "#default", state: "hidden" },
+      });
+      expect(c.rules[0]).toMatchObject({
+        name: "tabs",
+        enabled: true,
+        additionalCandidateSelectors: [".tab"],
+        excludeSelectors: [".global-exclude", ".target-exclude"],
+        minimumLabels: 3,
+        allowZeroLabels: false,
+      });
+    }
+    expect(plan.cases[0]).toMatchObject({ deviceName: "desk", viewport: { width: 1470, height: 956 } });
+    expect(plan.cases[1]).toMatchObject({ deviceName: "phone", viewport: { width: 402, height: 681 } });
   });
 
-  test("ad hoc resolution uses defaults and rules without provider targets", async () => {
+  test("ad hoc resolution builds cases from the URL, not the configured provider targets", async () => {
     const directory = await temporaryDirectory();
     await writeConfig(directory, {
-      schemaVersion: 1,
-      defaults: { viewport: { width: 900, height: 700 } },
-      provider: { type: "command", executable: "/does/not/run" },
+      schemaVersion: 2,
+      devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
+      provider: {
+        type: "static",
+        targets: [
+          { name: "ignored-a", url: "http://127.0.0.1:4173/a" },
+          { name: "ignored-b", url: "http://127.0.0.1:4173/b" },
+        ],
+      },
     });
     const loaded = await loadConfig(directory);
     if (!loaded.ok) throw new Error(loaded.failure.message);
     const plan = resolveAdHocTarget(loaded.value, "http://127.0.0.1:4173/adhoc");
-    expect(plan.targets).toHaveLength(1);
-    expect(plan.targets[0]).toMatchObject({ name: "adhoc", viewport: { width: 900, height: 700 } });
+    expect(plan.cases.map((c) => `${c.name}/${c.deviceName}`)).toEqual(["adhoc/desk", "adhoc/phone"]);
+    expect(plan.targets.map((target) => target.name)).toEqual(["adhoc"]);
   });
 
   test("classifies config file failures before provider resolution", async () => {
@@ -148,10 +227,7 @@ describe("configuration", () => {
   });
 
   test("accepts exactly 8 MiB and rejects one byte more", async () => {
-    const minimal = JSON.stringify({
-      schemaVersion: 1,
-      provider: { type: "static", targets: [{ name: "x", url: "https://example.com" }] },
-    });
+    const minimal = JSON.stringify({ schemaVersion: 2, devices: [DESKTOP_DEVICE] });
     const exactDirectory = await temporaryDirectory();
     await Bun.write(
       join(exactDirectory, "vlint.config.json"),
@@ -169,11 +245,37 @@ describe("configuration", () => {
   });
 
   test.each([
-    ["unknown field", { schemaVersion: 1, nope: true, provider: { type: "static", targets: [] } }],
+    ["version 1 config", { schemaVersion: 1, devices: [DESKTOP_DEVICE] }],
+    ["version 3 config", { schemaVersion: 3, devices: [DESKTOP_DEVICE] }],
+    ["unknown field", { schemaVersion: 2, devices: [DESKTOP_DEVICE], nope: true }],
+    ["missing devices", { schemaVersion: 2 }],
+    ["empty devices", { schemaVersion: 2, devices: [] }],
+    ["devices not an array", { schemaVersion: 2, devices: "desk" }],
+    [
+      "duplicate device name",
+      { schemaVersion: 2, devices: [DESKTOP_DEVICE, { ...DESKTOP_DEVICE, viewport: { width: 10, height: 10 } }] },
+    ],
+    [
+      "device missing screen",
+      {
+        schemaVersion: 2,
+        devices: [
+          { name: "d", viewport: { width: 1, height: 1 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false },
+        ],
+      },
+    ],
+    ["device unknown field", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, extra: 1 }] }],
+    ["invalid device viewport", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, viewport: { width: 0, height: 10 } }] }],
+    ["invalid device screen", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, screen: { width: 10, height: 0 } }] }],
+    ["out-of-range device DPR", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, deviceScaleFactor: 0.01 }] }],
+    ["isMobile not boolean", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, isMobile: "yes" }] }],
+    ["hasTouch not boolean", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, hasTouch: 1 }] }],
+    ["empty userAgent", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, userAgent: "" }] }],
     [
       "duplicate target",
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        devices: [DESKTOP_DEVICE],
         provider: {
           type: "static",
           targets: [
@@ -183,58 +285,59 @@ describe("configuration", () => {
         },
       },
     ],
+    ["empty static targets", { schemaVersion: 2, devices: [DESKTOP_DEVICE], provider: { type: "static", targets: [] } }],
     [
       "unknown rule override",
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        devices: [DESKTOP_DEVICE],
         provider: {
           type: "static",
-          targets: [
-            {
-              name: "x",
-              url: "https://example.com",
-              ruleOverrides: { missing: { enabled: false } },
-            },
-          ],
+          targets: [{ name: "x", url: "https://example.com", ruleOverrides: { missing: { enabled: false } } }],
         },
       },
     ],
     [
       "URL userinfo",
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        devices: [DESKTOP_DEVICE],
         provider: { type: "static", targets: [{ name: "x", url: "https://u:p@example.com" }] },
       },
     ],
     [
       "relative URL",
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        devices: [DESKTOP_DEVICE],
         provider: { type: "static", targets: [{ name: "x", url: "/relative" }] },
       },
     ],
     [
       "unsupported URL",
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        devices: [DESKTOP_DEVICE],
         provider: { type: "static", targets: [{ name: "x", url: "file:///tmp/x" }] },
       },
     ],
     [
-      "invalid viewport",
+      "target viewport no longer accepted",
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
+        devices: [DESKTOP_DEVICE],
         provider: {
           type: "static",
-          targets: [{ name: "x", url: "https://example.com", viewport: { width: 0, height: 10 } }],
+          targets: [{ name: "x", url: "https://example.com", viewport: { width: 800, height: 600 } }],
         },
       },
     ],
     [
-      "invalid browser state",
+      "defaults viewport no longer accepted",
       {
-        schemaVersion: 1,
-        defaults: { browserState: "bad\0path" },
+        schemaVersion: 2,
+        devices: [DESKTOP_DEVICE],
+        defaults: { viewport: { width: 800, height: 600 } },
         provider: { type: "static", targets: [{ name: "x", url: "https://example.com" }] },
       },
     ],
@@ -243,23 +346,29 @@ describe("configuration", () => {
     expect(parsed.ok ? null : parsed.failure.code).toBe("config-schema-invalid");
   });
 
+  test("accepts an optional provider and omits it from the loaded config", () => {
+    const parsed = parseConfig({ schemaVersion: 2, devices: [DESKTOP_DEVICE] });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.provider).toBeUndefined();
+    expect(parsed.value.devices).toHaveLength(1);
+  });
+
   test("enforces name, URL, and selector byte boundaries", () => {
     const base = {
-      schemaVersion: 1,
-      rules: [
-        {
-          name: "r",
-          type: "tab-label-single-line",
-          labelSelector: "x".repeat(64 * 1024),
-        },
-      ],
-      provider: {
-        type: "static",
-        targets: [{ name: "n".repeat(1024), url: "https://example.com" }],
-      },
+      schemaVersion: 2,
+      devices: [{ ...DESKTOP_DEVICE, name: "d".repeat(1024) }],
+      rules: [{ name: "r", type: "tab-label-single-line", labelSelector: "x".repeat(64 * 1024) }],
+      provider: { type: "static", targets: [{ name: "n".repeat(1024), url: "https://example.com" }] },
     };
     expect(parseConfig(base).ok).toBe(true);
-    expect(parseConfig({ ...base, provider: { type: "static", targets: [{ name: "n".repeat(1025), url: "https://example.com" }] } }).ok).toBe(false);
+    expect(parseConfig({ ...base, devices: [{ ...DESKTOP_DEVICE, name: "d".repeat(1025) }] }).ok).toBe(false);
+    expect(
+      parseConfig({
+        ...base,
+        provider: { type: "static", targets: [{ name: "n".repeat(1025), url: "https://example.com" }] },
+      }).ok,
+    ).toBe(false);
     expect(parseConfig({ ...base, rules: [{ ...base.rules[0], labelSelector: "x".repeat(64 * 1024 + 1) }] }).ok).toBe(false);
   });
 

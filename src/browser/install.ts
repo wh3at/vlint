@@ -28,6 +28,10 @@ interface Registry {
     executables: readonly RegistryExecutable[],
     options: { readonly force: boolean },
   ): Promise<void>;
+  installDeps(
+    executables: readonly RegistryExecutable[],
+    dryRun: boolean,
+  ): Promise<void>;
 }
 
 interface RegistryBundle {
@@ -79,6 +83,12 @@ export interface InstallOptions {
   readonly versionProbe?: VersionProbe;
 }
 
+export interface InstallDependenciesOptions {
+  readonly signal?: AbortSignal;
+  /** Test-only seam overriding Playwright's privileged dependency installer. */
+  readonly installAction?: () => Promise<void>;
+}
+
 /**
  * Internal worker token. The compiled CLI dispatches an invocation whose argv
  * contains this token to {@link runInstallerWorkerMain}, beside the OOP
@@ -86,6 +96,10 @@ export interface InstallOptions {
  * downloader descendant) runs inside a process group the parent owns.
  */
 export const INSTALLER_WORKER_TOKEN = "__vlint_internal_browser_installer_worker__";
+export const DEPENDENCIES_INSTALLER_WORKER_TOKEN =
+  "__vlint_internal_browser_dependencies_installer_worker__";
+export const DEPENDENCIES_SUPERVISOR_WORKER_TOKEN =
+  "__vlint_internal_browser_dependencies_supervisor_worker__";
 
 const VERSION_PROBE_TIMEOUT_MS = 15_000;
 const VERSION_PROBE_MAX_BUFFER = 64 * 1024;
@@ -93,11 +107,21 @@ const VERSION_PATTERN = /\d+\.\d+\.\d+\.\d+/;
 const WORKER_GRACE_MS = 3_000;
 
 function browserSetupFailure(code: Failure["code"], message: string): Failure {
-  return { stage: "browser-setup", code, message, target: null, rule: null };
+  return { stage: "browser-setup", code, message, target: null, device: null, rule: null };
 }
 
 export function isInstallerWorkerInvocation(argv: readonly string[]): boolean {
-  return argv.includes(INSTALLER_WORKER_TOKEN);
+  return argv.length === 4
+    && argv[2] === INSTALLER_WORKER_TOKEN
+    && (argv[3] === "--force" || argv[3] === "--no-force");
+}
+
+export function isDependenciesInstallerWorkerInvocation(argv: readonly string[]): boolean {
+  return argv.length === 3 && argv[2] === DEPENDENCIES_INSTALLER_WORKER_TOKEN;
+}
+
+export function isDependenciesSupervisorWorkerInvocation(argv: readonly string[]): boolean {
+  return argv.length === 3 && argv[2] === DEPENDENCIES_SUPERVISOR_WORKER_TOKEN;
 }
 
 export function isOopDownloaderInvocation(firstArg: string | undefined): boolean {
@@ -129,6 +153,46 @@ export async function runInstallerWorkerMain(argv: readonly string[]): Promise<v
   } catch {
     process.exit(2);
   }
+}
+
+export async function runDependenciesInstallerWorkerMain(): Promise<void> {
+  try {
+    const executable = bundle.registry.registry.findExecutable(MANAGED_BROWSER_NAME);
+    await bundle.registry.registry.installDeps([executable], false);
+    process.exit(0);
+  } catch {
+    process.exit(2);
+  }
+}
+
+/**
+ * Privileged dependency supervisor. Its detached child owns the apt process
+ * group; an abort byte from the unprivileged parent lets this root process reap
+ * the complete group before exiting.
+ */
+export async function runDependenciesSupervisorWorkerMain(): Promise<void> {
+  if (typeof process.getuid === "function" && process.getuid() !== 0) process.exit(2);
+  const proc = Bun.spawn({
+    cmd: [process.execPath, DEPENDENCIES_INSTALLER_WORKER_TOKEN],
+    stdin: "ignore",
+    stdout: "inherit",
+    stderr: "inherit",
+    detached: true,
+  });
+  const abort = new Promise<"abort">((resolve) => {
+    process.stdin.once("data", () => resolve("abort"));
+    process.stdin.resume();
+  });
+  const outcome = await Promise.race([
+    proc.exited.then((code) => ({ kind: "exit" as const, code })),
+    abort.then(() => ({ kind: "abort" as const })),
+  ]);
+  if (outcome.kind === "abort") {
+    await terminateInstallerGroup(proc.pid);
+    await proc.exited.catch(() => undefined);
+    process.exit(130);
+  }
+  process.exit(outcome.code);
 }
 
 export function probeBrowserVersion(executablePath: string): VersionProbeResult {
@@ -313,6 +377,85 @@ async function runInstallAction(options: InstallOptions): Promise<InstallActionO
   }
 }
 
+async function acquireDependencyPrivileges(
+  signal: AbortSignal | undefined,
+): Promise<InstallActionOutcome | null> {
+  if (typeof process.getuid !== "function" || process.getuid() === 0) return null;
+  let proc;
+  try {
+    proc = Bun.spawn({
+      cmd: ["sudo", "-v"],
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+  } catch {
+    return { aborted: false, success: false };
+  }
+  try {
+    const code = await raceAbort(signal, proc.exited);
+    return code === 0 ? null : { aborted: false, success: false };
+  } catch (error) {
+    if (!isAbortError(error)) throw error;
+    proc.kill("SIGTERM");
+    await proc.exited.catch(() => undefined);
+    return { aborted: true, success: false };
+  }
+}
+
+async function runDependenciesInstallAction(
+  options: InstallDependenciesOptions,
+): Promise<InstallActionOutcome> {
+  if (options.installAction !== undefined) {
+    try {
+      await raceAbort(options.signal, options.installAction());
+      return { aborted: false, success: true };
+    } catch (error) {
+      if (isAbortError(error)) return { aborted: true, success: false };
+      return { aborted: false, success: false };
+    }
+  }
+
+  const privilege = await acquireDependencyPrivileges(options.signal);
+  if (privilege !== null) return privilege;
+
+  const tmp = mkdtempSync(join(tmpdir(), "vlint-install-deps-"));
+  try {
+    const supervisorCommand =
+      typeof process.getuid === "function" && process.getuid() === 0
+        ? [process.execPath, DEPENDENCIES_SUPERVISOR_WORKER_TOKEN]
+        : ["sudo", "--", process.execPath, DEPENDENCIES_SUPERVISOR_WORKER_TOKEN];
+    const proc = Bun.spawn({
+      cmd: supervisorCommand,
+      stdin: "pipe",
+      stdout: "inherit",
+      stderr: "inherit",
+      cwd: tmp,
+    });
+    try {
+      const code = await raceAbort(options.signal, proc.exited);
+      proc.stdin.end();
+      return { aborted: false, success: code === 0 };
+    } catch (error) {
+      if (isAbortError(error)) {
+        try {
+          proc.stdin.write("abort\n");
+          proc.stdin.end();
+        } catch {
+          /* supervisor already exited */
+        }
+        await proc.exited.catch(() => undefined);
+        return { aborted: true, success: false };
+      }
+      throw error;
+    }
+  } catch {
+    return { aborted: false, success: false };
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function verifyAndClassify(
   force: boolean,
   wasPresent: boolean,
@@ -340,6 +483,29 @@ function verifyAndClassify(
   }
   const kind: InstallOutcomeKind = force ? "repaired" : wasPresent ? "already-present" : "installed";
   return boundarySuccess({ kind, browser });
+}
+
+/**
+ * Explicitly installs the Ubuntu libraries required by the pinned managed
+ * browser. The worker remains in the terminal's foreground process group so
+ * sudo can prompt and terminal cancellation reaches privileged descendants.
+ * This path is never called by `vlint check`.
+ */
+export async function installBrowserDependencies(
+  options: InstallDependenciesOptions = {},
+): Promise<BoundaryResult<void>> {
+  if (signalAborted(options.signal)) return boundaryFailure(interruptFailure());
+  const outcome = await runDependenciesInstallAction(options);
+  if (outcome.aborted) return boundaryFailure(interruptFailure());
+  if (!outcome.success) {
+    return boundaryFailure(
+      browserSetupFailure(
+        "browser-install-failed",
+        "Chromium system dependency installation failed; rerun 'vlint browser install --with-deps'",
+      ),
+    );
+  }
+  return boundarySuccess(undefined);
 }
 
 /**

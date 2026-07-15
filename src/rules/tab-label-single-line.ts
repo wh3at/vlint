@@ -493,7 +493,7 @@ function buildFailure(
   ruleName: string,
   targetName: string | null,
 ): Failure {
-  return { stage: "rule-evaluation", code, message, target: targetName, rule: ruleName };
+  return { stage: "rule-evaluation", code, message, target: targetName, device: null, rule: ruleName };
 }
 
 

@@ -1,9 +1,13 @@
 vlint 0.1.0: incomplete
-targets resolved=1 complete=0 partial=0 failed=0 not-executed=1
-rules clean=0 violations=0 failed=0 disabled=1 not-executed=1
-matched=0 violations=0 failures=1
-target only: not-executed https://example.com/only viewport=1280x720@1
+targets resolved=1
+cases resolved=2 complete=1 partial=0 failed=1 not-executed=0
+rules clean=1 violations=0 failed=0 disabled=2 not-executed=1
+matched=1 violations=0 failures=1
+case target=only device=MacBook Air 13: failed https://example.com/only viewport=1470x956@2
   rule tabs: not-executed labels=0 violations=0
   rule off: disabled labels=0 violations=0
+  failure navigation/navigation-http-status target=only device=MacBook Air 13 rule=-: navigation returned HTTP 500
+case target=only device=iPhone 17: complete https://example.com/only viewport=402x681@3
+  rule tabs: clean labels=1 violations=0
+  rule off: disabled labels=0 violations=0
 finalize tabs: not-executed labels=0
-failure browser-setup/browser-missing target=- rule=-: chromium not installed
