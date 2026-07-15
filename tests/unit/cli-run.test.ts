@@ -96,12 +96,28 @@ describe("CLI process contract", () => {
   test("rejects grammar and ad hoc URL errors without creating a result", async () => {
     for (const args of [["check", "extra"], ["check", "--url", "file:///tmp/page"]]) {
       const testHarness = harness();
-      expect(await runCli(args, testHarness.runtime, testHarness.io)).toBe(2);
+      expect(await runCli(args, testHarness.runtime, testHarness.io)).toBe(1);
       expect(testHarness.stdout).toEqual([]);
       expect(testHarness.stderr).toHaveLength(1);
       expect(testHarness.stderr[0]?.endsWith("\n")).toBe(true);
       expect(testHarness.counts().checks).toBe(0);
     }
+  });
+
+  test.each([
+    [[], "Usage: vlint"],
+    [["--help"], "Usage: vlint"],
+    [["check", "--help"], "Usage: vlint check"],
+    [["browser", "--help"], "Usage: vlint browser"],
+    [["browser", "install", "--help"], "Usage: vlint browser install"],
+    [["help", "check"], "Usage: vlint check"],
+  ] as const)("renders side-effect-free help for %#", async (args, usage) => {
+    const testHarness = harness();
+    expect(await runCli(args, testHarness.runtime, testHarness.io)).toBe(0);
+    expect(testHarness.stdout).toHaveLength(1);
+    expect(testHarness.stdout[0]).toContain(usage);
+    expect(testHarness.stderr).toEqual([]);
+    expect(testHarness.counts()).toEqual({ checks: 0, installs: 0, inits: 0, setups: 0 });
   });
 
   test.each([
@@ -151,7 +167,7 @@ describe("CLI process contract", () => {
   test("rejects init grammar without invoking the filesystem", async () => {
     for (const args of [["init", "--foo"], ["init", "extra"], ["init", "init"]]) {
       const testHarness = harness();
-      expect(await runCli(args, testHarness.runtime, testHarness.io)).toBe(2);
+      expect(await runCli(args, testHarness.runtime, testHarness.io)).toBe(1);
       expect(testHarness.stdout).toEqual([]);
       expect(testHarness.stderr).toHaveLength(1);
       expect(testHarness.counts().inits).toBe(0);

@@ -21,10 +21,11 @@ BASE_IMAGE="ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4
 TMP=$(mktemp -d)
 HOME_OK="$TMP/home-ok"
 HOME_EMPTY="$TMP/home-empty"
+HOME_HELP="$TMP/home-help"
 HOME_INTERRUPTED="$TMP/home-interrupted"
 WORK="$TMP/work"
-mkdir -p "$HOME_OK" "$HOME_EMPTY" "$HOME_INTERRUPTED" "$WORK"
-chmod 0777 "$HOME_OK" "$HOME_EMPTY" "$HOME_INTERRUPTED" "$WORK"
+mkdir -p "$HOME_OK" "$HOME_EMPTY" "$HOME_HELP" "$HOME_INTERRUPTED" "$WORK"
+chmod 0777 "$HOME_OK" "$HOME_EMPTY" "$HOME_HELP" "$HOME_INTERRUPTED" "$WORK"
 cleanup() {
   docker run --rm --user 0 -v "$TMP:/cleanup" "$IMAGE" sh -c \
     'rm -rf /cleanup/* /cleanup/.[!.]* /cleanup/..?*' >/dev/null 2>&1 || true
@@ -290,6 +291,35 @@ EOF
     -v "$EXTRACT:/opt/release:ro" \
     "$IMAGE" /opt/release/vlint --version)
   assert_contains "$version_output" "vlint $semver"
+
+  help_stderr="$TMP/help.stderr"
+  set +e
+  help_output=$(docker run --rm --network none --user 10001:10001 \
+    -e HOME=/home/vlint \
+    -v "$HOME_HELP:/home/vlint" \
+    -v "$EXTRACT:/opt/release:ro" \
+    "$IMAGE" /opt/release/vlint --help 2>"$help_stderr")
+  help_status=$?
+  set -e
+  assert_status "$help_status" 0
+  test ! -s "$help_stderr"
+  assert_contains "$help_output" 'Usage: vlint'
+  assert_contains "$help_output" 'check'
+
+  install_help_stderr="$TMP/install-help.stderr"
+  set +e
+  install_help_output=$(docker run --rm --network none --user 10001:10001 \
+    -e HOME=/home/vlint \
+    -v "$HOME_HELP:/home/vlint" \
+    -v "$EXTRACT:/opt/release:ro" \
+    "$IMAGE" /opt/release/vlint browser install --help 2>"$install_help_stderr")
+  install_help_status=$?
+  set -e
+  assert_status "$install_help_status" 0
+  test ! -s "$install_help_stderr"
+  assert_contains "$install_help_output" 'Usage: vlint browser install'
+  assert_contains "$install_help_output" '--with-deps'
+  test -z "$(find "$HOME_HELP" -mindepth 1 -print -quit)"
 
   install_output=$(docker run --rm --user 10001:10001 \
     -e HOME=/home/vlint \

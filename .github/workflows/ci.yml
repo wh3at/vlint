@@ -94,8 +94,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Compile production binary
         run: bun run build:linux-x64
-      - name: Verify compiled binary reports version
-        run: ./dist/vlint-linux-x64 --version
+      - name: Verify compiled CLI contract
+        run: bun test tests/smoke/compiled-cli-contract.test.ts
       - name: Upload production binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

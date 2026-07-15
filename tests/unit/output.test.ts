@@ -73,11 +73,15 @@ describe("output", () => {
   });
 
   test("escapes terminal controls and bidi characters", () => {
-    expect(escapeTerminal("a\u001b[31m\r\n\u202eb")).toBe("a\\u{1b}[31m\\r\\n\\u{202e}b");
+    expect(escapeTerminal("a\u001b[31m\r\n\u061c\u200e\u200f\u202eb")).toBe(
+      "a\\u{1b}[31m\\r\\n\\u{61c}\\u{200e}\\u{200f}\\u{202e}b",
+    );
   });
 
-  test("redacts every query value and removes the fragment", () => {
-    const safe = redactUrlForTerminal("https://example.com/x?a=secret&a=second&b=third#fragment");
+  test("redacts userinfo and every query value, and removes the fragment", () => {
+    const safe = redactUrlForTerminal("https://user:password@example.com/x?a=secret&a=second&b=third#fragment");
+    expect(safe).not.toContain("user");
+    expect(safe).not.toContain("password");
     expect(safe).not.toContain("secret");
     expect(safe).not.toContain("second");
     expect(safe).not.toContain("third");

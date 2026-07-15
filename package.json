@@ -20,6 +20,7 @@
     "test:feasibility": "bun run build:feasibility && bun run build:fixture-server && bun test tests/smoke/compiled-runtime.test.ts"
   },
   "dependencies": {
+    "commander": "15.0.0",
     "playwright": "1.61.1"
   },
   "devDependencies": {

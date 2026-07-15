@@ -1,6 +1,9 @@
 import type { RunResultV3 } from "../contracts/result";
 
 const BIDI_CONTROLS: Record<number, true> = {
+  0x061c: true,
+  0x200e: true,
+  0x200f: true,
   0x202a: true,
   0x202b: true,
   0x202c: true,
@@ -30,6 +33,8 @@ export function escapeTerminal(value: string): string {
 export function redactUrlForTerminal(value: string): string {
   try {
     const url = new URL(value);
+    url.username = "";
+    url.password = "";
     const entries = [...url.searchParams.keys()];
     for (const key of new Set(entries)) {
       const count = url.searchParams.getAll(key).length;

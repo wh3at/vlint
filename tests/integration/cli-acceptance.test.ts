@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { RunResultV3 } from "../../src/contracts/result";
@@ -123,16 +123,30 @@ describe("CLI version and invalid-argument boundary", () => {
   });
 
   test.each([
+    [[], "Usage: vlint"],
+    [["help", "check"], "Usage: vlint check"],
+    [["check", "--format", "yaml", "--help"], "Usage: vlint check"],
+  ] as const)("renders side-effect-free help for %#", async (args, usage) => {
+    const cwd = await temporaryDirectory();
+    const { exit, output } = await runCheck(cwd, args);
+    expect(exit).toBe(0);
+    expect(output.stdout).toHaveLength(1);
+    expect(output.stdout[0]).toContain(usage);
+    expect(output.stderr).toEqual([]);
+    expect(await readdir(cwd)).toEqual([]);
+  });
+
+  test.each([
     ["unknown command", ["bogus"]],
-    ["duplicate --url", ["check", "--url", "https://a.example", "--url", "https://b.example"]],
+    ["unknown option", ["check", "--unknown"]],
     ["missing --format value", ["check", "--format"]],
     ["bad --format value", ["check", "--format", "yaml"]],
     ["non-http ad hoc url", ["check", "--url", "file:///tmp/page"]],
     ["userinfo ad hoc url", ["check", "--url", "https://user:pass@example.com/x"]],
-  ] as const)("rejects %s on stderr only with exit 2", async (_name, args) => {
+  ] as const)("rejects %s on stderr only with exit 1", async (_name, args) => {
     const cwd = await temporaryDirectory();
     const { exit, output } = await runCheck(cwd, args);
-    expect(exit).toBe(2);
+    expect(exit).toBe(1);
     expect(output.stdout).toEqual([]);
     expect(output.stderr).toHaveLength(1);
     expect(output.stderr[0]?.endsWith("\n")).toBe(true);
