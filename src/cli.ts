@@ -14,7 +14,7 @@ import {
   runOopDownloaderMain,
 } from "./browser/install";
 import type { BoundaryResult } from "./contracts/failure";
-import type { RunResultV2 } from "./contracts/result";
+import type { RunResultV3 } from "./contracts/result";
 import { parseAdHocUrl } from "./config/schema";
 import { renderJson } from "./output/json";
 import { escapeTerminal, renderTerminal } from "./output/terminal";
@@ -36,7 +36,7 @@ export interface BrowserInstallResult {
 
 export interface CliRuntime {
   readonly version: string;
-  check(url: string | null, signal?: AbortSignal): Promise<RunResultV2>;
+  check(url: string | null, signal?: AbortSignal): Promise<RunResultV3>;
   install(force: boolean, withDeps: boolean, signal?: AbortSignal): Promise<BoundaryResult<BrowserInstallResult>>;
   init(signal?: AbortSignal): Promise<BoundaryResult<InitResult>>;
   setup(signal?: AbortSignal): Promise<BoundaryResult<SetupResult>>;

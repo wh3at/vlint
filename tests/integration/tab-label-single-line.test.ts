@@ -11,13 +11,14 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {chromium, type Browser, type Page} from "playwright";
 import { evaluateTabLabelSingleLine } from "../../src/rules/tab-label-single-line";
-import type { EffectiveRule } from "../../src/contracts/config";
-import type { RuleEvaluationOutcome } from "../../src/contracts/evaluation";
+import type { EffectiveTabLabelSingleLineRule } from "../../src/contracts/config";
+import type { RuleEvaluationOutcome, TabLabelSingleLineViolation } from "../../src/contracts/evaluation";
 import { startFixtureServer } from "../fixtures/app/server";
 
-const RULE: EffectiveRule = {
+const RULE: EffectiveTabLabelSingleLineRule = {
   name: "tab-label-single-line",
   type: "tab-label-single-line",
+  enabled: true,
   additionalCandidateSelectors: [],
   excludeSelectors: [],
   labelSelector: null,
@@ -25,7 +26,7 @@ const RULE: EffectiveRule = {
   allowZeroLabels: false,
 };
 
-function ruleWith(over: Partial<EffectiveRule>): EffectiveRule {
+function ruleWith(over: Partial<EffectiveTabLabelSingleLineRule>): EffectiveTabLabelSingleLineRule {
   return { ...RULE, ...over };
 }
 
@@ -51,7 +52,10 @@ async function newPage(): Promise<Page> {
 }
 
 /** Set HTML, settle fonts, then measure. Integration boundary: fonts.ready. */
-async function measureHtml(html: string, rule: EffectiveRule = RULE): Promise<RuleEvaluationOutcome> {
+async function measureHtml(
+  html: string,
+  rule: EffectiveTabLabelSingleLineRule = RULE,
+): Promise<RuleEvaluationOutcome<TabLabelSingleLineViolation>> {
   const page = await newPage();
   await page.setContent(`<!doctype html><html><body>${html}</body></html>`, { waitUntil: "load" });
   await page.evaluate(() => document.fonts.ready);
@@ -60,7 +64,10 @@ async function measureHtml(html: string, rule: EffectiveRule = RULE): Promise<Ru
   return outcome;
 }
 
-async function measureFixture(rule: EffectiveRule = RULE, path = "/tabs.html"): Promise<{ page: Page; outcome: RuleEvaluationOutcome }> {
+async function measureFixture(
+  rule: EffectiveTabLabelSingleLineRule = RULE,
+  path = "/tabs.html",
+): Promise<{ page: Page; outcome: RuleEvaluationOutcome<TabLabelSingleLineViolation> }> {
   const page = await newPage();
   await page.goto(`${fixtureUrl}${path}`, { waitUntil: "domcontentloaded" });
   await page.evaluate(() => document.fonts.ready);
@@ -86,7 +93,7 @@ describe("AE1 clean and wrapped tabs", () => {
         <button role="tab" ${WIDE_TAB_STYLE} aria-disabled="true">Archived</button>
       </div>`);
     expect(outcome.failure).toBeNull();
-    expect(outcome.facts.labelsInspected).toBe(3);
+    expect(outcome.facts.elementsInspected).toBe(3);
     expect(outcome.facts.violations).toHaveLength(0);
   });
 
@@ -98,7 +105,7 @@ describe("AE1 clean and wrapped tabs", () => {
         <button role="tab" ${TAB_STYLE} data-testid="wrap-b">Notification Preferences</button>
       </div>`);
     expect(outcome.failure).toBeNull();
-    expect(outcome.facts.labelsInspected).toBe(3);
+    expect(outcome.facts.elementsInspected).toBe(3);
     expect(outcome.facts.violations).toHaveLength(2);
     expect(outcome.facts.violations.map((v) => v.lineCount)).toEqual([2, 2]);
     expect(outcome.facts.violations.map((v) => v.text)).toEqual([
@@ -122,7 +129,7 @@ describe("AE2 exclusion", () => {
       </div>`;
     const excluded = await measureHtml(html, ruleWith({ excludeSelectors: [".intentional"] }));
     expect(excluded.failure).toBeNull();
-    expect(excluded.facts.labelsInspected).toBe(2);
+    expect(excluded.facts.elementsInspected).toBe(2);
     expect(excluded.facts.violations).toHaveLength(1);
     expect(excluded.facts.violations[0]!.text).toBe("Also Wraps Here");
   });
@@ -141,7 +148,7 @@ describe("AE3 label selector resolution", () => {
       </div>`,
       ruleWith({ labelSelector: ".label" }),
     );
-    expect(outcome.facts.labelsInspected).toBe(1); // prior candidate fact preserved
+    expect(outcome.facts.elementsInspected).toBe(1); // prior candidate fact preserved
     expect(outcome.failure?.code).toBe("label-selector-cardinality");
   });
 
@@ -151,7 +158,7 @@ describe("AE3 label selector resolution", () => {
       ruleWith({ labelSelector: ".label" }),
     );
     expect(outcome.failure?.code).toBe("label-selector-cardinality");
-    expect(outcome.facts.labelsInspected).toBe(0);
+    expect(outcome.facts.elementsInspected).toBe(0);
   });
 
   test("exactly one but non-rendered yields label-selector-not-rendered", async () => {
@@ -170,7 +177,7 @@ describe("AE3 label selector resolution", () => {
       ruleWith({ labelSelector: ".label" }),
     );
     expect(outcome.failure).toBeNull();
-    expect(outcome.facts.labelsInspected).toBe(1);
+    expect(outcome.facts.elementsInspected).toBe(1);
     expect(outcome.facts.violations).toHaveLength(0);
   });
 });
@@ -183,7 +190,7 @@ describe("AE4 zero candidates", () => {
   test("a page with no role=tab returns a clean empty fact", async () => {
     const outcome = await measureHtml(`<div><button type="button">not a tab</button></div>`);
     expect(outcome.failure).toBeNull();
-    expect(outcome.facts.labelsInspected).toBe(0);
+    expect(outcome.facts.elementsInspected).toBe(0);
     expect(outcome.facts.violations).toHaveLength(0);
   });
 });
@@ -199,7 +206,7 @@ describe("AE5 minimum labels", () => {
       ruleWith({ minimumLabels: 2 }),
     );
     expect(outcome.failure?.code).toBe("minimum-labels-unmet");
-    expect(outcome.facts.labelsInspected).toBe(1);
+    expect(outcome.facts.elementsInspected).toBe(1);
   });
 
   test("meeting the minimum stays clean", async () => {
@@ -211,7 +218,7 @@ describe("AE5 minimum labels", () => {
       ruleWith({ minimumLabels: 2 }),
     );
     expect(outcome.failure).toBeNull();
-    expect(outcome.facts.labelsInspected).toBe(2);
+    expect(outcome.facts.elementsInspected).toBe(2);
   });
 });
 
@@ -224,7 +231,7 @@ describe("geometry edge cases", () => {
     const outcome = await measureHtml(
       `<button role="tab" ${WIDE_TAB_STYLE}>Items<sup>2</sup></button>`,
     );
-    expect(outcome.facts.labelsInspected).toBe(1);
+    expect(outcome.facts.elementsInspected).toBe(1);
     expect(outcome.facts.violations).toHaveLength(0);
   });
 
@@ -282,7 +289,7 @@ describe("hidden and non-measurable states", () => {
     test(`${name} tab is not counted`, async () => {
       const outcome = await measureHtml(`<div role="tablist">${html}</div>`);
       expect(outcome.failure).toBeNull();
-      expect(outcome.facts.labelsInspected).toBe(0);
+      expect(outcome.facts.elementsInspected).toBe(0);
     });
   }
 
@@ -290,7 +297,7 @@ describe("hidden and non-measurable states", () => {
     const outcome = await measureHtml(
       `<div style="display:none;"><button role="tab" ${WIDE_TAB_STYLE}>Buried</button></div>`,
     );
-    expect(outcome.facts.labelsInspected).toBe(0);
+    expect(outcome.facts.elementsInspected).toBe(0);
   });
 });
 
@@ -313,7 +320,7 @@ describe("generated content", () => {
        <button role="tab" ${WIDE_TAB_STYLE} class="empty">Reports</button>`,
     );
     expect(outcome.failure).toBeNull();
-    expect(outcome.facts.labelsInspected).toBe(1);
+    expect(outcome.facts.elementsInspected).toBe(1);
   });
 
   test("generated content on a non-rendered owner is not a failure", async () => {
@@ -322,7 +329,7 @@ describe("generated content", () => {
        <button role="tab" class="gen" style="display:none;">Hidden Gen</button>`,
     );
     expect(outcome.failure).toBeNull();
-    expect(outcome.facts.labelsInspected).toBe(0);
+    expect(outcome.facts.elementsInspected).toBe(0);
   });
 });
 
@@ -350,7 +357,7 @@ describe("error preservation", () => {
     const outcome = await evaluateTabLabelSingleLine(page, RULE, "target");
     await page.close();
     expect(outcome.failure?.code).toBe("rule-script-failed");
-    expect(outcome.facts.labelsInspected).toBe(1); // prior candidate preserved
+    expect(outcome.facts.elementsInspected).toBe(1); // prior candidate preserved
   });
 
   test("a closed page yields empty facts and rule-script-failed", async () => {
@@ -362,7 +369,7 @@ describe("error preservation", () => {
     await page.close();
     const outcome = await evaluateTabLabelSingleLine(page, RULE, "target");
     expect(outcome.failure?.code).toBe("rule-script-failed");
-    expect(outcome.facts.labelsInspected).toBe(0);
+    expect(outcome.facts.elementsInspected).toBe(0);
     expect(outcome.facts.violations).toHaveLength(0);
   });
 });
@@ -420,7 +427,7 @@ describe("served fixture: determinism and locator re-resolution", () => {
     const a = await measureFixture();
     const b = await measureFixture();
     try {
-      expect(b.outcome.facts.labelsInspected).toBe(a.outcome.facts.labelsInspected);
+      expect(b.outcome.facts.elementsInspected).toBe(a.outcome.facts.elementsInspected);
       expect(b.outcome.facts.violations.length).toBe(a.outcome.facts.violations.length);
       expect(b.outcome.facts.violations.map((v) => v.text)).toEqual(a.outcome.facts.violations.map((v) => v.text));
       expect(b.outcome.facts.violations.map((v) => v.lineCount)).toEqual(a.outcome.facts.violations.map((v) => v.lineCount));
@@ -454,7 +461,7 @@ describe("served fixture: determinism and locator re-resolution", () => {
     const a = await measureFixture();
     const b = await measureFixture(ruleWith({ excludeSelectors: [".intentional-multiline"] }));
     try {
-      expect(b.outcome.facts.labelsInspected).toBe(a.outcome.facts.labelsInspected - 1);
+      expect(b.outcome.facts.elementsInspected).toBe(a.outcome.facts.elementsInspected - 1);
       expect(a.outcome.facts.violations.map((v) => v.text)).toContain("Deliberately Wrapped Long Label");
       expect(b.outcome.facts.violations.map((v) => v.text)).not.toContain("Deliberately Wrapped Long Label");
     } finally {

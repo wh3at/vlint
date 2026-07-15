@@ -6,9 +6,9 @@ import type {
   EffectiveTarget,
   ResolvedCheckPlan,
 } from "../../src/contracts/config";
-import type { RuleEvaluationOutcome } from "../../src/contracts/evaluation";
+import { isTabLabelSingleLineViolation, type RuleEvaluationOutcome } from "../../src/contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type Failure } from "../../src/contracts/failure";
-import type { RunResultV2 } from "../../src/contracts/result";
+import type { RunResultV3 } from "../../src/contracts/result";
 import {
   exitCodeForResult,
   type CheckDependencies,
@@ -16,7 +16,7 @@ import {
 } from "../../src/run/orchestrator";
 
 const cleanOutcome: RuleEvaluationOutcome = {
-  facts: { labelsInspected: 1, violations: [] },
+  facts: { elementsInspected: 1, violations: [] },
   failure: null,
 };
 
@@ -24,6 +24,7 @@ function rule(name: string, allowZeroLabels = false): EffectiveRule {
   return {
     name,
     type: "tab-label-single-line",
+    enabled: true,
     additionalCandidateSelectors: [],
     excludeSelectors: [],
     labelSelector: null,
@@ -120,7 +121,7 @@ function dependencies(options: DependencyOptions = {}): CheckDependencies<string
   };
 }
 
-function firstFailure(result: RunResultV2): Failure | undefined {
+function firstFailure(result: RunResultV3): Failure | undefined {
   return (
     result.failures[0] ??
     result.cases.flatMap((c) => c.failures)[0] ??
@@ -151,7 +152,7 @@ describe("orchestrator result model", () => {
       cases: { resolved: 2, complete: 2, partial: 0, failed: 0, notExecuted: 0 },
       ruleEvaluations: { clean: 2, violations: 0, failed: 0, disabled: 0, notExecuted: 0 },
       violations: 0,
-      matchedElements: 2,
+      elementsInspected: 2,
       executionFailures: 0,
     });
   });
@@ -164,14 +165,9 @@ describe("orchestrator result model", () => {
         evaluate(page, item) {
           return {
             facts: {
-              labelsInspected: 1,
+              elementsInspected: 1,
               violations: [
-                {
-                  text: `${page}:${item.name}`,
-                  lineCount: 2,
-                  geometry: { x: 0, y: 0, width: 1, height: 2 },
-                  locator: `#${page}-${item.name}`,
-                },
+                { type: "tab-label-single-line", text: `${page}:${item.name}`, lineCount: 2, geometry: { x: 0, y: 0, width: 1, height: 2 }, locator: `#${page}-${item.name}` },
               ],
             },
             failure: null,
@@ -182,12 +178,13 @@ describe("orchestrator result model", () => {
     );
     expect(result.status).toBe("violations");
     expect(exitCodeForResult(result)).toBe(1);
-    expect(result.cases.flatMap((item) => item.rules.flatMap((entry) => entry.violations.map((violation) => violation.text)))).toEqual([
-      "a:first",
-      "a:second",
-      "b:first",
-      "b:second",
-    ]);
+    expect(
+      result.cases.flatMap((item) =>
+        item.rules.flatMap((entry) =>
+          entry.violations.filter(isTabLabelSingleLineViolation).map((violation) => violation.text),
+        ),
+      ),
+    ).toEqual(["a:first", "a:second", "b:first", "b:second"]);
   });
 
   test("collects all cases after a navigation precondition failure", async () => {
@@ -199,14 +196,9 @@ describe("orchestrator result model", () => {
           return page === "first"
             ? {
                 facts: {
-                  labelsInspected: 1,
+                  elementsInspected: 1,
                   violations: [
-                    {
-                      text: "wrapped",
-                      lineCount: 2,
-                      geometry: { x: 0, y: 0, width: 1, height: 2 },
-                      locator: "#wrapped",
-                    },
+                    { type: "tab-label-single-line", text: "wrapped", lineCount: 2, geometry: { x: 0, y: 0, width: 1, height: 2 }, locator: "#wrapped" },
                   ],
                 },
                 failure: null,
@@ -235,14 +227,9 @@ describe("orchestrator result model", () => {
           if (item.name !== "fails") return cleanOutcome;
           return {
             facts: {
-              labelsInspected: 2,
+              elementsInspected: 2,
               violations: [
-                {
-                  text: "observed-before-failure",
-                  lineCount: 2,
-                  geometry: { x: 1, y: 1, width: 2, height: 2 },
-                  locator: "#partial",
-                },
+                { type: "tab-label-single-line", text: "observed-before-failure", lineCount: 2, geometry: { x: 1, y: 1, width: 2, height: 2 }, locator: "#partial" },
               ],
             },
             failure: {
@@ -262,7 +249,7 @@ describe("orchestrator result model", () => {
     expect(result.cases.map((item) => item.status)).toEqual(["partial", "partial"]);
     expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "not-executed"]);
     expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "not-executed"]);
-    expect(result.cases[0]?.rules[1]).toMatchObject({ labelsInspected: 2, violations: [{ text: "observed-before-failure" }] });
+    expect(result.cases[0]?.rules[1]).toMatchObject({ elementsInspected: 2, violations: [{ text: "observed-before-failure" }] });
     expect(firstFailure(result)).toMatchObject({ target: "a", rule: "fails" });
   });
 
@@ -275,7 +262,7 @@ describe("orchestrator result model", () => {
         evaluate(_page, item) {
           return item.name === "fails"
             ? {
-                facts: { labelsInspected: 0, violations: [] },
+                facts: { elementsInspected: 0, violations: [] },
                 failure: {
                   stage: "rule-evaluation",
                   code: "minimum-labels-unmet",
@@ -331,7 +318,7 @@ describe("orchestrator result model", () => {
     const rules = [rule("empty-first"), rule("empty-later")];
     const result = await runResolvedCheck(
       plan(["a"], rules),
-      dependencies({ evaluate: () => ({ facts: { labelsInspected: 0, violations: [] }, failure: null }) }),
+      dependencies({ evaluate: () => ({ facts: { elementsInspected: 0, violations: [] }, failure: null }) }),
       { toolVersion: "0.1.0" },
     );
     expect(result.cases[0]?.status).toBe("complete");
@@ -345,12 +332,12 @@ describe("orchestrator result model", () => {
   ])("passes zero-label finalization for %s", async (_name, resolved) => {
     const result = await runResolvedCheck(
       resolved,
-      dependencies({ evaluate: () => ({ facts: { labelsInspected: 0, violations: [] }, failure: null }) }),
+      dependencies({ evaluate: () => ({ facts: { elementsInspected: 0, violations: [] }, failure: null }) }),
       { toolVersion: "0.1.0" },
     );
     expect(result.status).toBe("clean");
     expect(result.ruleFinalizations).toEqual([
-      { name: "tabs", status: "passed", labelsInspected: 0, failure: null },
+      { name: "tabs", status: "passed", elementsInspected: 0, failure: null },
     ]);
   });
 
@@ -362,7 +349,7 @@ describe("orchestrator result model", () => {
     );
     expect(result.status).toBe("clean");
     expect(result.ruleFinalizations).toEqual([
-      { name: "tabs", status: "passed", labelsInspected: 1, failure: null },
+      { name: "tabs", status: "passed", elementsInspected: 1, failure: null },
     ]);
   });
 
@@ -420,7 +407,7 @@ describe("orchestrator result model", () => {
       dependencies({
         evaluate() {
           return {
-            facts: { labelsInspected: 0, violations: [] },
+            facts: { elementsInspected: 0, violations: [] },
             failure: {
               stage: "rule-evaluation",
               code: "rule-script-failed",

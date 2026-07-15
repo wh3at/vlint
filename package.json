@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "check:architecture": "bun run scripts/check-architecture.ts",
     "test:unit": "bun test tests/unit tests/golden",
-    "test:integration": "bun test tests/integration/browser-install.test.ts tests/integration/cli-acceptance.test.ts tests/integration/result-transitions.test.ts && bun test tests/integration/browser-lifecycle.test.ts && bun test tests/integration/readiness.test.ts && bun test tests/integration/tab-label-single-line.test.ts",
+    "test:integration": "bun test tests/integration/browser-install.test.ts tests/integration/cli-acceptance.test.ts tests/integration/result-transitions.test.ts && bun test tests/integration/browser-lifecycle.test.ts && bun test tests/integration/readiness.test.ts && bun test tests/integration/tab-label-single-line.test.ts && bun test tests/integration/page-horizontal-overflow.test.ts",
     "test:acceptance": "bun test tests/acceptance",
     "build:linux-x64": "bun run scripts/build.ts linux-x64",
     "build:feasibility": "bun run scripts/build.ts feasibility",

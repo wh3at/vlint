@@ -2,19 +2,19 @@ vlint 0.1.0: violations
 targets resolved=2
 cases resolved=4 complete=4 partial=0 failed=0 not-executed=0
 rules clean=3 violations=1 failed=0 disabled=4 not-executed=0
-matched=5 violations=2 failures=0
+elements=5 violations=2 failures=0
 case target=settings\u{1b}]8;;https://attacker.invalid\u{7} device=MacBook Air 13: complete https://example.com/settings?token=%3Credacted%3E&token=%3Credacted%3E viewport=1470x956@2
-  rule tabs: violations labels=2 violations=2
+  rule tabs: violations elements=2 violations=2
     violation lines=2 locator=#tab\nnext box=1.125,2,30,40 text=first\r\nsecond\u{202e}
     violation lines=1 locator=#other box=0,0,10,10 text=plain
-  rule off-rule: disabled labels=0 violations=0
+  rule off-rule: disabled elements=0 violations=0
 case target=settings\u{1b}]8;;https://attacker.invalid\u{7} device=iPhone 17: complete https://example.com/settings?token=%3Credacted%3E&token=%3Credacted%3E viewport=402x681@3
-  rule tabs: clean labels=1 violations=0
-  rule off-rule: disabled labels=0 violations=0
+  rule tabs: clean elements=1 violations=0
+  rule off-rule: disabled elements=0 violations=0
 case target=second device=MacBook Air 13: complete https://example.com/x?a=%3Credacted%3E&b=%3Credacted%3E viewport=1470x956@2
-  rule tabs: clean labels=1 violations=0
-  rule off-rule: disabled labels=0 violations=0
+  rule tabs: clean elements=1 violations=0
+  rule off-rule: disabled elements=0 violations=0
 case target=second device=iPhone 17: complete https://example.com/x?a=%3Credacted%3E&b=%3Credacted%3E viewport=402x681@3
-  rule tabs: clean labels=1 violations=0
-  rule off-rule: disabled labels=0 violations=0
-finalize tabs: passed labels=5
+  rule tabs: clean elements=1 violations=0
+  rule off-rule: disabled elements=0 violations=0
+finalize tabs: passed elements=5

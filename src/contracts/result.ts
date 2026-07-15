@@ -7,9 +7,9 @@ export type RuleResultStatus = "clean" | "violations" | "failed" | "disabled" | 
 
 export interface RuleResult {
   readonly name: string;
-  readonly type: "tab-label-single-line";
+  readonly type: "tab-label-single-line" | "page-horizontal-overflow";
   readonly status: RuleResultStatus;
-  readonly labelsInspected: number;
+  readonly elementsInspected: number;
   readonly violations: readonly Violation[];
   readonly failure: Failure | null;
 }
@@ -73,13 +73,13 @@ export interface RunSummary {
     readonly notExecuted: number;
   };
   readonly violations: number;
-  readonly matchedElements: number;
+  readonly elementsInspected: number;
   /** Total failures across run-wide, case-level, rule-level, and finalization sources. */
   readonly executionFailures: number;
 }
 
-export interface RunResultV2 {
-  readonly schemaVersion: 2;
+export interface RunResultV3 {
+  readonly schemaVersion: 3;
   readonly status: RunStatus;
   readonly tool: { readonly name: "vlint"; readonly version: string };
   readonly environment: {

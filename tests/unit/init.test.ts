@@ -28,7 +28,7 @@ afterEach(async () => {
 });
 
 describe("vlint init: standard config generation", () => {
-  test("builds a two-device, no-provider, standard-rule version 2 config (AE1)", () => {
+  test("builds a two-device, no-provider, standard-rules version 2 config (AE1)", () => {
     const result = buildStandardConfig();
     expect(result.ok).toBe(true);
     if (!result.ok) return;
@@ -37,7 +37,10 @@ describe("vlint init: standard config generation", () => {
     expect(config.schemaVersion).toBe(2);
     expect(config.provider).toBeUndefined();
     expect(config.devices).toHaveLength(2);
-    expect(config.rules).toEqual([{ name: "tab-label-single-line", type: "tab-label-single-line" }]);
+    expect(config.rules).toEqual([
+      { name: "tab-label-single-line", type: "tab-label-single-line" },
+      { name: "page-horizontal-overflow", type: "page-horizontal-overflow" },
+    ]);
 
     const [macbook, iphone] = config.devices;
     expect(macbook).toEqual({

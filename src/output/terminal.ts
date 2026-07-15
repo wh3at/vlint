@@ -1,4 +1,4 @@
-import type { RunResultV2 } from "../contracts/result";
+import type { RunResultV3 } from "../contracts/result";
 
 const BIDI_CONTROLS: Record<number, true> = {
   0x202a: true,
@@ -58,13 +58,13 @@ function failureLine(failure: {
   return `failure ${failure.stage}/${failure.code} target=${escapeNullable(failure.target)} device=${escapeNullable(failure.device)} rule=${escapeNullable(failure.rule)}: ${escapeTerminal(failure.message)}`;
 }
 
-export function renderTerminal(result: RunResultV2): string {
+export function renderTerminal(result: RunResultV3): string {
   const lines = [
     `vlint ${escapeTerminal(result.tool.version)}: ${result.status}`,
     `targets resolved=${result.summary.targets.resolved}`,
     `cases resolved=${result.summary.cases.resolved} complete=${result.summary.cases.complete} partial=${result.summary.cases.partial} failed=${result.summary.cases.failed} not-executed=${result.summary.cases.notExecuted}`,
     `rules clean=${result.summary.ruleEvaluations.clean} violations=${result.summary.ruleEvaluations.violations} failed=${result.summary.ruleEvaluations.failed} disabled=${result.summary.ruleEvaluations.disabled} not-executed=${result.summary.ruleEvaluations.notExecuted}`,
-    `matched=${result.summary.matchedElements} violations=${result.summary.violations} failures=${result.summary.executionFailures}`,
+    `elements=${result.summary.elementsInspected} violations=${result.summary.violations} failures=${result.summary.executionFailures}`,
   ];
   for (const caseResult of result.cases) {
     lines.push(
@@ -72,14 +72,20 @@ export function renderTerminal(result: RunResultV2): string {
     );
     for (const rule of caseResult.rules) {
       lines.push(
-        `  rule ${escapeTerminal(rule.name)}: ${rule.status} labels=${rule.labelsInspected} violations=${rule.violations.length}`,
+        `  rule ${escapeTerminal(rule.name)}: ${rule.status} elements=${rule.elementsInspected} violations=${rule.violations.length}`,
       );
       if (rule.failure !== null) lines.push(`    ${failureLine(rule.failure)}`);
       for (const violation of rule.violations) {
         const box = violation.geometry;
-        lines.push(
-          `    violation lines=${violation.lineCount} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height} text=${escapeTerminal(violation.text)}`,
-        );
+        if (violation.type === "tab-label-single-line") {
+          lines.push(
+            `    violation lines=${violation.lineCount} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height} text=${escapeTerminal(violation.text)}`,
+          );
+        } else {
+          lines.push(
+            `    violation overflow=${violation.overflowPx}px locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height} css=${escapeTerminal(JSON.stringify(violation.computedStyle))}`,
+          );
+        }
       }
     }
     for (const failure of caseResult.failures) {
@@ -88,7 +94,7 @@ export function renderTerminal(result: RunResultV2): string {
   }
   for (const finalization of result.ruleFinalizations) {
     lines.push(
-      `finalize ${escapeTerminal(finalization.name)}: ${finalization.status} labels=${finalization.labelsInspected}`,
+      `finalize ${escapeTerminal(finalization.name)}: ${finalization.status} elements=${finalization.elementsInspected}`,
     );
     if (finalization.failure !== null) lines.push(`  ${failureLine(finalization.failure)}`);
   }

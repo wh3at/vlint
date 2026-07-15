@@ -19,21 +19,49 @@ const BUILTIN_DEFAULTS = {
   timeoutMs: 30_000,
 } as const;
 
-const BUILTIN_RULE: RuleInstance = {
+export const BUILTIN_TAB_RULE: RuleInstance = {
   name: "tab-label-single-line",
   type: "tab-label-single-line",
 };
 
+export const BUILTIN_OVERFLOW_RULE: RuleInstance = {
+  name: "page-horizontal-overflow",
+  type: "page-horizontal-overflow",
+};
+
+export function rulesWithBuiltins(rules: readonly RuleInstance[] | undefined): readonly RuleInstance[] {
+  const configured = rules ?? [];
+  return [
+    ...(configured.some((rule) => rule.type === "tab-label-single-line") ? [] : [BUILTIN_TAB_RULE]),
+    ...configured,
+    ...(configured.some((rule) => rule.type === "page-horizontal-overflow") ? [] : [BUILTIN_OVERFLOW_RULE]),
+  ];
+}
+
 export function normalizeRules(rules: readonly RuleInstance[] | undefined): readonly EffectiveRule[] {
-  return (rules ?? [BUILTIN_RULE]).map((rule) => ({
-    name: rule.name,
-    type: rule.type,
-    additionalCandidateSelectors: rule.additionalCandidateSelectors ?? [],
-    excludeSelectors: rule.excludeSelectors ?? [],
-    labelSelector: rule.labelSelector ?? null,
-    minimumLabels: rule.minimumLabels ?? 0,
-    allowZeroLabels: rule.allowZeroLabels ?? false,
-  }));
+  const complete = rulesWithBuiltins(rules);
+  return complete.map((rule): EffectiveRule => {
+    switch (rule.type) {
+      case "tab-label-single-line":
+        return {
+          name: rule.name,
+          type: rule.type,
+          enabled: true,
+          additionalCandidateSelectors: rule.additionalCandidateSelectors ?? [],
+          excludeSelectors: rule.excludeSelectors ?? [],
+          labelSelector: rule.labelSelector ?? null,
+          minimumLabels: rule.minimumLabels ?? 0,
+          allowZeroLabels: rule.allowZeroLabels ?? false,
+        };
+      case "page-horizontal-overflow":
+        return {
+          name: rule.name,
+          type: rule.type,
+          enabled: rule.enabled ?? true,
+          tolerancePx: rule.tolerancePx ?? 1,
+        };
+    }
+  });
 }
 
 function effectiveRulesForTarget(
@@ -42,12 +70,17 @@ function effectiveRulesForTarget(
 ): readonly EffectiveRuleForTarget[] {
   return rules.map((rule) => {
     const override = target.ruleOverrides?.[rule.name];
-    return {
-      ...rule,
-      enabled: override?.enabled ?? true,
-      excludeSelectors: [...rule.excludeSelectors, ...(override?.excludeSelectors ?? [])],
-      minimumLabels: override?.minimumLabels ?? rule.minimumLabels,
-    };
+    switch (rule.type) {
+      case "tab-label-single-line":
+        return {
+          ...rule,
+          enabled: override?.enabled ?? rule.enabled,
+          excludeSelectors: [...rule.excludeSelectors, ...(override?.excludeSelectors ?? [])],
+          minimumLabels: override?.minimumLabels ?? rule.minimumLabels,
+        };
+      case "page-horizontal-overflow":
+        return { ...rule, enabled: override?.enabled ?? rule.enabled };
+    }
   });
 }
 

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "bun:test";
-import type { RunResultV2 } from "../../src/contracts/result";
+import type { RunResultV3 } from "../../src/contracts/result";
 
 /**
  * Compiled-binary CLI contract smoke test. Consumes the already-built
@@ -73,7 +73,7 @@ describe.skipIf(!binaryPresent)(
       expect(result.stdout.endsWith("\n")).toBe(true);
       // Exactly one newline-terminated JSON line.
       expect(result.stdout.split("\n")).toHaveLength(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(parsed.status).toBe("incomplete");
       expect(parsed.tool).toEqual({ name: "vlint", version: "0.2.0" });
       expect(parsed.failures[0]).toMatchObject({ stage: "config", code: "config-not-found" });

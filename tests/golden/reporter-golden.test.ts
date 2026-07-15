@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { RunResultV2 } from "../../src/contracts/result";
+import type { RunResultV3 } from "../../src/contracts/result";
+import { isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
 import { renderJson } from "../../src/output/json";
 import { renderTerminal } from "../../src/output/terminal";
 
@@ -47,8 +48,8 @@ const IPHONE = {
   userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
 } as const;
 
-const violations: RunResultV2 = {
-  schemaVersion: 2,
+const violations: RunResultV3 = {
+  schemaVersion: 3,
   status: "violations",
   tool: { name: "vlint", version: "0.1.0" },
   environment: {
@@ -62,7 +63,7 @@ const violations: RunResultV2 = {
     ruleEvaluations: { clean: 3, violations: 1, failed: 0, disabled: 4, notExecuted: 0 },
     ruleFinalizations: { passed: 1, failed: 0, notExecuted: 0 },
     violations: 2,
-    matchedElements: 5,
+    elementsInspected: 5,
     executionFailures: 0,
   },
   cases: [
@@ -80,20 +81,10 @@ const violations: RunResultV2 = {
           name: "tabs",
           type: "tab-label-single-line",
           status: "violations",
-          labelsInspected: 2,
+          elementsInspected: 2,
           violations: [
-            {
-              text: "first\r\nsecond\u202e",
-              lineCount: 2,
-              geometry: { x: 1.125, y: 2, width: 30, height: 40 },
-              locator: "#tab\nnext",
-            },
-            {
-              text: "plain",
-              lineCount: 1,
-              geometry: { x: 0, y: 0, width: 10, height: 10 },
-              locator: "#other",
-            },
+            { type: "tab-label-single-line", text: "first\r\nsecond\u202e", lineCount: 2, geometry: { x: 1.125, y: 2, width: 30, height: 40 }, locator: "#tab\nnext" },
+            { type: "tab-label-single-line", text: "plain", lineCount: 1, geometry: { x: 0, y: 0, width: 10, height: 10 }, locator: "#other" },
           ],
           failure: null,
         },
@@ -101,7 +92,7 @@ const violations: RunResultV2 = {
           name: "off-rule",
           type: "tab-label-single-line",
           status: "disabled",
-          labelsInspected: 0,
+          elementsInspected: 0,
           violations: [],
           failure: null,
         },
@@ -122,7 +113,7 @@ const violations: RunResultV2 = {
           name: "tabs",
           type: "tab-label-single-line",
           status: "clean",
-          labelsInspected: 1,
+          elementsInspected: 1,
           violations: [],
           failure: null,
         },
@@ -130,7 +121,7 @@ const violations: RunResultV2 = {
           name: "off-rule",
           type: "tab-label-single-line",
           status: "disabled",
-          labelsInspected: 0,
+          elementsInspected: 0,
           violations: [],
           failure: null,
         },
@@ -151,7 +142,7 @@ const violations: RunResultV2 = {
           name: "tabs",
           type: "tab-label-single-line",
           status: "clean",
-          labelsInspected: 1,
+          elementsInspected: 1,
           violations: [],
           failure: null,
         },
@@ -159,7 +150,7 @@ const violations: RunResultV2 = {
           name: "off-rule",
           type: "tab-label-single-line",
           status: "disabled",
-          labelsInspected: 0,
+          elementsInspected: 0,
           violations: [],
           failure: null,
         },
@@ -180,7 +171,7 @@ const violations: RunResultV2 = {
           name: "tabs",
           type: "tab-label-single-line",
           status: "clean",
-          labelsInspected: 1,
+          elementsInspected: 1,
           violations: [],
           failure: null,
         },
@@ -188,7 +179,7 @@ const violations: RunResultV2 = {
           name: "off-rule",
           type: "tab-label-single-line",
           status: "disabled",
-          labelsInspected: 0,
+          elementsInspected: 0,
           violations: [],
           failure: null,
         },
@@ -196,12 +187,12 @@ const violations: RunResultV2 = {
       failures: [],
     },
   ],
-  ruleFinalizations: [{ name: "tabs", status: "passed", labelsInspected: 5, failure: null }],
+  ruleFinalizations: [{ name: "tabs", status: "passed", elementsInspected: 5, failure: null }],
   failures: [],
 };
 
-const incomplete: RunResultV2 = {
-  schemaVersion: 2,
+const incomplete: RunResultV3 = {
+  schemaVersion: 3,
   status: "incomplete",
   tool: { name: "vlint", version: "0.1.0" },
   environment: {
@@ -215,7 +206,7 @@ const incomplete: RunResultV2 = {
     ruleEvaluations: { clean: 1, violations: 0, failed: 0, disabled: 2, notExecuted: 1 },
     ruleFinalizations: { passed: 0, failed: 0, notExecuted: 1 },
     violations: 0,
-    matchedElements: 1,
+    elementsInspected: 1,
     executionFailures: 1,
   },
   cases: [
@@ -230,7 +221,7 @@ const incomplete: RunResultV2 = {
           name: "tabs",
           type: "tab-label-single-line",
           status: "not-executed",
-          labelsInspected: 0,
+          elementsInspected: 0,
           violations: [],
           failure: null,
         },
@@ -238,7 +229,7 @@ const incomplete: RunResultV2 = {
           name: "off",
           type: "tab-label-single-line",
           status: "disabled",
-          labelsInspected: 0,
+          elementsInspected: 0,
           violations: [],
           failure: null,
         },
@@ -265,7 +256,7 @@ const incomplete: RunResultV2 = {
           name: "tabs",
           type: "tab-label-single-line",
           status: "clean",
-          labelsInspected: 1,
+          elementsInspected: 1,
           violations: [],
           failure: null,
         },
@@ -273,7 +264,7 @@ const incomplete: RunResultV2 = {
           name: "off",
           type: "tab-label-single-line",
           status: "disabled",
-          labelsInspected: 0,
+          elementsInspected: 0,
           violations: [],
           failure: null,
         },
@@ -281,7 +272,7 @@ const incomplete: RunResultV2 = {
       failures: [],
     },
   ],
-  ruleFinalizations: [{ name: "tabs", status: "not-executed", labelsInspected: 0, failure: null }],
+  ruleFinalizations: [{ name: "tabs", status: "not-executed", elementsInspected: 0, failure: null }],
   failures: [],
 };
 
@@ -336,10 +327,12 @@ describe("reporter golden output", () => {
     const rendered = renderJson(violations);
     expect(rendered.endsWith("\n")).toBe(true);
     expect(rendered.split("\n")).toHaveLength(2);
-    const parsed = JSON.parse(rendered) as RunResultV2;
-    expect(parsed.schemaVersion).toBe(2);
+    const parsed = JSON.parse(rendered) as RunResultV3;
+    expect(parsed.schemaVersion).toBe(3);
     expect(parsed.cases[0]?.target.url).toBe(violations.cases[0]?.target.url);
-    expect(parsed.cases[0]?.rules[0]?.violations[0]?.text).toBe("first\r\nsecond\u202e");
+    expect(
+      parsed.cases[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
+    ).toBe("first\r\nsecond\u202e");
     expect(parsed.status).toBe("violations");
   });
 
@@ -401,7 +394,7 @@ describe("reporter golden output", () => {
   });
 
   test("exit mapping is clean 0, violations 1, incomplete 2", () => {
-    const cleanResult: RunResultV2 = { ...violations, status: "clean", summary: { ...violations.summary, violations: 0 } };
+    const cleanResult: RunResultV3 = { ...violations, status: "clean", summary: { ...violations.summary, violations: 0 } };
     expect(cleanResult.status === "incomplete" ? 2 : cleanResult.status === "violations" ? 1 : 0).toBe(0);
     expect(violations.status === "incomplete" ? 2 : violations.status === "violations" ? 1 : 0).toBe(1);
     expect(incomplete.status === "incomplete" ? 2 : incomplete.status === "violations" ? 1 : 0).toBe(2);

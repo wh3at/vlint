@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import type { RunResultV2 } from "../../src/contracts/result";
+import type { RunResultV3 } from "../../src/contracts/result";
+import { isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
 import { renderJson } from "../../src/output/json";
 import { escapeTerminal, redactUrlForTerminal, renderTerminal } from "../../src/output/terminal";
 
-const result: RunResultV2 = {
-  schemaVersion: 2,
+const result: RunResultV3 = {
+  schemaVersion: 3,
   status: "violations",
   tool: { name: "vlint", version: "0.1.0" },
   environment: {
@@ -18,7 +19,7 @@ const result: RunResultV2 = {
     ruleEvaluations: { clean: 0, violations: 1, failed: 0, disabled: 0, notExecuted: 0 },
     ruleFinalizations: { passed: 1, failed: 0, notExecuted: 0 },
     violations: 1,
-    matchedElements: 1,
+    elementsInspected: 1,
     executionFailures: 0,
   },
   cases: [
@@ -44,14 +45,9 @@ const result: RunResultV2 = {
           name: "tabs",
           type: "tab-label-single-line",
           status: "violations",
-          labelsInspected: 1,
+          elementsInspected: 1,
           violations: [
-            {
-              text: "first\r\nsecond\u202e",
-              lineCount: 2,
-              geometry: { x: 1.125, y: 2, width: 30, height: 40 },
-              locator: "#tab\nnext",
-            },
+            { type: "tab-label-single-line", text: "first\r\nsecond\u202e", lineCount: 2, geometry: { x: 1.125, y: 2, width: 30, height: 40 }, locator: "#tab\nnext" },
           ],
           failure: null,
         },
@@ -59,7 +55,7 @@ const result: RunResultV2 = {
       failures: [],
     },
   ],
-  ruleFinalizations: [{ name: "tabs", status: "passed", labelsInspected: 1, failure: null }],
+  ruleFinalizations: [{ name: "tabs", status: "passed", elementsInspected: 1, failure: null }],
   failures: [],
 };
 
@@ -69,9 +65,11 @@ describe("output", () => {
     const second = renderJson(result);
     expect(first).toBe(second);
     expect(first.endsWith("\n")).toBe(true);
-    const parsed = JSON.parse(first) as RunResultV2;
+    const parsed = JSON.parse(first) as RunResultV3;
     expect(parsed.cases[0]?.target.url).toBe(result.cases[0]?.target.url);
-    expect(parsed.cases[0]?.rules[0]?.violations[0]?.text).toBe("first\r\nsecond\u202e");
+    expect(
+      parsed.cases[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
+    ).toBe("first\r\nsecond\u202e");
   });
 
   test("escapes terminal controls and bidi characters", () => {
@@ -97,6 +95,54 @@ describe("output", () => {
     expect(output.endsWith("\n")).toBe(true);
   });
 
+  test("renders overflow diagnostics with the fixed computed-style evidence", () => {
+    const overflowResult: RunResultV3 = {
+      ...result,
+      cases: [{
+        ...result.cases[0]!,
+        rules: [{
+          name: "page-horizontal-overflow",
+          type: "page-horizontal-overflow",
+          status: "violations",
+          elementsInspected: 1,
+          violations: [{
+            type: "page-horizontal-overflow",
+            overflowPx: 12.5,
+            geometry: { x: -2, y: 3, width: 414, height: 50 },
+            locator: "#wide\npanel",
+            computedStyle: {
+              display: "block",
+              position: "static",
+              boxSizing: "border-box",
+              width: "414px",
+              minWidth: "auto",
+              maxWidth: "none",
+              whiteSpace: "normal",
+              overflowX: "visible",
+              flex: "0 1 auto",
+              flexBasis: "auto",
+              flexGrow: "0",
+              flexShrink: "1",
+              gridTemplateColumns: "none",
+              gridAutoColumns: "auto",
+            },
+          }],
+          failure: null,
+        }],
+      }],
+      ruleFinalizations: [{
+        name: "page-horizontal-overflow",
+        status: "passed",
+        elementsInspected: 1,
+        failure: null,
+      }],
+    };
+
+    expect(renderTerminal(overflowResult)).toContain(
+      '    violation overflow=12.5px locator=#wide\\npanel box=-2,3,414,50 css={"display":"block","position":"static","boxSizing":"border-box","width":"414px","minWidth":"auto","maxWidth":"none","whiteSpace":"normal","overflowX":"visible","flex":"0 1 auto","flexBasis":"auto","flexGrow":"0","flexShrink":"1","gridTemplateColumns":"none","gridAutoColumns":"auto"}',
+    );
+  });
+
   test("renders nested rule and finalization failure diagnostics", () => {
     const failure = {
       stage: "rule-evaluation" as const,
@@ -106,7 +152,7 @@ describe("output", () => {
       device: "macbook",
       rule: "tabs",
     };
-    const failed: RunResultV2 = {
+    const failed: RunResultV3 = {
       ...result,
       cases: [{
         ...result.cases[0]!,
@@ -115,7 +161,7 @@ describe("output", () => {
       ruleFinalizations: [{
         name: "tabs",
         status: "failed",
-        labelsInspected: 0,
+        elementsInspected: 0,
         failure: { ...failure, code: "zero-labels-global", message: "no labels" },
       }],
     };

@@ -2,12 +2,13 @@ import type { Page } from "playwright";
 import type { EffectiveRuleForTarget, ResolvedCheckPlan } from "../contracts/config";
 import type { RuleEvaluationOutcome } from "../contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../contracts/failure";
-import type { RunResultV2 } from "../contracts/result";
+import type { RunResultV3 } from "../contracts/result";
 import { loadConfig } from "../config/load";
 import { resolveAdHocTarget, resolveTargets } from "../config/merge";
 import { resolveCommandProvider } from "../providers/command";
 import { resolveStaticProvider } from "../providers/static";
 import { createBrowserRunScope } from "../browser/lifecycle";
+import { evaluatePageHorizontalOverflow } from "../rules/page-horizontal-overflow";
 import { evaluateTabLabelSingleLine } from "../rules/tab-label-single-line";
 import {
   resultForResolutionFailure,
@@ -62,7 +63,7 @@ function interruptedOutcome(rule: EffectiveRuleForTarget): RuleEvaluationOutcome
     device: null,
     rule: rule.name,
   };
-  return { facts: { labelsInspected: 0, violations: [] }, failure };
+  return { facts: { elementsInspected: 0, violations: [] }, failure };
 }
 
 async function evaluateWithCancellation(
@@ -71,7 +72,10 @@ async function evaluateWithCancellation(
   signal?: AbortSignal,
 ): Promise<RuleEvaluationOutcome> {
   if (signal?.aborted === true) return interruptedOutcome(rule);
-  const evaluation = evaluateTabLabelSingleLine(page, rule);
+  const evaluation =
+    rule.type === "tab-label-single-line"
+      ? evaluateTabLabelSingleLine(page, rule)
+      : evaluatePageHorizontalOverflow(page, rule);
   if (signal === undefined) return evaluation;
   let abortListener: (() => void) | null = null;
   const interruption = new Promise<RuleEvaluationOutcome>((resolveInterruption) => {
@@ -107,7 +111,7 @@ export async function runCheckCommand(
   environment: Readonly<Record<string, string | undefined>>,
   toolVersion: string,
   signal?: AbortSignal,
-): Promise<RunResultV2> {
+): Promise<RunResultV3> {
   if (signalAborted(signal)) {
     return resultForResolutionFailure(toolVersion, {
       stage: "interrupt",

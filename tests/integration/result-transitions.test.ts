@@ -6,9 +6,9 @@ import type {
   EffectiveTarget,
   ResolvedCheckPlan,
 } from "../../src/contracts/config";
-import type { RuleEvaluationOutcome } from "../../src/contracts/evaluation";
+import { isTabLabelSingleLineViolation, type RuleEvaluationOutcome } from "../../src/contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../../src/contracts/failure";
-import type { RunResultV2 } from "../../src/contracts/result";
+import type { RunResultV3 } from "../../src/contracts/result";
 import {
   exitCodeForResult,
   runResolvedCheck,
@@ -21,11 +21,21 @@ function rule(name: string, allowZeroLabels = false): EffectiveRule {
   return {
     name,
     type: "tab-label-single-line",
+    enabled: true,
     additionalCandidateSelectors: [],
     excludeSelectors: [],
     labelSelector: null,
     minimumLabels: 0,
     allowZeroLabels,
+  };
+}
+
+function overflowRule(name: string): EffectiveRule {
+  return {
+    name,
+    type: "page-horizontal-overflow",
+    enabled: true,
+    tolerancePx: 1,
   };
 }
 
@@ -78,21 +88,16 @@ function plan(
 }
 
 const cleanOutcome: RuleEvaluationOutcome = {
-  facts: { labelsInspected: 1, violations: [] },
+  facts: { elementsInspected: 1, violations: [] },
   failure: null,
 };
 
 function violationOutcome(page: string, ruleName: string): RuleEvaluationOutcome {
   return {
     facts: {
-      labelsInspected: 1,
+      elementsInspected: 1,
       violations: [
-        {
-          text: `${page}:${ruleName}`,
-          lineCount: 2,
-          geometry: { x: 0, y: 0, width: 1, height: 2 },
-          locator: `#${page}-${ruleName}`,
-        },
+        { type: "tab-label-single-line", text: `${page}:${ruleName}`, lineCount: 2, geometry: { x: 0, y: 0, width: 1, height: 2 }, locator: `#${page}-${ruleName}` },
       ],
     },
     failure: null,
@@ -101,7 +106,7 @@ function violationOutcome(page: string, ruleName: string): RuleEvaluationOutcome
 
 function failureOutcome(stage: Failure["stage"], code: Failure["code"]): RuleEvaluationOutcome {
   return {
-    facts: { labelsInspected: 2, violations: [] },
+    facts: { elementsInspected: 2, violations: [] },
     failure: { stage, code, message: `${code}`, target: null, device: null, rule: null },
   };
 }
@@ -147,11 +152,11 @@ function dependencies(options: DepOptions = {}): CheckDependencies<string> {
 async function run(
   resolved: ResolvedCheckPlan,
   options: DepOptions = {},
-): Promise<RunResultV2> {
+): Promise<RunResultV3> {
   return runResolvedCheck(resolved, dependencies(options), { toolVersion: "0.1.0" });
 }
 
-function allFailures(result: RunResultV2): readonly Failure[] {
+function allFailures(result: RunResultV3): readonly Failure[] {
   return [
     ...result.failures,
     ...result.cases.flatMap((item) => item.failures),
@@ -161,7 +166,7 @@ function allFailures(result: RunResultV2): readonly Failure[] {
 }
 
 /** The summary must always reconcile with the underlying facts and status. */
-function reconcile(result: RunResultV2, resolved: ResolvedCheckPlan): void {
+function reconcile(result: RunResultV3, resolved: ResolvedCheckPlan): void {
   expect(result.summary.targets.resolved).toBe(resolved.targets.length);
 
   const cases = result.summary.cases;
@@ -181,10 +186,10 @@ function reconcile(result: RunResultV2, resolved: ResolvedCheckPlan): void {
   expect(result.summary.violations).toBe(violationTotal);
 
   const matchedTotal = result.cases.reduce(
-    (count, item) => count + item.rules.reduce((inner, entry) => inner + entry.labelsInspected, 0),
+    (count, item) => count + item.rules.reduce((inner, entry) => inner + entry.elementsInspected, 0),
     0,
   );
-  expect(result.summary.matchedElements).toBe(matchedTotal);
+  expect(result.summary.elementsInspected).toBe(matchedTotal);
 
   const finalizations = result.summary.ruleFinalizations;
   expect(finalizations.passed + finalizations.failed + finalizations.notExecuted).toBe(resolved.rules.length);
@@ -228,7 +233,11 @@ describe("result-transition matrix reconciles and maps exit codes", () => {
     reconcile(result, resolved);
     expect(result.status).toBe("violations");
     expect(
-      result.cases.flatMap((item) => item.rules.flatMap((entry) => entry.violations.map((v) => v.text))),
+      result.cases.flatMap((item) =>
+        item.rules.flatMap((entry) =>
+          entry.violations.filter(isTabLabelSingleLineViolation).map((violation) => violation.text),
+        ),
+      ),
     ).toEqual(["a:first", "a:second", "b:first", "b:second"]);
   });
 
@@ -287,7 +296,7 @@ describe("result-transition matrix reconciles and maps exit codes", () => {
     const rules = [rule("empty-first"), rule("empty-later")];
     const resolved = plan(["a"], rules);
     const result = await run(resolved, {
-      evaluate: () => ({ facts: { labelsInspected: 0, violations: [] }, failure: null }),
+      evaluate: () => ({ facts: { elementsInspected: 0, violations: [] }, failure: null }),
     });
     reconcile(result, resolved);
     expect(result.cases[0]?.status).toBe("complete");
@@ -320,6 +329,30 @@ describe("result-transition matrix reconciles and maps exit codes", () => {
   });
 });
 
+describe("mixed rule dispatch", () => {
+  test("preserves rule order and keeps zero-inspection overflow out of tab finalization policy", async () => {
+    const seen: string[] = [];
+    const resolved = plan(["page"], [rule("tabs"), overflowRule("overflow")]);
+    const result = await run(resolved, {
+      evaluate(_page, item) {
+        seen.push(item.type);
+        return item.type === "tab-label-single-line"
+          ? cleanOutcome
+          : { facts: { elementsInspected: 0, violations: [] }, failure: null };
+      },
+    });
+    expect(seen).toEqual(["tab-label-single-line", "page-horizontal-overflow"]);
+    expect(result.cases[0]?.rules.map((item) => [item.type, item.status])).toEqual([
+      ["tab-label-single-line", "clean"],
+      ["page-horizontal-overflow", "clean"],
+    ]);
+    expect(result.ruleFinalizations).toEqual([
+      { name: "tabs", status: "passed", elementsInspected: 1, failure: null },
+      { name: "overflow", status: "passed", elementsInspected: 0, failure: null },
+    ]);
+  });
+});
+
 describe("combination transitions", () => {
   test("violations + disabled pair + navigation failure in one run (collect-all)", async () => {
     const rules = [rule("report"), rule("silent"), rule("after")];
@@ -331,7 +364,9 @@ describe("combination transitions", () => {
     });
     reconcile(result, resolved);
     expect(result.status).toBe("incomplete");
-    expect(result.cases[0]?.rules[0]?.violations[0]?.text).toBe("good:report");
+    expect(
+      result.cases[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
+    ).toBe("good:report");
     expect(result.cases[0]?.rules.map((item) => item.status)).toEqual([
       "violations",
       "disabled",
@@ -481,7 +516,7 @@ function concurrencyHarness(options: HarnessOptions = {}) {
     async evaluate(page, _item, signal) {
       const s = signalsFor(page);
       const interruptOutcome: RuleEvaluationOutcome = {
-        facts: { labelsInspected: 0, violations: [] },
+        facts: { elementsInspected: 0, violations: [] },
         failure: {
           stage: "interrupt",
           code: "signal-interrupt",
