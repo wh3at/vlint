@@ -65,8 +65,14 @@ export interface CommandProviderConfig {
 
 export type ProviderConfig = StaticProviderConfig | CommandProviderConfig;
 
-export interface RuleInstance {
+export type RuleType = "tab-label-single-line" | "page-horizontal-overflow";
+
+interface RuleInstanceBase {
   readonly name: string;
+  readonly type: RuleType;
+}
+
+export interface TabLabelSingleLineRuleInstance extends RuleInstanceBase {
   readonly type: "tab-label-single-line";
   readonly additionalCandidateSelectors?: readonly string[];
   readonly excludeSelectors?: readonly string[];
@@ -74,6 +80,14 @@ export interface RuleInstance {
   readonly minimumLabels?: number;
   readonly allowZeroLabels?: boolean;
 }
+
+export interface PageHorizontalOverflowRuleInstance extends RuleInstanceBase {
+  readonly type: "page-horizontal-overflow";
+  readonly enabled?: boolean;
+  readonly tolerancePx?: number;
+}
+
+export type RuleInstance = TabLabelSingleLineRuleInstance | PageHorizontalOverflowRuleInstance;
 
 export interface ConfigV2 {
   readonly schemaVersion: 2;
@@ -87,8 +101,13 @@ export interface CommandProviderOutput {
   readonly targets: readonly Target[];
 }
 
-export interface EffectiveRule {
+interface EffectiveRuleBase {
   readonly name: string;
+  readonly type: RuleType;
+  readonly enabled: boolean;
+}
+
+export interface EffectiveTabLabelSingleLineRule extends EffectiveRuleBase {
   readonly type: "tab-label-single-line";
   readonly additionalCandidateSelectors: readonly string[];
   readonly excludeSelectors: readonly string[];
@@ -97,9 +116,13 @@ export interface EffectiveRule {
   readonly allowZeroLabels: boolean;
 }
 
-export interface EffectiveRuleForTarget extends EffectiveRule {
-  readonly enabled: boolean;
+export interface EffectivePageHorizontalOverflowRule extends EffectiveRuleBase {
+  readonly type: "page-horizontal-overflow";
+  readonly tolerancePx: number;
 }
+
+export type EffectiveRule = EffectiveTabLabelSingleLineRule | EffectivePageHorizontalOverflowRule;
+export type EffectiveRuleForTarget = EffectiveRule;
 
 /**
  * Resolved presentation for a single logical target. The viewport and device

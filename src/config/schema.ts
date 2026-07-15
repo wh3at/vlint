@@ -7,6 +7,7 @@ import type {
   ReadyCondition,
   RuleInstance,
   RuleOverride,
+  RuleType,
   StaticProviderConfig,
   Target,
   TargetDefaults,
@@ -18,6 +19,7 @@ import {
   type BoundaryResult,
   type Failure,
 } from "../contracts/failure";
+import { rulesWithBuiltins } from "./merge";
 
 const NAME_BYTES = 1024;
 const TEXT_BYTES = 64 * 1024;
@@ -27,6 +29,7 @@ const MAX_TIMEOUT_MS = 300_000;
 class SchemaIssue extends Error {}
 
 type Source = "config" | "provider";
+type RuleMetadata = { readonly type: RuleType };
 
 function issue(path: string, message: string): never {
   throw new SchemaIssue(`${path}: ${message}`);
@@ -150,8 +153,12 @@ function defaultsAt(value: unknown, path: string, validateKeys = true): TargetDe
   return result;
 }
 
-function ruleOverrideAt(value: unknown, path: string): RuleOverride {
+function ruleOverrideAt(value: unknown, path: string, rule: RuleMetadata): RuleOverride {
   const object = objectAt(value, path);
+  if (rule.type === "page-horizontal-overflow") {
+    exactKeys(object, ["enabled"], path);
+    return object.enabled === undefined ? {} : { enabled: booleanAt(object.enabled, `${path}.enabled`) };
+  }
   exactKeys(object, ["enabled", "excludeSelectors", "minimumLabels"], path);
   const result: { enabled?: boolean; excludeSelectors?: readonly string[]; minimumLabels?: number } = {};
   if (object.enabled !== undefined) result.enabled = booleanAt(object.enabled, `${path}.enabled`);
@@ -177,7 +184,7 @@ function urlAt(value: unknown, path: string): string {
   return text;
 }
 
-function targetAt(value: unknown, path: string, ruleNames: ReadonlySet<string>): Target {
+function targetAt(value: unknown, path: string, rulesByName: ReadonlyMap<string, RuleMetadata>): Target {
   const object = objectAt(value, path);
   exactKeys(
     object,
@@ -194,8 +201,9 @@ function targetAt(value: unknown, path: string, ruleNames: ReadonlySet<string>):
   const overridesObject = objectAt(object.ruleOverrides, `${path}.ruleOverrides`);
   const overrides: Record<string, RuleOverride> = {};
   for (const [name, rawOverride] of Object.entries(overridesObject)) {
-    if (!ruleNames.has(name)) issue(`${path}.ruleOverrides.${name}`, "unknown rule name");
-    overrides[name] = ruleOverrideAt(rawOverride, `${path}.ruleOverrides.${name}`);
+    const rule = rulesByName.get(name);
+    if (rule === undefined) issue(`${path}.ruleOverrides.${name}`, "unknown rule name");
+    overrides[name] = ruleOverrideAt(rawOverride, `${path}.ruleOverrides.${name}`, rule);
   }
   return { ...result, ruleOverrides: overrides };
 }
@@ -203,12 +211,12 @@ function targetAt(value: unknown, path: string, ruleNames: ReadonlySet<string>):
 function targetsAt(
   value: unknown,
   path: string,
-  ruleNames: ReadonlySet<string>,
+  rulesByName: ReadonlyMap<string, RuleMetadata>,
   allowEmpty: boolean,
 ): readonly Target[] {
   if (!Array.isArray(value)) issue(path, "expected array");
   if (!allowEmpty && value.length === 0) issue(path, "must contain at least one target");
-  const targets = value.map((item, index) => targetAt(item, `${path}[${index}]`, ruleNames));
+  const targets = value.map((item, index) => targetAt(item, `${path}[${index}]`, rulesByName));
   const names = new Set<string>();
   for (const target of targets) {
     if (names.has(target.name)) issue(path, `duplicate target name: ${target.name}`);
@@ -251,61 +259,87 @@ function devicesAt(value: unknown, path: string): readonly DeviceProfile[] {
 
 function ruleAt(value: unknown, path: string): RuleInstance {
   const object = objectAt(value, path);
-  exactKeys(
-    object,
-    ["name", "type", "additionalCandidateSelectors", "excludeSelectors", "labelSelector", "minimumLabels", "allowZeroLabels"],
-    path,
-  );
-  if (object.type !== "tab-label-single-line") issue(`${path}.type`, "unsupported rule type");
-  const result: {
-    name: string;
-    type: "tab-label-single-line";
-    additionalCandidateSelectors?: readonly string[];
-    excludeSelectors?: readonly string[];
-    labelSelector?: string;
-    minimumLabels?: number;
-    allowZeroLabels?: boolean;
-  } = {
-    name: nameAt(object.name, `${path}.name`),
-    type: "tab-label-single-line",
-  };
-  if (object.additionalCandidateSelectors !== undefined) {
-    result.additionalCandidateSelectors = stringArrayAt(
-      object.additionalCandidateSelectors,
-      `${path}.additionalCandidateSelectors`,
+  if (object.type === "tab-label-single-line") {
+    exactKeys(
+      object,
+      ["name", "type", "additionalCandidateSelectors", "excludeSelectors", "labelSelector", "minimumLabels", "allowZeroLabels"],
+      path,
     );
+    const result: {
+      name: string;
+      type: "tab-label-single-line";
+      additionalCandidateSelectors?: readonly string[];
+      excludeSelectors?: readonly string[];
+      labelSelector?: string;
+      minimumLabels?: number;
+      allowZeroLabels?: boolean;
+    } = {
+      name: nameAt(object.name, `${path}.name`),
+      type: "tab-label-single-line",
+    };
+    if (object.additionalCandidateSelectors !== undefined) {
+      result.additionalCandidateSelectors = stringArrayAt(
+        object.additionalCandidateSelectors,
+        `${path}.additionalCandidateSelectors`,
+      );
+    }
+    if (object.excludeSelectors !== undefined) {
+      result.excludeSelectors = stringArrayAt(object.excludeSelectors, `${path}.excludeSelectors`);
+    }
+    if (object.labelSelector !== undefined) {
+      result.labelSelector = stringAt(object.labelSelector, `${path}.labelSelector`);
+    }
+    if (object.minimumLabels !== undefined) {
+      result.minimumLabels = integerAt(object.minimumLabels, `${path}.minimumLabels`, 0, 100_000);
+    }
+    if (object.allowZeroLabels !== undefined) {
+      result.allowZeroLabels = booleanAt(object.allowZeroLabels, `${path}.allowZeroLabels`);
+    }
+    return result;
   }
-  if (object.excludeSelectors !== undefined) {
-    result.excludeSelectors = stringArrayAt(object.excludeSelectors, `${path}.excludeSelectors`);
+  if (object.type === "page-horizontal-overflow") {
+    exactKeys(object, ["name", "type", "enabled", "tolerancePx"], path);
+    const result: {
+      name: string;
+      type: "page-horizontal-overflow";
+      enabled?: boolean;
+      tolerancePx?: number;
+    } = {
+      name: nameAt(object.name, `${path}.name`),
+      type: "page-horizontal-overflow",
+    };
+    if (object.enabled !== undefined) result.enabled = booleanAt(object.enabled, `${path}.enabled`);
+    if (object.tolerancePx !== undefined) {
+      result.tolerancePx = finiteNumberAt(object.tolerancePx, `${path}.tolerancePx`, 0, 100);
+    }
+    return result;
   }
-  if (object.labelSelector !== undefined) result.labelSelector = stringAt(object.labelSelector, `${path}.labelSelector`);
-  if (object.minimumLabels !== undefined) {
-    result.minimumLabels = integerAt(object.minimumLabels, `${path}.minimumLabels`, 0, 100_000);
-  }
-  if (object.allowZeroLabels !== undefined) {
-    result.allowZeroLabels = booleanAt(object.allowZeroLabels, `${path}.allowZeroLabels`);
-  }
-  return result;
+  issue(`${path}.type`, "unsupported rule type");
 }
 
 function rulesAt(value: unknown, path: string): readonly RuleInstance[] {
   if (!Array.isArray(value) || value.length === 0) issue(path, "expected non-empty array");
   const rules = value.map((item, index) => ruleAt(item, `${path}[${index}]`));
   const names = new Set<string>();
+  const types = new Set<string>();
   for (const rule of rules) {
     if (names.has(rule.name)) issue(path, `duplicate rule name: ${rule.name}`);
+    if (rule.type === "page-horizontal-overflow" && types.has(rule.type)) {
+      issue(path, `duplicate rule type: ${rule.type}`);
+    }
     names.add(rule.name);
+    types.add(rule.type);
   }
   return rules;
 }
 
-function providerAt(value: unknown, path: string, ruleNames: ReadonlySet<string>): ProviderConfig {
+function providerAt(value: unknown, path: string, rulesByName: ReadonlyMap<string, RuleMetadata>): ProviderConfig {
   const object = objectAt(value, path);
   if (object.type === "static") {
     exactKeys(object, ["type", "targets"], path);
     const provider: StaticProviderConfig = {
       type: "static",
-      targets: targetsAt(object.targets, `${path}.targets`, ruleNames, false),
+      targets: targetsAt(object.targets, `${path}.targets`, rulesByName, false),
     };
     return provider;
   }
@@ -343,7 +377,9 @@ export function parseConfig(value: unknown): BoundaryResult<ConfigV2> {
     exactKeys(object, ["schemaVersion", "devices", "provider", "defaults", "rules"], "config");
     if (object.schemaVersion !== 2) issue("config.schemaVersion", "expected 2");
     const rules = object.rules === undefined ? undefined : rulesAt(object.rules, "config.rules");
-    const ruleNames = new Set((rules ?? [{ name: "tab-label-single-line" }]).map((rule) => rule.name));
+    const completeRules = rulesWithBuiltins(rules);
+    const rulesByName = new Map(completeRules.map((rule) => [rule.name, rule]));
+    if (rulesByName.size !== completeRules.length) issue("config.rules", "duplicate rule name after default injection");
     const devices = devicesAt(object.devices, "config.devices");
     const config: {
       schemaVersion: 2;
@@ -352,7 +388,7 @@ export function parseConfig(value: unknown): BoundaryResult<ConfigV2> {
       defaults?: TargetDefaults;
       rules?: readonly RuleInstance[];
     } = { schemaVersion: 2, devices };
-    if (object.provider !== undefined) config.provider = providerAt(object.provider, "config.provider", ruleNames);
+    if (object.provider !== undefined) config.provider = providerAt(object.provider, "config.provider", rulesByName);
     if (object.defaults !== undefined) config.defaults = defaultsAt(object.defaults, "config.defaults");
     if (rules !== undefined) config.rules = rules;
     return boundarySuccess(config);
@@ -364,12 +400,12 @@ export function parseConfig(value: unknown): BoundaryResult<ConfigV2> {
 
 export function parseCommandProviderOutput(
   value: unknown,
-  ruleNames: ReadonlySet<string>,
+  rulesByName: ReadonlyMap<string, RuleMetadata>,
 ): BoundaryResult<CommandProviderOutput> {
   try {
     const object = objectAt(value, "providerOutput");
     exactKeys(object, ["targets"], "providerOutput");
-    const targets = targetsAt(object.targets, "providerOutput.targets", ruleNames, true);
+    const targets = targetsAt(object.targets, "providerOutput.targets", rulesByName, true);
     if (targets.length === 0) {
       return boundaryFailure({
         stage: "provider",

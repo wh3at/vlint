@@ -13,7 +13,7 @@ import type {
   CaseResult,
   CaseStatus,
   RuleResultStatus,
-  RunResultV2,
+  RunResultV3,
   RunSummary,
 } from "../contracts/result";
 
@@ -44,9 +44,9 @@ export interface CheckOptions {
 
 interface MutableRuleResult {
   name: string;
-  type: "tab-label-single-line";
+  type: "tab-label-single-line" | "page-horizontal-overflow";
   status: RuleResultStatus;
-  labelsInspected: number;
+  elementsInspected: number;
   violations: readonly Violation[];
   failure: Failure | null;
 }
@@ -102,7 +102,7 @@ function seededCases(plan: ResolvedCheckPlan): MutableCaseResult[] {
       name: rule.name,
       type: rule.type,
       status: rule.enabled ? "not-executed" : "disabled",
-      labelsInspected: 0,
+      elementsInspected: 0,
       violations: [],
       failure: null,
     })),
@@ -114,7 +114,7 @@ function seededFinalizations(plan: ResolvedCheckPlan): RuleFinalization[] {
   return plan.rules.map((rule) => ({
     name: rule.name,
     status: "not-executed",
-    labelsInspected: 0,
+    elementsInspected: 0,
     failure: null,
   }));
 }
@@ -129,7 +129,7 @@ function summarize(
   const ruleCounts = { clean: 0, violations: 0, failed: 0, disabled: 0, notExecuted: 0 };
   const finalizationCounts = { passed: 0, failed: 0, notExecuted: 0 };
   let violations = 0;
-  let matchedElements = 0;
+  let elementsInspected = 0;
   let executionFailures = runFailures.length;
   for (const caseResult of cases) {
     if (caseResult.status === "complete") caseCounts.complete += 1;
@@ -140,7 +140,7 @@ function summarize(
     for (const rule of caseResult.rules) {
       ruleCounts[rule.status === "not-executed" ? "notExecuted" : rule.status] += 1;
       violations += rule.violations.length;
-      matchedElements += rule.labelsInspected;
+      elementsInspected += rule.elementsInspected;
       if (rule.failure !== null) executionFailures += 1;
     }
   }
@@ -154,7 +154,7 @@ function summarize(
     ruleEvaluations: ruleCounts,
     ruleFinalizations: finalizationCounts,
     violations,
-    matchedElements,
+    elementsInspected: elementsInspected,
     executionFailures,
   };
 }
@@ -166,10 +166,10 @@ function completedResult(
   cases: readonly CaseResult[],
   finalizations: readonly RuleFinalization[],
   runFailures: readonly Failure[],
-): RunResultV2 {
+): RunResultV3 {
   const summary = summarize(targetCount, cases, finalizations, runFailures);
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     status: summary.executionFailures > 0 ? "incomplete" : summary.violations > 0 ? "violations" : "clean",
     tool: { name: "vlint", version: toolVersion },
     environment: {
@@ -184,20 +184,20 @@ function completedResult(
   };
 }
 
-export function resultForResolutionFailure(toolVersion: string, failure: Failure): RunResultV2 {
+export function resultForResolutionFailure(toolVersion: string, failure: Failure): RunResultV3 {
   return completedResult(toolVersion, null, 0, [], [], [failure]);
 }
 
-export function exitCodeForResult(result: RunResultV2): 0 | 1 | 2 {
+export function exitCodeForResult(result: RunResultV3): 0 | 1 | 2 {
   if (result.status === "incomplete") return 2;
   return result.status === "violations" ? 1 : 0;
 }
 
 /**
- * Resolves run-wide zero-label finalizations in declaration order. Only called
- * when every case completed, so a zero-label rule is a real global regression
- * rather than an artefact of partial observation. The first failing rule stops
- * the cascade; later rules stay not-executed.
+ * Resolves run-wide finalizations in declaration order. Only tab-label rules
+ * apply the zero-label regression policy; overflow rules may legitimately inspect
+ * zero elements. The first failing finalization stops the cascade, and later rules
+ * stay not-executed.
  */
 function resolveFinalizations(
   plan: ResolvedCheckPlan,
@@ -211,11 +211,16 @@ function resolveFinalizations(
       (count, auditCase) => count + (auditCase.rules[ruleIndex]?.enabled === true ? 1 : 0),
       0,
     );
-    const labelsInspected = cases.reduce(
-      (count, caseResult) => count + (caseResult.rules[ruleIndex]?.labelsInspected ?? 0),
+    const elementsInspected = cases.reduce(
+      (count, caseResult) => count + (caseResult.rules[ruleIndex]?.elementsInspected ?? 0),
       0,
     );
-    if (enabledPairCount > 0 && labelsInspected === 0 && !rule.allowZeroLabels) {
+    if (
+      rule.type === "tab-label-single-line" &&
+      enabledPairCount > 0 &&
+      elementsInspected === 0 &&
+      !rule.allowZeroLabels
+    ) {
       const finalizationFailure: Failure = {
         stage: "rule-evaluation",
         code: "zero-labels-global",
@@ -227,14 +232,14 @@ function resolveFinalizations(
       resolvedFinalizations.push({
         name: rule.name,
         status: "failed",
-        labelsInspected,
+        elementsInspected: elementsInspected,
         failure: finalizationFailure,
       });
       for (const later of plan.rules.slice(ruleIndex + 1)) {
         resolvedFinalizations.push({
           name: later.name,
           status: "not-executed",
-          labelsInspected: 0,
+          elementsInspected: 0,
           failure: null,
         });
       }
@@ -243,7 +248,7 @@ function resolveFinalizations(
     resolvedFinalizations.push({
       name: rule.name,
       status: "passed",
-      labelsInspected,
+      elementsInspected: elementsInspected,
       failure: null,
     });
   }
@@ -265,7 +270,7 @@ export async function runResolvedCheck<PageHandle>(
   plan: ResolvedCheckPlan,
   dependencies: CheckDependencies<PageHandle>,
   options: CheckOptions,
-): Promise<RunResultV2> {
+): Promise<RunResultV3> {
   const cases = seededCases(plan);
   let finalizations = seededFinalizations(plan);
   const runFailures: Failure[] = [];
@@ -346,7 +351,7 @@ export async function runResolvedCheck<PageHandle>(
           outcome = await dependencies.evaluate(targetScope.page, effectiveRule, options.signal);
         } catch {
           outcome = {
-            facts: { labelsInspected: 0, violations: [] },
+            facts: { elementsInspected: 0, violations: [] },
             failure: unexpectedFailure(
               "rule-script-failed",
               auditCase.name,
@@ -355,7 +360,7 @@ export async function runResolvedCheck<PageHandle>(
             ),
           };
         }
-        ruleResult.labelsInspected = outcome.facts.labelsInspected;
+        ruleResult.elementsInspected = outcome.facts.elementsInspected;
         ruleResult.violations = outcome.facts.violations;
         if (outcome.failure !== null) {
           if (outcome.failure.code === "signal-interrupt") {

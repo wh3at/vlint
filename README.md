@@ -22,7 +22,7 @@ diagnostics to locate the offending target and element.
 - [Browser state (authentication)](#browser-state-authentication)
 - [Output: terminal vs JSON](#output-terminal-vs-json)
 - [Exit codes](#exit-codes)
-- [Machine consumption (JSON schema v2)](#machine-consumption-json-schema-v2)
+- [Machine consumption (JSON schema v3)](#machine-consumption-json-schema-v3)
 - [Browser cache hygiene](#browser-cache-hygiene)
 - [Consumer integration](#consumer-integration)
 - [Building from source](#building-from-source)
@@ -216,7 +216,8 @@ An expanded config with a static provider has this shape:
     "readyCondition": { "selector": "#app", "state": "visible" }
   },
   "rules": [
-    { "name": "tab-label-single-line", "type": "tab-label-single-line" }
+    { "name": "tab-label-single-line", "type": "tab-label-single-line" },
+    { "name": "page-horizontal-overflow", "type": "page-horizontal-overflow" }
   ],
   "provider": {
     "type": "static",
@@ -234,7 +235,7 @@ An expanded config with a static provider has this shape:
 | `schemaVersion` | Must be `2`. |
 | `devices` | Non-empty ordered device profiles with unique names. This is the only authority for viewport, screen, DPR, mobile mode, touch, and optional user agent. |
 | `defaults` | Shared target defaults: `locale`, `timezoneId`, `timeoutMs` (`100`–`300000`), `readyCondition`, and `browserState`. |
-| `rules` | Rule instances. If omitted, the standard `tab-label-single-line` rule is applied. |
+| `rules` | Rule instances. Missing built-in types are injected in deterministic `tab-label-single-line`, configured rules, `page-horizontal-overflow` order. |
 | `provider` | Optional `static` or `command` target provider. Required only for checks without `--url`. |
 
 ### Device profiles
@@ -262,9 +263,27 @@ single visual line.
 | `minimumLabels` | Minimum matched candidates required for this instance. |
 | `allowZeroLabels` | Allows a run that inspects zero labels. |
 
-Target fields override shared defaults. A target may override rule behavior via
-`ruleOverrides` (`enabled`, `excludeSelectors`, `minimumLabels`). Device
-emulation is never overridden by targets.
+Tab targets may override `enabled`, `excludeSelectors`, and `minimumLabels` by
+rule name. Device emulation is never overridden by targets.
+
+### Rule instance (`page-horizontal-overflow`)
+
+Detects unintended root-page horizontal scrolling and attributes it to rendered
+light-DOM elements. A contained `overflow-x:auto|scroll` region is treated as an
+intentional local boundary; if that boundary itself escapes the viewport, it is
+reported.
+
+| Field | Description |
+| --- | --- |
+| `name` | Unique rule name (≤ 1 KiB). |
+| `type` | `page-horizontal-overflow`. |
+| `enabled` | Project-level enablement; defaults to `true`. |
+| `tolerancePx` | CSS-pixel tolerance from `0` through `100`; defaults to `1`. Overflow must be strictly greater. |
+
+Overflow targets may override only `enabled` by rule name. The reported
+violation contains `overflowPx`, border-box `geometry`, a verified unique
+`locator`, and a fixed computed-CSS allowlist; it never includes HTML, ancestor
+chains, or text content.
 
 ### Target providers
 
@@ -297,10 +316,22 @@ explicitly:
    vlint check --url http://localhost:3000/ --format json
    ```
 
-JSON consumers: the v1 `targets` result array was replaced by the v2 `cases`
-array, where each case carries separate `target` and `device` identity. See
-[Machine consumption](#machine-consumption-json-schema-v2). Version 1 result
-parsers will not parse version 2 output.
+Historical v1 consumers must first adopt the target/device `cases` shape described
+under [Machine consumption](#machine-consumption-json-schema-v3).
+
+### Migrating result consumers from v2 to v3
+
+Configuration stays at schema version `2`; only the emitted result contract
+changes. There are no compatibility aliases:
+
+1. Require root result `"schemaVersion": 3`.
+2. Rename rule/fact/finalization `labelsInspected` and summary
+   `matchedElements` to `elementsInspected`.
+3. Read each violation's `type` discriminator. Tab violations retain `text`,
+   `lineCount`, `geometry`, and `locator`; overflow violations provide
+   `overflowPx`, `geometry`, `locator`, and `computedStyle`.
+4. Accept `page-horizontal-overflow` rule results and finalizations in addition
+   to `tab-label-single-line`.
 
 ## Browser state (authentication)
 
@@ -328,14 +359,15 @@ is passed through control/ANSI/OSC/bi-directional escape stripping and length ca
 URLs have their query values redacted and their fragments removed.
 
 `--format json` prints a versioned JSON object (see
-[Machine consumption](#machine-consumption-json-schema-v2)).
+[Machine consumption](#machine-consumption-json-schema-v3)).
 
 ### Disclosure boundary
 
-JSON output is treated as a **sensitive artifact**. It preserves configured URLs and
-all DOM-rendered text **exactly**, regardless of provenance, because locating a
-violation requires the real rendered characters. If an authenticated page renders
-sensitive content, that content can appear in the JSON. Accordingly:
+JSON output is treated as a **sensitive artifact**. It preserves configured URLs
+exactly. Tab-label violations also preserve rendered label text exactly,
+regardless of provenance; overflow violations intentionally omit text and HTML.
+If an authenticated page renders sensitive tab text, that content can appear in
+the JSON. Accordingly:
 
 - Do not store or transmit JSON output from untrusted or authenticated pages in shared
   or long-lived locations.
@@ -360,14 +392,15 @@ Invalid arguments also exit `2`.
 
 ---
 
-## Machine consumption (JSON schema v2)
+## Machine consumption (JSON schema v3)
 
-The root `schemaVersion` is `2`. Results represent the target × device audit
-cases explicitly and retain successful cases when another case fails.
+The root result `schemaVersion` is `3`. Configuration remains schema version `2`.
+Results represent target × device audit cases explicitly and retain successful
+cases when another case fails.
 
 ```jsonc
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "status": "clean | violations | incomplete",
   "tool": { "name": "vlint", "version": "0.2.0" },
   "environment": {
@@ -385,15 +418,15 @@ cases explicitly and retain successful cases when another case fails.
       "notExecuted": 0
     },
     "ruleEvaluations": {
-      "clean": 1,
+      "clean": 2,
       "violations": 0,
       "failed": 0,
       "disabled": 0,
       "notExecuted": 0
     },
-    "ruleFinalizations": { "passed": 1, "failed": 0, "notExecuted": 0 },
+    "ruleFinalizations": { "passed": 2, "failed": 0, "notExecuted": 0 },
     "violations": 0,
-    "matchedElements": 1,
+    "elementsInspected": 1,
     "executionFailures": 0
   },
   "cases": [
@@ -416,7 +449,15 @@ cases explicitly and retain successful cases when another case fails.
           "name": "tab-label-single-line",
           "type": "tab-label-single-line",
           "status": "clean",
-          "labelsInspected": 1,
+          "elementsInspected": 1,
+          "violations": [],
+          "failure": null
+        },
+        {
+          "name": "page-horizontal-overflow",
+          "type": "page-horizontal-overflow",
+          "status": "clean",
+          "elementsInspected": 0,
           "violations": [],
           "failure": null
         }
@@ -428,7 +469,13 @@ cases explicitly and retain successful cases when another case fails.
     {
       "name": "tab-label-single-line",
       "status": "passed",
-      "labelsInspected": 1,
+      "elementsInspected": 1,
+      "failure": null
+    },
+    {
+      "name": "page-horizontal-overflow",
+      "status": "passed",
+      "elementsInspected": 0,
       "failure": null
     }
   ],
@@ -438,8 +485,8 @@ cases explicitly and retain successful cases when another case fails.
 
 `cases` are ordered by target declaration first and configured device second.
 Failures carry separate nullable `target`, `device`, and `rule` identities.
-Adding optional fields is v2-compatible; renaming, removing, or changing a
-field type requires another `schemaVersion` bump. Timestamps are intentionally
+Adding optional fields is v3-compatible; renaming, removing, or changing a
+field type requires another result `schemaVersion` bump. Timestamps are intentionally
 omitted so stable inputs produce stable output.
 
 ## Browser cache hygiene
@@ -475,8 +522,9 @@ status=$?
 # 0 = clean, 1 = violations, 2 = incomplete
 ```
 
-An AI agent can read `vlint-result.json`, locate the violating target/element by name,
-URL, rendered text, and locator, fix the layout, and re-run until exit `0`.
+An AI agent can read `vlint-result.json`, locate the violating target and element
+from its rule type, geometry, verified locator, and rule-specific diagnostics,
+fix the layout, and re-run until exit `0`.
 
 ---
 

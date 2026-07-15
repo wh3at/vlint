@@ -178,7 +178,7 @@ export async function resolveCommandProvider(
   }
   const parsed = parseCommandProviderOutput(
     value,
-    new Set(context.rules.map((rule) => rule.name)),
+    new Map(context.rules.map((rule) => [rule.name, rule])),
   );
   return parsed.ok ? boundarySuccess(parsed.value.targets) : parsed;
 }

@@ -17,12 +17,12 @@
  */
 
 import type { Page } from "playwright";
-import type { EffectiveRule } from "../contracts/config";
+import type { EffectiveTabLabelSingleLineRule } from "../contracts/config";
 import type {
   Geometry,
   RuleEvaluationFact,
   RuleEvaluationOutcome,
-  Violation,
+  TabLabelSingleLineViolation,
 } from "../contracts/evaluation";
 import type { Failure, FailureCode } from "../contracts/failure";
 import {
@@ -510,9 +510,9 @@ const SELECTOR_ERROR_CODE: Record<InPageSelectorError["kind"], FailureCode> = {
  */
 export async function evaluateTabLabelSingleLine(
   page: Page,
-  rule: EffectiveRule,
+  rule: EffectiveTabLabelSingleLineRule,
   targetName: string | null = null,
-): Promise<RuleEvaluationOutcome> {
+): Promise<RuleEvaluationOutcome<TabLabelSingleLineViolation>> {
   const config: InPageConfig = {
     additionalCandidateSelectors: rule.additionalCandidateSelectors,
     excludeSelectors: rule.excludeSelectors,
@@ -527,7 +527,7 @@ export async function evaluateTabLabelSingleLine(
   } catch {
     // Protocol rejection (e.g. closed page): empty facts, no partial state.
     return {
-      facts: { labelsInspected: 0, violations: [] },
+      facts: { elementsInspected: 0, violations: [] },
       failure: buildFailure(
         "rule-script-failed",
         "Tab-label measurement could not read the page (protocol rejection).",
@@ -540,7 +540,7 @@ export async function evaluateTabLabelSingleLine(
   if (extracted.selectorError !== null) {
     const error = extracted.selectorError;
     return {
-      facts: { labelsInspected: 0, violations: [] },
+      facts: { elementsInspected: 0, violations: [] },
       failure: buildFailure(
         SELECTOR_ERROR_CODE[error.kind],
         `Invalid ${error.kind} selector "${error.selector}": ${error.message}`,
@@ -550,26 +550,26 @@ export async function evaluateTabLabelSingleLine(
     };
   }
 
-  const violations: Violation[] = [];
+  const violations: TabLabelSingleLineViolation[] = [];
   const pending: PendingViolation[] = [];
-  let labelsInspected = 0;
+  let elementsInspected = 0;
 
   for (const candidate of extracted.candidates) {
     if (candidate.excluded) continue;
     if (candidate.labelCardinality) {
-      return finalize(rule, targetName, labelsInspected, violations, pending, page, {
+      return finalize(rule, targetName, elementsInspected, violations, pending, page, {
         code: "label-selector-cardinality",
         message: `Label selector "${rule.labelSelector}" did not resolve to exactly one element for candidate #${candidate.index}.`,
       });
     }
     if (candidate.labelNotRendered) {
-      return finalize(rule, targetName, labelsInspected, violations, pending, page, {
+      return finalize(rule, targetName, elementsInspected, violations, pending, page, {
         code: "label-selector-not-rendered",
         message: `Label selector "${rule.labelSelector}" resolved to a non-rendered element for candidate #${candidate.index}.`,
       });
     }
     if (candidate.generatedUnsupported) {
-      return finalize(rule, targetName, labelsInspected, violations, pending, page, {
+      return finalize(rule, targetName, elementsInspected, violations, pending, page, {
         code: "generated-content-unsupported",
         message: `Candidate #${candidate.index} renders ::before/::after generated content, which is not measurable.`,
       });
@@ -583,7 +583,7 @@ export async function evaluateTabLabelSingleLine(
       lineHeight: fragment.lineHeight,
     }));
     if (fragments.length === 0) continue;
-    labelsInspected += 1;
+    elementsInspected += 1;
     const lineCount = clusterLineCount(fragments);
     if (lineCount >= 2 && candidate.rect !== null) {
       pending.push({
@@ -601,20 +601,20 @@ export async function evaluateTabLabelSingleLine(
   }
 
   if (extracted.measurementError !== null) {
-    return finalize(rule, targetName, labelsInspected, violations, pending, page, {
+    return finalize(rule, targetName, elementsInspected, violations, pending, page, {
       code: "rule-script-failed",
       message: `Tab-label measurement failed at candidate #${extracted.measurementError.index}: ${extracted.measurementError.message}`,
     });
   }
 
-  if (labelsInspected < rule.minimumLabels) {
-    return finalize(rule, targetName, labelsInspected, violations, pending, page, {
+  if (elementsInspected < rule.minimumLabels) {
+    return finalize(rule, targetName, elementsInspected, violations, pending, page, {
       code: "minimum-labels-unmet",
-      message: `Inspected ${labelsInspected} label(s); minimum is ${rule.minimumLabels}.`,
+      message: `Inspected ${elementsInspected} label(s); minimum is ${rule.minimumLabels}.`,
     });
   }
 
-  return finalize(rule, targetName, labelsInspected, violations, pending, page, null);
+  return finalize(rule, targetName, elementsInspected, violations, pending, page, null);
 }
 
 interface PendingFailure {
@@ -628,14 +628,14 @@ interface PendingFailure {
  * prior facts are preserved and reported as a rule-script failure.
  */
 async function finalize(
-  rule: EffectiveRule,
+  rule: EffectiveTabLabelSingleLineRule,
   targetName: string | null,
-  labelsInspected: number,
-  violations: Violation[],
+  elementsInspected: number,
+  violations: TabLabelSingleLineViolation[],
   pending: readonly PendingViolation[],
   page: Page,
   failure: PendingFailure | null,
-): Promise<RuleEvaluationOutcome> {
+): Promise<RuleEvaluationOutcome<TabLabelSingleLineViolation>> {
   let resolvedViolations = violations;
   if (pending.length > 0) {
     const requests: string[][] = pending.map((entry) => [...composeLocators(entry.descriptor)]);
@@ -657,7 +657,7 @@ async function finalize(
       );
     } catch {
       return {
-        facts: { labelsInspected, violations },
+        facts: { elementsInspected: elementsInspected, violations },
         failure: buildFailure(
           "rule-script-failed",
           "Tab-label locator verification could not read the page (protocol rejection).",
@@ -671,7 +671,8 @@ async function finalize(
       ...pending.map((entry, index) => {
         const fallback = composeLocators(entry.descriptor);
         const locator = picks[index] ?? fallback[fallback.length - 1]!;
-        const violation: Violation = {
+        const violation: TabLabelSingleLineViolation = {
+          type: "tab-label-single-line",
           text: entry.text,
           lineCount: entry.lineCount,
           geometry: entry.geometry,
@@ -683,7 +684,7 @@ async function finalize(
   }
 
   return {
-    facts: { labelsInspected, violations: resolvedViolations },
+    facts: { elementsInspected: elementsInspected, violations: resolvedViolations },
     failure: failure === null ? null : buildFailure(failure.code, failure.message, rule.name, targetName),
   };
 }

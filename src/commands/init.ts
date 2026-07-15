@@ -33,14 +33,17 @@ const MACBOOK_PROFILE: DeviceProfile = {
   hasTouch: false,
 };
 
-/**
- * Standard rule, pinned into the generated config at init time (R10) so the
- * project owns an explicit rule set rather than relying on a built-in default.
- */
-const STANDARD_RULE = {
-  name: "tab-label-single-line",
-  type: "tab-label-single-line",
-} as const;
+/** Standard rules pinned into generated configuration. */
+const STANDARD_RULES = [
+  {
+    name: "tab-label-single-line",
+    type: "tab-label-single-line",
+  },
+  {
+    name: "page-horizontal-overflow",
+    type: "page-horizontal-overflow",
+  },
+] as const;
 
 /**
  * Minimal registry shape used to source the iPhone descriptor. The real
@@ -97,10 +100,10 @@ function refineIphone(descriptor: unknown): IphoneDescriptor | null {
 }
 
 /**
- * Build the standard version 2 config: the two standard devices and the
- * standard rule, with no provider and no URL. The iPhone profile is normalized
- * from the Playwright registry into concrete values at generation time; the
- * Chromium-incompatible `defaultBrowserType` is deliberately dropped.
+ * Build the standard version 2 config: the two standard devices and rules, with
+ * no provider and no URL. The iPhone profile is normalized from the Playwright
+ * registry into concrete values at generation time; the Chromium-incompatible
+ * `defaultBrowserType` is deliberately dropped.
  */
 export function buildStandardConfig(source: DeviceSource = playwrightDevices): BoundaryResult<ConfigV2> {
   const raw = source[IPHONE_KEY];
@@ -137,7 +140,7 @@ export function buildStandardConfig(source: DeviceSource = playwrightDevices): B
   return boundarySuccess({
     schemaVersion: 2,
     devices: [MACBOOK_PROFILE, iphoneProfile],
-    rules: [STANDARD_RULE],
+    rules: STANDARD_RULES,
   });
 }
 

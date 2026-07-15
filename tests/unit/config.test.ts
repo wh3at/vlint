@@ -55,7 +55,10 @@ describe("configuration", () => {
     if (!loaded.ok) return;
     expect(loaded.value.provider).toBeUndefined();
     expect(loaded.value.devices.map((device) => device.name)).toEqual(["desk"]);
-    expect(loaded.value.rules.map((rule) => rule.name)).toEqual(["tab-label-single-line"]);
+    expect(loaded.value.rules.map((rule) => rule.name)).toEqual([
+      "tab-label-single-line",
+      "page-horizontal-overflow",
+    ]);
     const plan = resolveAdHocTarget(loaded.value, "http://127.0.0.1:4173/adhoc");
     expect(plan.targets.map((target) => target.name)).toEqual(["adhoc"]);
     expect(plan.cases).toHaveLength(1);
@@ -375,5 +378,136 @@ describe("configuration", () => {
   test("validates ad hoc URL with the same URL policy", () => {
     expect(parseAdHocUrl("https://example.com/path").ok).toBe(true);
     expect(parseAdHocUrl("https://user@example.com/path").ok).toBe(false);
+  });
+  test("injects missing built-ins in tab-then-configured-then-overflow order", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      schemaVersion: 2,
+      devices: [DESKTOP_DEVICE],
+      rules: [{ name: "wide-page", type: "page-horizontal-overflow", tolerancePx: 4 }],
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok) throw new Error(loaded.failure.message);
+    expect(loaded.value.rules).toEqual([
+      {
+        name: "tab-label-single-line",
+        type: "tab-label-single-line",
+        enabled: true,
+        additionalCandidateSelectors: [],
+        excludeSelectors: [],
+        labelSelector: null,
+        minimumLabels: 0,
+        allowZeroLabels: false,
+      },
+      {
+        name: "wide-page",
+        type: "page-horizontal-overflow",
+        enabled: true,
+        tolerancePx: 4,
+      },
+    ]);
+  });
+
+  test("applies overflow project and target enablement precedence", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      schemaVersion: 2,
+      devices: [DESKTOP_DEVICE],
+      rules: [{ name: "overflow", type: "page-horizontal-overflow", enabled: false }],
+      provider: {
+        type: "static",
+        targets: [
+          {
+            name: "enabled-target",
+            url: "https://example.com",
+            ruleOverrides: { overflow: { enabled: true } },
+          },
+          { name: "disabled-target", url: "https://example.com/disabled" },
+        ],
+      },
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok || loaded.value.provider?.type !== "static") throw new Error("expected loaded static config");
+    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    expect(plan.cases[0]?.rules.find((rule) => rule.name === "overflow")?.enabled).toBe(true);
+    expect(plan.cases[1]?.rules.find((rule) => rule.name === "overflow")?.enabled).toBe(false);
+  });
+
+  test("preserves an explicit false target override for an enabled overflow rule", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      schemaVersion: 2,
+      devices: [DESKTOP_DEVICE],
+      rules: [{ name: "overflow", type: "page-horizontal-overflow" }],
+      provider: {
+        type: "static",
+        targets: [
+          {
+            name: "disabled-target",
+            url: "https://example.com",
+            ruleOverrides: { overflow: { enabled: false } },
+          },
+        ],
+      },
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok || loaded.value.provider?.type !== "static") throw new Error("expected loaded static config");
+    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    expect(plan.cases[0]?.rules.find((rule) => rule.name === "overflow")?.enabled).toBe(false);
+  });
+
+  test.each([
+    ["duplicate rule type", [{ name: "a", type: "page-horizontal-overflow" }, { name: "b", type: "page-horizontal-overflow" }]],
+    ["overflow tab field", [{ name: "overflow", type: "page-horizontal-overflow", excludeSelectors: [".x"] }]],
+    ["tab overflow field", [{ name: "tabs", type: "tab-label-single-line", tolerancePx: 1 }]],
+    ["negative tolerance", [{ name: "overflow", type: "page-horizontal-overflow", tolerancePx: -1 }]],
+    ["excessive tolerance", [{ name: "overflow", type: "page-horizontal-overflow", tolerancePx: 101 }]],
+    ["non-finite tolerance", [{ name: "overflow", type: "page-horizontal-overflow", tolerancePx: Number.POSITIVE_INFINITY }]],
+  ])("rejects %s", (_name, rules) => {
+    expect(parseConfig({ schemaVersion: 2, devices: [DESKTOP_DEVICE], rules }).ok).toBe(false);
+  });
+
+  test("accepts multiple named tab rules", () => {
+    expect(
+      parseConfig({
+        schemaVersion: 2,
+        devices: [DESKTOP_DEVICE],
+        rules: [
+          { name: "primary-tabs", type: "tab-label-single-line" },
+          { name: "secondary-tabs", type: "tab-label-single-line" },
+        ],
+      }).ok,
+    ).toBe(true);
+  });
+
+  test.each([0, 1, 100])("accepts overflow tolerance %p", (tolerancePx) => {
+    expect(
+      parseConfig({
+        schemaVersion: 2,
+        devices: [DESKTOP_DEVICE],
+        rules: [{ name: "overflow", type: "page-horizontal-overflow", tolerancePx }],
+      }).ok,
+    ).toBe(true);
+  });
+
+  test("validates target overrides against the referenced rule type", () => {
+    const base = {
+      schemaVersion: 2,
+      devices: [DESKTOP_DEVICE],
+      rules: [{ name: "overflow", type: "page-horizontal-overflow" }],
+    };
+    expect(
+      parseConfig({
+        ...base,
+        provider: {
+          type: "static",
+          targets: [{
+            name: "bad",
+            url: "https://example.com",
+            ruleOverrides: { overflow: { minimumLabels: 1 } },
+          }],
+        },
+      }).ok,
+    ).toBe(false);
   });
 });

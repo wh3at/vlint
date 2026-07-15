@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Ideation: 次に追加すべき監査対象</title>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f7fb;--surface:#fff;--text:#172033;--muted:#59647a;--line:#dbe0ea;--accent:#2855d9;--accent-soft:#e9efff;--good:#17633b;--good-soft:#e7f6ed;--warn:#7a4d00;--warn-soft:#fff3d6;--bad:#8a2735;--bad-soft:#fdecef;--shadow:0 10px 30px rgba(30,45,80,.08)}
+    @media(prefers-color-scheme:dark){:root{--bg:#10131a;--surface:#191e29;--text:#edf1fa;--muted:#aab3c6;--line:#323a4b;--accent:#91adff;--accent-soft:#202e55;--good:#8ad5ab;--good-soft:#183528;--warn:#f0c36a;--warn-soft:#3b3018;--bad:#f1a3ae;--bad-soft:#3d2027;--shadow:none}}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.65 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}.page{max-width:940px;margin:auto;padding:48px 24px 72px}header{padding:30px;border:1px solid var(--line);border-radius:20px;background:var(--surface);box-shadow:var(--shadow)}h1{font-size:clamp(1.8rem,4vw,2.8rem);line-height:1.12;margin:.25rem 0 1rem}h2{font-size:1.45rem;margin:3rem 0 1rem}h3{font-size:1.2rem;margin:0}.eyebrow{font-size:.76rem;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);font-weight:800}.lede{max-width:70ch;color:var(--muted);font-size:1.05rem}.meta,.stats{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}.chip{padding:5px 10px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:.78rem;font-weight:700}.stats{margin-top:22px}.stat{min-width:120px;padding:12px 14px;border:1px solid var(--line);border-radius:12px}.stat b{display:block;font-size:1.35rem}.stat span{color:var(--muted);font-size:.78rem}.context{max-width:76ch}.axes{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;padding:0;list-style:none}.axes li{padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.jump{display:flex;flex-wrap:wrap;gap:8px;padding:0;list-style:none}.jump a{display:block;padding:7px 10px;border-radius:10px;background:var(--accent-soft);color:var(--accent);text-decoration:none;font-weight:700}.idea{margin:18px 0;padding:24px;border:1px solid var(--line);border-radius:18px;background:var(--surface);box-shadow:var(--shadow)}.idea.top{border-color:var(--accent);background:linear-gradient(145deg,var(--surface),var(--accent-soft))}.idea-head{display:flex;gap:14px;align-items:flex-start}.rank{flex:0 0 auto;width:36px;height:36px;display:grid;place-items:center;border-radius:50%;background:var(--accent);color:var(--surface);font-weight:900}.idea dl{display:grid;grid-template-columns:115px 1fr;gap:8px 14px;margin:18px 0 0}.idea dt{font-weight:800;color:var(--muted);font-size:.8rem;text-transform:uppercase;letter-spacing:.05em}.idea dd{margin:0}.confidence-high{color:var(--good)}.confidence-med{color:var(--warn)}.diagram{margin:22px 0;padding:18px;border-radius:14px;background:var(--surface);border:1px solid var(--line)}svg{width:100%;height:auto}.svg-box{fill:var(--accent-soft);stroke:var(--accent);stroke-width:2}.svg-text{fill:var(--text);font:700 14px system-ui}.svg-note{fill:var(--muted);font:12px system-ui}.svg-line{stroke:var(--accent);stroke-width:2;fill:none}.reject{width:100%;border-collapse:collapse;background:var(--surface);border-radius:14px;overflow:hidden}.reject th,.reject td{text-align:left;vertical-align:top;padding:12px 14px;border-bottom:1px solid var(--line)}.reject th{background:var(--bad-soft);color:var(--bad)}.refs li{margin:.4rem 0}.refs a{color:var(--accent)}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--accent-soft);padding:.12rem .32rem;border-radius:5px}footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:.8rem}@media(max-width:620px){.page{padding:24px 14px 48px}header,.idea{padding:20px}.idea dl{grid-template-columns:1fr;gap:2px}.idea dd{margin-bottom:9px}.reject{display:block;overflow-x:auto}}
+  </style>
+</head>
+<body>
+<main class="page">
+  <header>
+    <div class="eyebrow">Ideation · repo-grounded</div>
+    <h1>次に追加すべき監査対象</h1>
+    <p class="lede">結論は <strong>ページ全体の水平 overflow と原因要素の追跡</strong>。単なる「横スクロールあり」ではなく、超過量・原因要素・一意 locator を返すことで、vlint の機械可読診断に適合させる。</p>
+    <div class="meta">
+      <span class="chip">日付 <time datetime="2026-07-15">2026-07-15</time></span>
+      <span class="chip">Topic next-audit-target</span>
+      <span class="chip">Focus 次に追加すべき監査対象</span>
+      <span class="chip">Mode repo-grounded</span>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>10</b><span>統合候補</span></div>
+      <div class="stat"><b>6</b><span>生存候補</span></div>
+      <div class="stat"><b>5</b><span>比較軸</span></div>
+      <div class="stat"><b>92%</b><span>最上位の確信度</span></div>
+    </div>
+  </header>
+
+  <section id="grounding-context">
+    <h2>Grounding Context</h2>
+    <div class="context">
+      <p><code>vlint</code> は、有限の宣言済み UI target を実ブラウザで開き、画像や LLM を使わず DOM geometry 契約を検査する CLI。現行監査は <code>tab-label-single-line</code> のみ。PRD は文字切れ、要素衝突、親領域突出、ページ全体 overflow、余白・alignment、tap 領域を将来 rule として明示している。</p>
+      <p>v0.2.0 では MacBook Air と iPhone 17 の target × device 監査が入り、同一 URL が desktop では clean、mobile では violation になる契約が acceptance test で固定された。一方、設定型、評価結果、schema、dispatcher はまだ tab 専用。二本目の rule は利用者価値だけでなく、汎用 rule 契約を正しく作る楔になる。</p>
+      <p>外部先行例では Polypane が水平 overflow の原因特定を製品機能として提供。ReDECHECK/VISER 系研究は DOM-only の広範な collision 検出で誤検知が問題になることを示す。したがって、明確な global symptom と element-scoped attribution を組み合わせる案を優先した。</p>
+    </div>
+  </section>
+
+  <section id="topic-axes">
+    <h2>Topic Axes</h2>
+    <ol class="axes">
+      <li>利用者価値</li><li>決定論的検出精度・誤検知</li><li>設定・結果契約適合性</li><li>AI向け原因診断</li><li>マルチデバイス価値</li>
+    </ol>
+  </section>
+
+  <section id="ranked-ideas">
+    <h2>Ranked Ideas</h2>
+    <ul class="jump">
+      <li><a href="#idea-1">1. Horizontal overflow</a></li><li><a href="#idea-2">2. Click occlusion</a></li><li><a href="#idea-3">3. Tap target</a></li><li><a href="#idea-4">4. Parent protrusion</a></li><li><a href="#idea-5">5. Text truncation</a></li><li><a href="#idea-6">6. Generic labels</a></li>
+    </ul>
+
+    <article class="idea top" id="idea-1">
+      <div class="idea-head"><div class="rank">1</div><div><div class="eyebrow">Top pick</div><h3>Horizontal page overflow + source trace</h3></div></div>
+      <p><code>document.documentElement.scrollWidth &gt; window.innerWidth</code> でページ全体の水平 overflow を検出し、右端超過が最大の要素とその祖先 chain を追跡する。診断は超過量、原因要素 geometry、一意 locator、関連する <code>min-width</code> / fixed width / <code>white-space</code> を返す。<code>overflow-x:auto|scroll</code> に閉じ込められた carousel、table、code block は intentional boundary として除外する。</p>
+      <div class="diagram" role="img" aria-label="ページoverflowの検出から原因要素診断までの概念フロー">
+        <svg viewBox="0 0 820 170" aria-hidden="true">
+          <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="var(--accent)"/></marker></defs>
+          <rect class="svg-box" x="20" y="35" width="190" height="70" rx="12"/><text class="svg-text" x="115" y="65" text-anchor="middle">Root overflow?</text><text class="svg-note" x="115" y="87" text-anchor="middle">scrollWidth − innerWidth</text>
+          <path class="svg-line" d="M210 70 H315" marker-end="url(#arrow)"/><text class="svg-note" x="262" y="58" text-anchor="middle">違反時のみ</text>
+          <rect class="svg-box" x="325" y="35" width="190" height="70" rx="12"/><text class="svg-text" x="420" y="65" text-anchor="middle">Breach source</text><text class="svg-note" x="420" y="87" text-anchor="middle">最大 right edge + ancestor</text>
+          <path class="svg-line" d="M515 70 H620" marker-end="url(#arrow)"/><text class="svg-note" x="567" y="58" text-anchor="middle">intent guard</text>
+          <rect class="svg-box" x="630" y="35" width="170" height="70" rx="12"/><text class="svg-text" x="715" y="65" text-anchor="middle">Actionable JSON</text><text class="svg-note" x="715" y="87" text-anchor="middle">locator · delta · CSS</text>
+          <text class="svg-note" x="410" y="145" text-anchor="middle">global symptom → element-scoped diagnosis</text>
+        </svg>
+      </div>
+      <dl>
+        <dt>Axis</dt><dd>マルチデバイス価値・AI向け原因診断</dd>
+        <dt>Basis</dt><dd><strong>direct:</strong> <code>vlint-prd.md:5,177,202</code>、<code>tests/acceptance/vlint.test.ts:816-844</code>。<strong>external:</strong> Polypane の horizontal overflow 原因検出。<strong>reasoned:</strong> root overflow は意図されにくく、原因要素へ帰属できれば修正可能性が高い。</dd>
+        <dt>Rationale</dt><dd>desktop で見逃し、402px で顕在化する代表的 responsive failure。selector 無しで発見でき、agent が <code>max-width</code>、<code>min-width:0</code>、wrap、局所 scroll のどこを直すべきか判断できる。</dd>
+        <dt>Downsides</dt><dd>意図的な横 scroll を boundary 判定しないと誤検知する。現行の <code>Violation.lineCount</code> / <code>labelsInspected</code> と page-vs-element scope を汎用化する必要がある。</dd>
+        <dt>Confidence</dt><dd class="confidence-high">92% · High</dd>
+        <dt>Complexity</dt><dd>Medium</dd>
+      </dl>
+    </article>
+
+    <article class="idea" id="idea-2">
+      <div class="idea-head"><div class="rank">2</div><h3>Click occlusion via hit testing</h3></div>
+      <p>button、link、tab、input などの interactive element の中心点で <code>document.elementFromPoint()</code> を実行し、topmost element が対象自身または子孫でなければ occlusion と判定する。generic rectangle collision ではなく「実際に click を奪う重なり」へ監査対象を再定義する。</p>
+      <dl>
+        <dt>Axis</dt><dd>決定論的検出精度・利用者価値</dd>
+        <dt>Basis</dt><dd><strong>direct:</strong> PRD の「要素衝突」候補と既存 locator pipeline。<strong>reasoned:</strong> hit-test は paint order と <code>pointer-events</code> を反映し、badge や装飾の単純 overlap を避ける。</dd>
+        <dt>Rationale</dt><dd>ユーザーが押せないという実害を直接測るため、collision scan より診断価値が高い。</dd>
+        <dt>Downsides</dt><dd>中心以外だけが塞がれる部分 occlusion は取りこぼす。複数 sample point は精度とコストの設計が必要。</dd>
+        <dt>Confidence</dt><dd class="confidence-high">84% · High</dd><dt>Complexity</dt><dd>Medium</dd>
+      </dl>
+    </article>
+
+    <article class="idea" id="idea-3">
+      <div class="idea-head"><div class="rank">3</div><h3>Tap target minimum size and spacing</h3></div>
+      <p>semantic interactive elements を自動発見し、rendered hit area と隣接 target までの距離を CSS pixel で監査する。WCAG 2.5.8 の 24×24 CSS px を基準にし、より厳しい 44×44 profile は設定で選択可能にする。</p>
+      <dl>
+        <dt>Axis</dt><dd>利用者価値・決定論的検出精度</dd>
+        <dt>Basis</dt><dd><strong>external:</strong> WCAG 2.5.8 と axe-core <code>target-size</code> rule。<strong>direct:</strong> device profile の <code>hasTouch</code> と既存 geometry/locator。</dd>
+        <dt>Rationale</dt><dd>明確な標準と成熟した例外設計があり、mobile geometry の価値が高い。</dd>
+        <dt>Downsides</dt><dd>axe-core と機能重複しやすい。文中 link、UA default control、spacing exception の仕様移植が必要。</dd>
+        <dt>Confidence</dt><dd class="confidence-high">88% · High</dd><dt>Complexity</dt><dd>Medium</dd>
+      </dl>
+    </article>
+
+    <article class="idea" id="idea-4">
+      <div class="idea-head"><div class="rank">4</div><h3>Parent overflow / protrusion</h3></div>
+      <p>child rect が ancestor content box を超える量を測り、局所的な突出を検出する。root document の scrollWidth が変わらない <code>overflow:hidden</code> や clip の内側も対象にできる。</p>
+      <dl>
+        <dt>Axis</dt><dd>設定・結果契約適合性</dd>
+        <dt>Basis</dt><dd><strong>direct:</strong> PRD の「親領域からの突出」、既存 <code>getBoundingClientRect()</code> と computed-style 取得。<strong>reasoned:</strong> #1 と同じ parent-child relation primitive を共有しつつ blind spot を補完する。</dd>
+        <dt>Rationale</dt><dd>#1 の次に追加すると geometry relation と intent boundary を償却できる。</dd>
+        <dt>Downsides</dt><dd><code>overflow:visible</code>、transform、popover、decorative spill は意図的な場合が多い。全 ancestor を対象にすると noisy。</dd>
+        <dt>Confidence</dt><dd class="confidence-high">83% · High</dd><dt>Complexity</dt><dd>Medium</dd>
+      </dl>
+    </article>
+
+    <article class="idea" id="idea-5">
+      <div class="idea-head"><div class="rank">5</div><h3>Silent text truncation</h3></div>
+      <p><code>scrollWidth &gt; clientWidth</code> または text fragment と visible box の包含関係から文字切れを検出する。明示的な <code>text-overflow:ellipsis</code> と line clamp は意図の proxy として clean、ellipsis 無しの clip を優先的に violation とする。</p>
+      <dl>
+        <dt>Axis</dt><dd>AI向け原因診断</dd>
+        <dt>Basis</dt><dd><strong>direct:</strong> PRD の「文字切れ」、既存 Range fragment extractor。<strong>reasoned:</strong> 現行 rule と同じ text geometry を別 invariant へ再利用できる。</dd>
+        <dt>Rationale</dt><dd>wrap しないまま内容が消える、現行 rule の明確な blind spot を埋める。</dd>
+        <dt>Downsides</dt><dd>ellipsis 無しの clip も意図的な場合があり、computed style だけでは完全な intent 判定にならない。</dd>
+        <dt>Confidence</dt><dd class="confidence-med">78% · Medium</dd><dt>Complexity</dt><dd>Medium</dd>
+      </dl>
+    </article>
+
+    <article class="idea" id="idea-6">
+      <div class="idea-head"><div class="rank">6</div><h3>Generic semantic label single-line</h3></div>
+      <p>既存の line clustering をそのまま使い、button、navigation item、segmented control など selector-scoped な semantic label へ一般化する。最小リスクで二本目 rule の dispatch と type union を導入する案。</p>
+      <dl>
+        <dt>Axis</dt><dd>設定・結果契約適合性</dd>
+        <dt>Basis</dt><dd><strong>direct:</strong> <code>clusterLineCount</code> は候補 role から独立し、現 schema の type literal が一般化点を明示している。</dd>
+        <dt>Rationale</dt><dd>最も安全な architectural wedge。ただし利用者価値は overflow より小さい。</dd>
+        <dt>Downsides</dt><dd><code>lineCount</code> shape が同じため、generic violation metric の難題を三本目へ先送りしやすい。</dd>
+        <dt>Confidence</dt><dd class="confidence-high">90% · High</dd><dt>Complexity</dt><dd>Low</dd>
+      </dl>
+    </article>
+  </section>
+
+  <section id="rejection-summary">
+    <h2>Rejection Summary</h2>
+    <table class="reject">
+      <thead><tr><th>Idea</th><th>Reason Rejected</th></tr></thead>
+      <tbody>
+        <tr><td>Generic element / text collision</td><td>badge、tooltip、absolute decoration など正当な overlap が多く、除外負担が共通契約を損なう。</td></tr>
+        <tr><td>Responsive fracture delta</td><td>responsive JS が markup を差し替えると同一 logical element の照合が壊れ、cross-case 結果契約も必要。</td></tr>
+        <tr><td>Viewport min-width infeasibility</td><td>vlint は既に実 viewport で描画するため、#1/#4 の observed overflow が信号を包含する。</td></tr>
+        <tr><td>Alignment / spacing contract</td><td>layout ごとの peer 関係宣言が必要で、target を追加すれば共通契約が適用される製品モデルと合わない。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="sources">
+    <h2>Sources &amp; References</h2>
+    <ul class="refs">
+      <li><code>vlint-prd.md:5, 147-149, 177-178, 202-203</code> — product problem, deterministic contract, deferred rules, actionable diagnostics.</li>
+      <li><code>tests/acceptance/vlint.test.ts:816-844</code> — desktop clean / iPhone violation contract.</li>
+      <li><code>src/contracts/config.ts:68-98</code>, <code>src/contracts/evaluation.ts:3-39</code>, <code>src/config/schema.ts:252-299</code> — current tab-specific contracts.</li>
+      <li><code>src/rules/tab-label-single-line.ts:338-446, 591-680</code> — geometry extraction and locator finalization.</li>
+      <li><a href="https://polypane.app/quality-assurance/">Polypane Quality Assurance</a> — horizontal overflow prior art.</li>
+      <li><a href="https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html">WCAG 2.5.8 Target Size (Minimum)</a> — tap-target threshold and exceptions.</li>
+      <li><a href="https://dl.acm.org/doi/10.1145/3092703.3098221">ReDECHECK</a> and <a href="https://github.com/redecheck/viser">VISER</a> — DOM-based responsive layout failure research and false-positive pressure.</li>
+    </ul>
+  </section>
+
+  <footer class="composition-signal">Composed 2026-07-15T10:10:39Z by ce-ideate from the user prompt “次に追加すべき監査対象は？”</footer>
+</main>
+</body>
+</html>

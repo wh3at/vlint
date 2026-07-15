@@ -11,6 +11,7 @@ const rules: readonly EffectiveRule[] = [
   {
     name: "tab-label-single-line",
     type: "tab-label-single-line",
+    enabled: true,
     additionalCandidateSelectors: [],
     excludeSelectors: [],
     labelSelector: null,

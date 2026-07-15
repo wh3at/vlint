@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import type { RunResultV2 } from "../../src/contracts/result";
+import type { RunResultV3 } from "../../src/contracts/result";
 import type { BoundaryResult } from "../../src/contracts/failure";
 import { boundaryFailure, boundarySuccess } from "../../src/contracts/failure";
 import type { InitResult } from "../../src/commands/init";
 import type { SetupResult } from "../../src/commands/setup";
 import { runCli, type CliIo, type CliRuntime } from "../../src/cli";
 
-function result(status: RunResultV2["status"]): RunResultV2 {
+function result(status: RunResultV3["status"]): RunResultV3 {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     status,
     tool: { name: "vlint", version: "0.1.0" },
     environment: { platform: "linux", arch: "x64", browser: { name: "chromium", version: null } },
@@ -18,7 +18,7 @@ function result(status: RunResultV2["status"]): RunResultV2 {
       ruleEvaluations: { clean: 0, violations: 0, failed: 0, disabled: 0, notExecuted: 0 },
       ruleFinalizations: { passed: 0, failed: 0, notExecuted: 0 },
       violations: status === "violations" ? 1 : 0,
-      matchedElements: 0,
+      elementsInspected: 0,
       executionFailures: status === "incomplete" ? 1 : 0,
     },
     cases: [],
@@ -31,7 +31,7 @@ function result(status: RunResultV2["status"]): RunResultV2 {
 }
 
 function harness(options: {
-  checkResult?: RunResultV2;
+  checkResult?: RunResultV3;
   initResult?: BoundaryResult<InitResult>;
   setupResult?: BoundaryResult<SetupResult>;
 } = {}) {

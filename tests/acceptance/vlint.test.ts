@@ -3,7 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, test } from "bun:test";
-import type { RunResultV2 } from "../../src/contracts/result";
+import type { RunResultV3 } from "../../src/contracts/result";
+import { isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
 import { startFixtureServer } from "../fixtures/app/server";
 import { startAcceptanceServer, type AcceptanceServer } from "./server";
 import type { FixtureServer } from "../fixtures/app/server";
@@ -97,7 +98,7 @@ async function readConfigFile(directory: string): Promise<Record<string, unknown
   return JSON.parse(content) as Record<string, unknown>;
 }
 
-function firstFailure(result: RunResultV2): RunResultV2["failures"][number] | undefined {
+function firstFailure(result: RunResultV3): RunResultV3["failures"][number] | undefined {
   return result.failures[0]
     ?? result.cases.find((item) => item.failures.length > 0)?.failures[0]
     ?? result.cases.flatMap((item) => item.rules).find((item) => item.failure !== null)?.failure
@@ -155,8 +156,8 @@ describe.skipIf(!binaryPresent)(
       expect(result.stdout.endsWith("\n")).toBe(true);
       expect(result.stdout.split("\n")).toHaveLength(2);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
-      expect(parsed.schemaVersion).toBe(2);
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      expect(parsed.schemaVersion).toBe(3);
       expect(parsed.status).toBe("clean");
       expect(parsed.tool).toEqual({ name: "vlint", version: "0.2.0" });
       expect(parsed.environment).toMatchObject({ platform: "linux", arch: "x64" });
@@ -164,11 +165,11 @@ describe.skipIf(!binaryPresent)(
       expect(parsed.environment.browser.version!.length).toBeGreaterThan(0);
       expect(parsed.summary.cases).toMatchObject({ resolved: 1, complete: 1, failed: 0, notExecuted: 0 });
       expect(parsed.summary.violations).toBe(0);
-      expect(parsed.summary.matchedElements).toBe(2);
+      expect(parsed.summary.elementsInspected).toBe(2);
       expect(parsed.cases[0]).toMatchObject({ target: { name: "clean" }, status: "complete" });
-      expect(parsed.cases[0]!.rules[0]).toMatchObject({ status: "clean", labelsInspected: 2 });
+      expect(parsed.cases[0]!.rules[0]).toMatchObject({ status: "clean", elementsInspected: 2 });
       expect(parsed.cases[0]!.rules[0]!.violations).toHaveLength(0);
-      expect(parsed.ruleFinalizations[0]).toMatchObject({ status: "passed", labelsInspected: 2 });
+      expect(parsed.ruleFinalizations[0]).toMatchObject({ status: "passed", elementsInspected: 2 });
       expect(firstFailure(parsed)).toBeUndefined();
     }, CHECK_TIMEOUT);
 
@@ -185,10 +186,10 @@ describe.skipIf(!binaryPresent)(
       expect(result.exitCode, result.stderr).toBe(1);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(parsed.status).toBe("violations");
       expect(parsed.summary.violations).toBe(1);
-      expect(parsed.summary.matchedElements).toBe(1);
+      expect(parsed.summary.elementsInspected).toBe(1);
 
       const auditCase = parsed.cases[0]!;
       expect(auditCase.target.name).toBe("settings");
@@ -200,9 +201,10 @@ describe.skipIf(!binaryPresent)(
       const rule = auditCase.rules[0]!;
       expect(rule.name).toBe("tab-label-single-line");
       expect(rule.status).toBe("violations");
-      expect(rule.labelsInspected).toBe(1);
+      expect(rule.elementsInspected).toBe(1);
 
       const violation = rule.violations[0]!;
+      if (!isTabLabelSingleLineViolation(violation)) throw new Error("expected tab-label violation");
       expect(violation.text).toBe("Account Settings");
       expect(violation.lineCount).toBe(2);
       expect(violation.locator).toBe('[data-testid="settings"]');
@@ -231,7 +233,7 @@ describe.skipIf(!binaryPresent)(
       expect(result.exitCode, result.stderr).toBe(2);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(parsed.status).toBe("incomplete");
 
       // Collect-all: prior violations survive alongside the failing target.
@@ -289,9 +291,9 @@ describe.skipIf(!binaryPresent)(
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(parsed.status).toBe("clean");
-      expect(parsed.summary.matchedElements).toBe(2);
+      expect(parsed.summary.elementsInspected).toBe(2);
       expect(parsed.cases[0]!.status).toBe("complete");
       expect(firstFailure(parsed)).toBeUndefined();
     }, CHECK_TIMEOUT);
@@ -310,7 +312,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(firstFailure(parsed)).toMatchObject({ stage: "authentication", code: "state-invalid", target: "secure" });
       expect(parsed.cases[0]!.status).toBe("failed");
     }, CHECK_TIMEOUT);
@@ -325,7 +327,7 @@ describe.skipIf(!binaryPresent)(
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(firstFailure(parsed)).toMatchObject({ stage: "navigation", code: "navigation-http-status", target: "http500" });
     }, CHECK_TIMEOUT);
 
@@ -337,7 +339,7 @@ describe.skipIf(!binaryPresent)(
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(firstFailure(parsed)).toMatchObject({ stage: "web-font", code: "font-load-failed", target: "font" });
     }, CHECK_TIMEOUT);
 
@@ -356,7 +358,7 @@ describe.skipIf(!binaryPresent)(
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(firstFailure(parsed)).toMatchObject({ stage: "ready-condition", code: "ready-invalid-selector", target: "ready" });
     }, CHECK_TIMEOUT);
 
@@ -376,7 +378,7 @@ describe.skipIf(!binaryPresent)(
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(parsed.status).toBe("clean");
       expect(firstFailure(parsed)).toBeUndefined();
       // Ad hoc target name and exact URL.
@@ -411,11 +413,11 @@ describe.skipIf(!binaryPresent)(
       const cmdResult = await execBinary(["check", "--format", "json"], cmdCwd);
 
       expect(cmdResult.exitCode).toBe(staticResult.exitCode);
-      const cmdParsed = JSON.parse(cmdResult.stdout) as RunResultV2;
-      const staticParsed = JSON.parse(staticResult.stdout) as RunResultV2;
+      const cmdParsed = JSON.parse(cmdResult.stdout) as RunResultV3;
+      const staticParsed = JSON.parse(staticResult.stdout) as RunResultV3;
       expect(cmdParsed.status).toBe(staticParsed.status);
       expect(cmdParsed.summary.violations).toBe(staticParsed.summary.violations);
-      expect(cmdParsed.summary.matchedElements).toBe(staticParsed.summary.matchedElements);
+      expect(cmdParsed.summary.elementsInspected).toBe(staticParsed.summary.elementsInspected);
       expect(cmdParsed.cases[0]!.target.name).toBe("cmd-parity");
       expect(cmdParsed.cases[0]!.rules[0]!.status).toBe("clean");
     }, CHECK_TIMEOUT);
@@ -428,7 +430,7 @@ describe.skipIf(!binaryPresent)(
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(firstFailure(parsed)).toMatchObject({ stage: "provider", code: "provider-exit-nonzero" });
     }, CHECK_TIMEOUT);
 
@@ -442,7 +444,7 @@ describe.skipIf(!binaryPresent)(
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(firstFailure(parsed)).toMatchObject({ stage: "provider", code: "provider-output-invalid" });
     }, CHECK_TIMEOUT);
 
@@ -480,7 +482,7 @@ describe.skipIf(!binaryPresent)(
 
       const jsonResult = await execBinary(["check", "--format", "json"], cwd);
       expect(jsonResult.exitCode, jsonResult.stderr).toBe(0);
-      const parsed = JSON.parse(jsonResult.stdout) as RunResultV2;
+      const parsed = JSON.parse(jsonResult.stdout) as RunResultV3;
       // JSON preserves the exact configured URL (secret + fragment intact).
       expect(parsed.cases[0]!.target.url).toBe(secretUrl);
       // JSON preserves the exact target name with raw control/bidi code points.
@@ -522,8 +524,8 @@ describe.skipIf(!binaryPresent)(
       expect(b.exitCode, b.stderr).toBe(0);
       expect(a.stderr).toBe("");
       expect(b.stderr).toBe("");
-      const pa = JSON.parse(a.stdout) as RunResultV2;
-      const pb = JSON.parse(b.stdout) as RunResultV2;
+      const pa = JSON.parse(a.stdout) as RunResultV3;
+      const pb = JSON.parse(b.stdout) as RunResultV3;
       expect(pa.status).toBe("clean");
       expect(pb.status).toBe("clean");
       expect(pa.cases[0]!.target.name).toBe("conc-a");
@@ -543,7 +545,7 @@ describe.skipIf(!binaryPresent)(
       acceptance.setSettingsWrapped(true);
       const before = await execBinary(["check", "--format", "json"], cwd);
       expect(before.exitCode, before.stderr).toBe(1);
-      const beforeParsed = JSON.parse(before.stdout) as RunResultV2;
+      const beforeParsed = JSON.parse(before.stdout) as RunResultV3;
       expect(beforeParsed.status).toBe("violations");
       expect(beforeParsed.summary.violations).toBe(1);
 
@@ -551,7 +553,7 @@ describe.skipIf(!binaryPresent)(
       acceptance.setSettingsWrapped(false);
       const after = await execBinary(["check", "--format", "json"], cwd);
       expect(after.exitCode, after.stderr).toBe(0);
-      const afterParsed = JSON.parse(after.stdout) as RunResultV2;
+      const afterParsed = JSON.parse(after.stdout) as RunResultV3;
       expect(afterParsed.status).toBe("clean");
       expect(afterParsed.summary.violations).toBe(0);
     }, CHECK_TIMEOUT);
@@ -602,9 +604,12 @@ describe.skipIf(!binaryPresent)(
         userAgent: IPHONE_UA,
       });
 
-      // Standard rule pinned into the config.
+      // Standard rules pinned into the config.
       const rules = config.rules as readonly Record<string, unknown>[];
-      expect(rules).toEqual([{ name: "tab-label-single-line", type: "tab-label-single-line" }]);
+      expect(rules).toEqual([
+        { name: "tab-label-single-line", type: "tab-label-single-line" },
+        { name: "page-horizontal-overflow", type: "page-horizontal-overflow" },
+      ]);
     });
 
     // ------------------------------------------- AE2: existing config protected
@@ -639,8 +644,8 @@ describe.skipIf(!binaryPresent)(
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
-      expect(parsed.schemaVersion).toBe(2);
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      expect(parsed.schemaVersion).toBe(3);
       expect(parsed.status).toBe("clean");
       expect(parsed.summary.cases).toMatchObject({ resolved: 2, complete: 2, failed: 0, notExecuted: 0 });
       expect(parsed.summary.targets.resolved).toBe(1);
@@ -668,7 +673,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(parsed.status).toBe("incomplete");
       expect(parsed.summary.cases).toMatchObject({ resolved: 0, complete: 0, failed: 0, notExecuted: 0 });
       expect(firstFailure(parsed)).toMatchObject({ stage: "config", code: "targets-empty" });
@@ -692,7 +697,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(0);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(parsed.summary.targets.resolved).toBe(2);
       expect(parsed.summary.cases).toMatchObject({ resolved: 4, complete: 4, failed: 0, notExecuted: 0 });
       expect(parsed.cases).toHaveLength(4);
@@ -735,7 +740,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(parsed.status).toBe("incomplete");
       expect(parsed.summary.cases).toMatchObject({ resolved: 6, complete: 4, failed: 2, notExecuted: 0 });
 
@@ -785,7 +790,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(0);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(parsed.summary.targets.resolved).toBe(1);
       expect(parsed.summary.cases.resolved).toBe(1);
       expect(parsed.cases).toHaveLength(1);
@@ -801,13 +806,13 @@ describe.skipIf(!binaryPresent)(
       // With --url: still requires a config (R8, no implicit fallback).
       const withUrl = await execBinary(["check", "--url", `${acceptance.url}/clean`, "--format", "json"], cwd);
       expect(withUrl.exitCode, withUrl.stderr).toBe(2);
-      const withUrlParsed = JSON.parse(withUrl.stdout) as RunResultV2;
+      const withUrlParsed = JSON.parse(withUrl.stdout) as RunResultV3;
       expect(firstFailure(withUrlParsed)).toMatchObject({ stage: "config", code: "config-not-found" });
 
       // Without --url: same config-not-found (no browser launched in either path).
       const noUrl = await execBinary(["check", "--format", "json"], cwd);
       expect(noUrl.exitCode, noUrl.stderr).toBe(2);
-      const noUrlParsed = JSON.parse(noUrl.stdout) as RunResultV2;
+      const noUrlParsed = JSON.parse(noUrl.stdout) as RunResultV3;
       expect(firstFailure(noUrlParsed)).toMatchObject({ stage: "config", code: "config-not-found" });
     });
 
@@ -826,7 +831,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(1);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV2;
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(parsed.status).toBe("violations");
       expect(parsed.cases).toHaveLength(2);
 
@@ -845,7 +850,65 @@ describe.skipIf(!binaryPresent)(
       expect(iphone.status).toBe("complete");
       expect(iphone.rules[0]!.status).toBe("violations");
       expect(iphone.rules[0]!.violations.length).toBeGreaterThanOrEqual(1);
-      expect(iphone.rules[0]!.violations[0]!.lineCount).toBeGreaterThanOrEqual(2);
+      const mobileViolation = iphone.rules[0]!.violations[0]!;
+      if (!isTabLabelSingleLineViolation(mobileViolation)) throw new Error("expected tab-label violation");
+      expect(mobileViolation.lineCount).toBeGreaterThanOrEqual(2);
+    }, CHECK_TIMEOUT);
+
+    test("compiled CLI reports responsive page overflow only on the iPhone case", async () => {
+      const cwd = await tempDir();
+      await writeConfig(cwd, {
+        schemaVersion: 2,
+        devices: STANDARD_DEVICES,
+        provider: {
+          type: "static",
+          targets: [{ name: "responsive-overflow", url: `${acceptance.url}/responsive-overflow` }],
+        },
+      });
+      const result = await execBinary(["check", "--format", "json"], cwd);
+      expect(result.exitCode, result.stderr).toBe(1);
+
+      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      expect(parsed.schemaVersion).toBe(3);
+      const desktopRule = parsed.cases[0]?.rules.find((rule) => rule.type === "page-horizontal-overflow");
+      const mobileRule = parsed.cases[1]?.rules.find((rule) => rule.type === "page-horizontal-overflow");
+      expect(desktopRule).toMatchObject({ status: "clean", elementsInspected: 0, violations: [] });
+      expect(mobileRule?.status).toBe("violations");
+      expect(mobileRule?.violations).toHaveLength(1);
+      const violation = mobileRule?.violations[0];
+      if (violation?.type !== "page-horizontal-overflow") throw new Error("expected overflow violation");
+      expect(violation).toMatchObject({
+        overflowPx: 298,
+        locator: '[data-testid="wide-panel"]',
+        geometry: { x: 0, width: 700 },
+      });
+      expect(Object.keys(violation)).toEqual([
+        "type",
+        "overflowPx",
+        "geometry",
+        "locator",
+        "computedStyle",
+      ]);
+      expect(Object.keys(violation.computedStyle)).toEqual([
+        "display",
+        "position",
+        "boxSizing",
+        "width",
+        "minWidth",
+        "maxWidth",
+        "whiteSpace",
+        "overflowX",
+        "flex",
+        "flexBasis",
+        "flexGrow",
+        "flexShrink",
+        "gridTemplateColumns",
+        "gridAutoColumns",
+      ]);
+      expect(result.stdout).not.toContain('"labelsInspected"');
+      expect(result.stdout).not.toContain('"matchedElements"');
+      expect(result.stdout).not.toContain('"text"');
+      expect(result.stdout).not.toContain('"html"');
     }, CHECK_TIMEOUT);
   },
 );

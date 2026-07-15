@@ -65,6 +65,21 @@ const MOBILE_ONLY_HTML = `<!doctype html>
 </body>
 </html>`;
 
+const RESPONSIVE_OVERFLOW_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>responsive overflow</title>
+<style>
+  body { margin: 0; }
+  [role="tab"] { white-space: nowrap; }
+  [data-testid="wide-panel"] { width: 700px; height: 20px; }
+</style>
+</head>
+<body>
+<button role="tab" aria-selected="true">Overview</button>
+<div data-testid="wide-panel"></div>
+</body>
+</html>`;
+
 export interface AcceptanceServer {
   readonly url: string;
   readonly port: number;
@@ -87,6 +102,10 @@ export function startAcceptanceServer(): AcceptanceServer {
 
       if (pathname === "/mobile-only") {
         return new Response(MOBILE_ONLY_HTML, { headers: HTML_HEADERS });
+      }
+
+      if (pathname === "/responsive-overflow") {
+        return new Response(RESPONSIVE_OVERFLOW_HTML, { headers: HTML_HEADERS });
       }
 
       if (pathname === "/settings") {
