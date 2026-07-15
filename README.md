@@ -42,7 +42,7 @@ language runtime.
 The `.deb` installs vlint and declares all required Chromium shared libraries:
 
 ```sh
-VERSION=0.1.0
+VERSION=0.2.0
 TAG="v$VERSION"
 base="https://github.com/wh3at/vlint/releases/download/$TAG"
 
@@ -63,7 +63,7 @@ The version-bound installer verifies the release archive and atomically installs
 `vlint` to `${VLINT_INSTALL_DIR:-$HOME/.local/bin}` without `sudo`:
 
 ```sh
-VERSION=v0.1.0
+VERSION=v0.2.0
 base="https://github.com/wh3at/vlint/releases/download/$VERSION"
 curl -fsSLO "$base/install-$VERSION.sh"
 sh "install-$VERSION.sh"
@@ -81,7 +81,7 @@ directory to add. The manual path remains available for environments that do
 not execute downloaded scripts:
 
 ```sh
-VERSION=v0.1.0
+VERSION=v0.2.0
 base="https://github.com/wh3at/vlint/releases/download/$VERSION"
 archive="vlint-$VERSION-linux-x64.tar.gz"
 
@@ -369,7 +369,7 @@ cases explicitly and retain successful cases when another case fails.
 {
   "schemaVersion": 2,
   "status": "clean | violations | incomplete",
-  "tool": { "name": "vlint", "version": "0.1.0" },
+  "tool": { "name": "vlint", "version": "0.2.0" },
   "environment": {
     "platform": "linux",
     "arch": "x64",
