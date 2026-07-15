@@ -5,9 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser, BrowserContext, Page } from "playwright";
 
-import { makeEffectiveTarget } from "../../src/config/merge";
 import { buildStandardConfig } from "../../src/commands/init";
-import type { DeviceProfile, EffectiveAuditCase, EffectiveTarget, ReadyCondition, TargetDefaults, Viewport } from "../../src/contracts/config";
+import type { DeviceProfile, EffectiveAuditCase, ReadyCondition, Viewport } from "../../src/contracts/config";
 import {
   createBrowserContext,
   createBrowserPage,
@@ -59,23 +58,24 @@ interface TargetOverrides {
   readyCondition?: ReadyCondition;
 }
 
-function target(url: string, overrides: TargetOverrides = {}): EffectiveTarget {
+function target(url: string, overrides: TargetOverrides = {}): EffectiveAuditCase {
+  const viewport = overrides.viewport ?? { width: 1280, height: 720 };
   const device: DeviceProfile = {
     name: "test-device",
-    viewport: overrides.viewport ?? { width: 1280, height: 720 },
-    screen: overrides.viewport ?? { width: 1280, height: 720 },
+    viewport,
+    screen: viewport,
     deviceScaleFactor: overrides.deviceScaleFactor ?? 1,
     isMobile: false,
     hasTouch: false,
   };
-  const defaults: TargetDefaults = {
+  return auditCase(device, url, {
+    name: "t",
     ...(overrides.locale !== undefined ? { locale: overrides.locale } : {}),
     ...(overrides.timezoneId !== undefined ? { timezoneId: overrides.timezoneId } : {}),
     ...(overrides.timeoutMs !== undefined ? { timeoutMs: overrides.timeoutMs } : {}),
     ...(overrides.browserState !== undefined ? { browserState: overrides.browserState } : {}),
     ...(overrides.readyCondition !== undefined ? { readyCondition: overrides.readyCondition } : {}),
-  };
-  return makeEffectiveTarget({ name: "t", url }, device, defaults, [], tmp);
+  });
 }
 
 // Canonical standard devices, sourced from the same authority as `vlint init`
@@ -171,7 +171,7 @@ async function probeViewport(page: Page): Promise<{ width: number; height: numbe
 }
 
 test("public page is acquired and the ready page text is readable", async () => {
-  const t = await run.acquireTarget(target(`${server.url}/index.html`));
+  const t = await run.acquireCase(target(`${server.url}/index.html`));
   expect(t.ok).toBe(true);
   if (t.ok) {
     expect(await t.value.page.locator("#ready").textContent()).toContain("public content");
@@ -210,8 +210,8 @@ test("exact context options (viewport, screen, device scale, mobile, touch, user
 });
 
 test("public and authenticated pages are isolated across separate contexts on the same browser", async () => {
-  const pub = await run.acquireTarget(target(`${server.url}/auth-gated`));
-  const auth = await run.acquireTarget(
+  const pub = await run.acquireCase(target(`${server.url}/auth-gated`));
+  const auth = await run.acquireCase(
     target(`${server.url}/auth-gated`, { browserState: join(STATE_FIXTURES, "valid.json") }),
   );
   expect(pub.ok && auth.ok).toBe(true);
@@ -393,21 +393,21 @@ test("state failures never leak parsed credential sentinels into the failure mes
 
 test("navigation maps HTTP 404 and 500 to navigation-http-status", async () => {
   for (const code of [404, 500]) {
-    const t = await run.acquireTarget(target(`${server.url}/status?code=${code}`));
+    const t = await run.acquireCase(target(`${server.url}/status?code=${code}`));
     if (!t.ok) expect(t.failure.code).toBe("navigation-http-status");
   }
 });
 
 test("navigation maps a refused/unsafe port to navigation-network", async () => {
   // Port 1 deterministically yields a network-layer error (ERR_UNSAFE_PORT); no listening server needed.
-  const t = await run.acquireTarget(target("http://127.0.0.1:1/nope"));
+  const t = await run.acquireCase(target("http://127.0.0.1:1/nope"));
   if (!t.ok) expect(t.failure.code).toBe("navigation-network");
 });
 
 test("a failed target does not break the shared browser for the next target (cleanup)", async () => {
-  const failed = await run.acquireTarget(target(`${server.url}/status?code=500`));
+  const failed = await run.acquireCase(target(`${server.url}/status?code=500`));
   expect(failed.ok).toBe(false);
-  const next = await run.acquireTarget(target(`${server.url}/index.html`));
+  const next = await run.acquireCase(target(`${server.url}/index.html`));
   expect(next.ok).toBe(true);
   if (next.ok) await next.value.close();
 });
@@ -416,7 +416,7 @@ test("a failed target does not break the shared browser for the next target (cle
 // Fake timers cannot reproduce the browser-side wait semantics under test.
 test("remaining budget flows across stages: a slow navigation leaves only the remainder for ready", async () => {
   const start = Date.now();
-  const t = await run.acquireTarget(
+  const t = await run.acquireCase(
     target(`${server.url}/slow?delay=900`, {
       timeoutMs: 1500,
       readyCondition: { selector: "#ready", state: "visible" },
@@ -547,7 +547,7 @@ test("an aborted run-scope signal during launch returns signal-interrupt and rea
 test("an aborted target-scope signal before acquisition returns a target-attributed interrupt", async () => {
   const controller = new AbortController();
   controller.abort();
-  const t = await run.acquireTarget(target(`${server.url}/index.html`), controller.signal);
+  const t = await run.acquireCase(target(`${server.url}/index.html`), controller.signal);
   if (!t.ok) {
     expect(t.failure.code).toBe("signal-interrupt");
     expect(t.failure.target).toBe("t");
@@ -555,7 +555,7 @@ test("an aborted target-scope signal before acquisition returns a target-attribu
 });
 
 test("navigateToTarget requires a 200..399 main response", async () => {
-  const ctx = await run.acquireTarget(target(`${server.url}/index.html`));
+  const ctx = await run.acquireCase(target(`${server.url}/index.html`));
   expect(ctx.ok).toBe(true);
   if (ctx.ok) {
     const ok = await navigateToTarget(ctx.value.page, `${server.url}/index.html`, createDeadline(5000));
