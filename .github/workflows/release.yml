@@ -342,10 +342,8 @@ jobs:
           ARCHIVE: ${{ needs.provenance.outputs.archive }}
         run: |
           set -euo pipefail
-          ASSET_URL="$(gh release view "$TAG" --repo "$REPO" --json assets \
-            --jq ".assets[] | select(.name==\"$ARCHIVE\") | .url")"
-          gh api "$ASSET_URL" > server-asset.bin
-          actual="$(sha256sum server-asset.bin | awk '{print $1}')"
+          gh release download "$TAG" --repo "$REPO" --pattern "$ARCHIVE" --dir verify-asset
+          actual="$(sha256sum "verify-asset/$ARCHIVE" | awk '{print $1}')"
           if [ "$actual" != "$EXPECTED" ]; then
             echo "::error::server-side asset digest $actual != expected $EXPECTED"
             exit 1
