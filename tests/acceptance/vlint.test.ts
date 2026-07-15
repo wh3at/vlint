@@ -137,7 +137,7 @@ describe.skipIf(!binaryPresent)(
       const cwd = await tempDir();
       const result = await execBinary(["--version"], cwd);
       expect(result.exitCode, result.stderr).toBe(0);
-      expect(result.stdout).toBe("vlint 0.1.0\n");
+      expect(result.stdout).toBe("vlint 0.2.0\n");
       expect(result.stderr).toBe("");
     });
 
@@ -158,7 +158,7 @@ describe.skipIf(!binaryPresent)(
       const parsed = JSON.parse(result.stdout) as RunResultV2;
       expect(parsed.schemaVersion).toBe(2);
       expect(parsed.status).toBe("clean");
-      expect(parsed.tool).toEqual({ name: "vlint", version: "0.1.0" });
+      expect(parsed.tool).toEqual({ name: "vlint", version: "0.2.0" });
       expect(parsed.environment).toMatchObject({ platform: "linux", arch: "x64" });
       expect(typeof parsed.environment.browser.version).toBe("string");
       expect(parsed.environment.browser.version!.length).toBeGreaterThan(0);
