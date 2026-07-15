@@ -22,7 +22,7 @@ diagnostics to locate the offending target and element.
 - [Browser state (authentication)](#browser-state-authentication)
 - [Output: terminal vs JSON](#output-terminal-vs-json)
 - [Exit codes](#exit-codes)
-- [Machine consumption (JSON schema v1)](#machine-consumption-json-schema-v1)
+- [Machine consumption (JSON schema v2)](#machine-consumption-json-schema-v2)
 - [Browser cache hygiene](#browser-cache-hygiene)
 - [Consumer integration](#consumer-integration)
 - [Building from source](#building-from-source)
@@ -33,43 +33,83 @@ diagnostics to locate the offending target and element.
 
 ## Install
 
-vlint is distributed from GitHub Releases as a versioned archive plus a SHA-256
-checksum. No Node.js, Bun, npm, package manager, or `node_modules` is required on
-the host.
+vlint ships as a self-contained Ubuntu 24.04 x64 executable. Pick one
+version-pinned installation path; none requires Node.js, Bun, npm, or another
+language runtime.
+
+### Quick start: Ubuntu package
+
+The `.deb` installs vlint and declares all required Chromium shared libraries:
 
 ```sh
-VERSION=v0.1.0            # replace with the release tag you want
-# Substitute <OWNER>/<REPO> with this repository's GitHub path.
-base="https://github.com/<OWNER>/<REPO>/releases/download/$VERSION"
+VERSION=0.1.0
+TAG="v$VERSION"
+base="https://github.com/wh3at/vlint/releases/download/$TAG"
 
-curl -fsSL "$base/vlint-$VERSION-linux-x64.tar.gz" -o vlint-$VERSION-linux-x64.tar.gz
-curl -fsSL "$base/SHA256SUMS"                       -o SHA256SUMS
+curl -fsSLO "$base/vlint_${VERSION}_amd64.deb"
+curl -fsSLO "$base/SHA256SUMS"
+awk -v name="vlint_${VERSION}_amd64.deb" '$2 == name { print }' SHA256SUMS |
+  sha256sum -c -
+sudo apt install "./vlint_${VERSION}_amd64.deb"
 
-# Verify integrity (see note below on what the checksum guarantees).
-sha256sum -c SHA256SUMS
+# Creates vlint.config.json and installs the pinned browser payload.
+vlint setup
+vlint check --url http://localhost:3000/
+```
 
-tar -xzf vlint-$VERSION-linux-x64.tar.gz
-install -m 0755 vlint /usr/local/bin/vlint    # or anywhere on PATH
+### User-local installer
+
+The version-bound installer verifies the release archive and atomically installs
+`vlint` to `${VLINT_INSTALL_DIR:-$HOME/.local/bin}` without `sudo`:
+
+```sh
+VERSION=v0.1.0
+base="https://github.com/wh3at/vlint/releases/download/$VERSION"
+curl -fsSLO "$base/install-$VERSION.sh"
+sh "install-$VERSION.sh"
+export PATH="${VLINT_INSTALL_DIR:-$HOME/.local/bin}:$PATH"
+
+# Installs Ubuntu libraries and the browser explicitly. Do not run vlint itself
+# with sudo: only Playwright's apt subprocess elevates.
+vlint browser install --with-deps
+vlint init
+vlint check --url http://localhost:3000/
+```
+
+If the destination is not already on `PATH`, the installer prints the exact
+directory to add. The manual path remains available for environments that do
+not execute downloaded scripts:
+
+```sh
+VERSION=v0.1.0
+base="https://github.com/wh3at/vlint/releases/download/$VERSION"
+archive="vlint-$VERSION-linux-x64.tar.gz"
+
+curl -fsSLO "$base/$archive"
+curl -fsSLO "$base/SHA256SUMS"
+awk -v name="$archive" '$2 == name { print }' SHA256SUMS | sha256sum -c -
+tar -xzf "$archive"
+mkdir -p "$HOME/.local/bin"
+install -m 0755 vlint "$HOME/.local/bin/vlint"
 vlint --version
 ```
 
-The archive contains exactly two entries: `vlint` (mode `0755`) and this `README.md`.
+The archive contains exactly `vlint` (mode `0755`) and this `README.md`.
 
 ### What the checksum guarantees
 
-`SHA256SUMS` lets you confirm the bytes you downloaded match the bytes the release
-publisher attached. It is an **integrity check, not a signature**: it is independent of
-your trust in the download transport, but it does **not** replace trust in the GitHub
-account, tag, and repository that published the release. Treat the GitHub Release and
-its protected tag as the trust root, and the checksum as transport-level tamper
-detection.
-
----
+`SHA256SUMS` confirms that each downloaded asset matches the bytes attached by
+the release publisher. It is an integrity check, not a signature: the protected
+GitHub tag and release remain the trust root.
 
 ## OS prerequisites
 
-vlint launches a Playwright-managed Chromium headless shell, which needs a set of
-shared libraries on Ubuntu 24.04. Install them once:
+Choose one:
+
+- Installing the `.deb` resolves the Ubuntu packages through APT.
+- `vlint browser install --with-deps` explicitly installs the packages before
+  installing the browser payload.
+- For locked-down hosts, install the packages manually:
 
 ```sh
 sudo apt-get update
@@ -80,84 +120,103 @@ sudo apt-get install -y --no-install-recommends \
   libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2
 ```
 
-`vlint browser install` installs **only** the Playwright browser payload into the
-standard Playwright cache. It does not install or modify OS packages.
-
----
+The unflagged `vlint browser install` never modifies OS packages.
 
 ## Browser setup
 
-Browser acquisition is a **separate, explicit** step. `vlint check` never downloads,
-updates, or silently installs a browser.
+Browser acquisition is always a separate, explicit operation. `vlint check`
+never downloads, updates, or silently installs a browser.
 
 ```sh
-vlint browser install           # installs the pinned Chromium headless shell
-vlint browser install --force   # repairs / reinstalls a damaged installation
+vlint browser install               # pinned Chromium headless shell only
+vlint browser install --force       # repair/reinstall browser payload
+vlint browser install --with-deps   # Ubuntu libraries, then browser payload
 ```
 
-- The browser revision is pinned to this vlint build through its embedded Playwright
-  version; vlint does not manage browser builds itself.
-- `install` is idempotent: re-running it on a healthy cache is a no-op.
-- `--force` repairs or reinstalls a missing or damaged executable.
-- After upgrading the `vlint` binary, re-run `vlint browser install` so the browser
-  revision matches the new build.
+`--force` and `--with-deps` may be combined. The browser revision is pinned to
+the embedded Playwright version, and installation is idempotent. After upgrading
+vlint, rerun `vlint browser install`.
 
-If `vlint check` finds no usable browser, it fails fast with a typed
-`browser-setup` failure and a reinstall hint (`browser-missing`), rather than
-attempting an automatic download.
+`vlint setup` is the first-run convenience command:
 
----
+```sh
+vlint setup
+```
+
+It creates `vlint.config.json` only when absent, preserves an existing valid
+configuration, and installs the browser payload. Invalid, unreadable, or
+symlinked configurations fail rather than being replaced. If browser
+installation fails after config creation, rerunning `vlint setup` safely
+continues from the existing config.
 
 ## Running checks
 
+Every check requires a project-local `vlint.config.json`; run `vlint init` or
+`vlint setup` first.
+
 ```sh
-vlint check                              # inspect all declared targets (vlint.config.json)
-vlint check --url http://localhost:3000/  # inspect a single ad-hoc URL
-vlint check --format json                # machine-readable output
+vlint check --url http://localhost:3000/  # every configured device, one URL
+vlint check                               # every provider target × every device
+vlint check --format json
 vlint check --url http://localhost:3000/ --format json
 ```
 
-- With **no `--url`**, vlint resolves the finite target set from `vlint.config.json`
-  (see [Configuration](#configuration)) and inspects every target in provider order.
-  Targets are never skipped silently.
-- With **`--url`**, vlint does **not** resolve a provider; it applies the common
-  defaults and built-in rule to that single page. A `vlint.config.json` is not
-  required for an ad-hoc URL check.
+- `--url` uses the configured ordered device list but does not resolve a target
+  provider.
+- Without `--url`, the config must contain a `static` or `command` provider.
+- A config generated by `vlint init` intentionally contains devices and rules
+  but no provider; it is immediately usable with `--url`.
+- Targets are never skipped silently. Output remains target-major, device-minor.
+- All target × device cases run concurrently with a fixed cap of 2 at a time,
+  bounding CPU, memory, and target-server load. One case failing does not stop
+  the remaining cases; the run is reported as `incomplete` (exit 2).
 
-The caller is responsible for starting the target application, preparing fixture data
-and any authentication state, and providing concrete URLs that reproduce a stable
-rendered state. vlint does not start dev servers, generate fixtures, or perform logins.
-
----
+The caller starts the target application and prepares fixture data and any
+authentication state. vlint does not start dev servers, generate fixtures, or
+perform logins.
 
 ## Configuration
 
-Configuration is a single project-local file named `vlint.config.json`, read from the
-current working directory. It is the **only** configuration source: there is no
-arbitrary JavaScript, no global user config, and no parent-directory search. The file
-must be valid JSON and no larger than 8 MiB.
+`vlint.config.json` is the only configuration source. It is read from the
+current working directory, must be valid JSON, and must not exceed 8 MiB.
+Generate the standard MacBook Air 13-inch and iPhone 17 profiles with:
+
+```sh
+vlint init
+```
+
+An expanded config with a static provider has this shape:
 
 ```jsonc
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "devices": [
+    {
+      "name": "macbook-air-13-m5",
+      "viewport": { "width": 1470, "height": 956 },
+      "screen": { "width": 1470, "height": 956 },
+      "deviceScaleFactor": 2,
+      "isMobile": false,
+      "hasTouch": false
+    },
+    {
+      "name": "iphone-17",
+      "viewport": { "width": 402, "height": 681 },
+      "screen": { "width": 402, "height": 874 },
+      "deviceScaleFactor": 3,
+      "isMobile": true,
+      "hasTouch": true,
+      "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1"
+    }
+  ],
   "defaults": {
-    "viewport": { "width": 1280, "height": 720 },
-    "deviceScaleFactor": 1,
     "locale": "en-US",
     "timezoneId": "UTC",
     "timeoutMs": 30000,
     "readyCondition": { "selector": "#app", "state": "visible" }
   },
   "rules": [
-    {
-      "name": "tabs-single-line",
-      "type": "tab-label-single-line",
-      "additionalCandidateSelectors": [],
-      "excludeSelectors": [],
-      "labelSelector": null,
-      "minimumLabels": 1,
-      "allowZeroLabels": false
-    }
+    { "name": "tab-label-single-line", "type": "tab-label-single-line" }
   ],
   "provider": {
     "type": "static",
@@ -172,41 +231,76 @@ must be valid JSON and no larger than 8 MiB.
 
 | Field | Description |
 | --- | --- |
-| `schemaVersion` | Must be `1`. |
-| `defaults` | Common defaults applied to every target: `viewport` (`width`/`height`), `deviceScaleFactor` (`0.1`–`10`), `locale`, `timezoneId`, `timeoutMs` (`100`–`300000`), `readyCondition`, `browserState`. |
-| `rules` | Non-empty array of rule instances. The only supported `type` is `tab-label-single-line`. If omitted, a default instance is applied. |
-| `provider` | Exactly one provider: `static` or `command`. |
+| `schemaVersion` | Must be `2`. |
+| `devices` | Non-empty ordered device profiles with unique names. This is the only authority for viewport, screen, DPR, mobile mode, touch, and optional user agent. |
+| `defaults` | Shared target defaults: `locale`, `timezoneId`, `timeoutMs` (`100`–`300000`), `readyCondition`, and `browserState`. |
+| `rules` | Rule instances. If omitted, the standard `tab-label-single-line` rule is applied. |
+| `provider` | Optional `static` or `command` target provider. Required only for checks without `--url`. |
+
+### Device profiles
+
+Each profile has `name`, `viewport`, `screen`, `deviceScaleFactor`
+(`0.1`–`10`), `isMobile`, and `hasTouch`. `userAgent` is optional; omitting it
+keeps Chromium's default user agent. Device order determines result order inside
+each target.
+
+The iPhone profile is Chromium device emulation based on Playwright's descriptor;
+it does not claim Safari or WebKit rendering fidelity.
 
 ### Rule instance (`tab-label-single-line`)
 
-Inspects rendered tab labels and requires each label's rendered text to fit on a single
-visual line.
+Inspects rendered tab labels and requires each label's rendered text to fit on a
+single visual line.
 
 | Field | Description |
 | --- | --- |
 | `name` | Unique rule name (≤ 1 KiB). |
 | `type` | `tab-label-single-line`. |
-| `additionalCandidateSelectors` | Extra CSS selectors added to the candidate set (default candidate is `[role="tab"]`). |
-| `excludeSelectors` | CSS selectors excluded from inspection (e.g. intentionally multi-line tabs). |
-| `labelSelector` | A selector **relative to each candidate** resolving to exactly one rendered element; zero or multiple matches is a rule-evaluation failure. Defaults to the whole candidate. |
-| `minimumLabels` | Minimum matched candidates required for this instance (per-target or global). |
-| `allowZeroLabels` | When `true`, a run that inspects zero labels is allowed instead of failing. |
+| `additionalCandidateSelectors` | Extra CSS selectors added to `[role="tab"]`. |
+| `excludeSelectors` | CSS selectors excluded from inspection. |
+| `labelSelector` | Selector relative to each candidate; it must resolve to exactly one rendered element. |
+| `minimumLabels` | Minimum matched candidates required for this instance. |
+| `allowZeroLabels` | Allows a run that inspects zero labels. |
 
-Defaults merge in the order: built-in defaults → `defaults` → target fields. A target
-may override per-rule behavior via `ruleOverrides` (disable a rule, add
-`excludeSelectors`, set `minimumLabels`).
+Target fields override shared defaults. A target may override rule behavior via
+`ruleOverrides` (`enabled`, `excludeSelectors`, `minimumLabels`). Device
+emulation is never overridden by targets.
 
 ### Target providers
 
-- **`static`** — declares an ordered array of targets inline. Each target has a `name`
-  (≤ 1 KiB), a concrete `url`, and any `defaults` fields plus optional `ruleOverrides`.
-- **`command`** — runs a trusted executable and reads a JSON `{"targets":[...]}`
-  object from its standard output. Fields: `executable`, optional `args`, optional
-  `timeoutMs` (default 30000). The provider runs with the invoking process environment
-  and the config directory as its working directory, with no shell. A non-zero exit,
-  timeout, invalid JSON, missing required field, or zero targets is a run failure.
+- **`static`** — ordered inline targets. Each target has `name`, `url`, target
+  default fields, and optional `ruleOverrides`.
+- **`command`** — runs a trusted executable without a shell and reads
+  `{"targets":[...]}` from stdout. Fields: `executable`, optional `args`, and
+  optional `timeoutMs` (default 30000).
 
----
+A provider non-zero exit, timeout, oversized/invalid output, or zero targets is a
+run failure.
+
+### Migrating from schema version 1
+
+Schema version 1 baked a single `1280×720` viewport into the binary and allowed
+viewport/DPR overrides at the target and defaults level. Version 2 makes the
+ordered `devices` array the sole viewport authority and requires
+`"schemaVersion": 2`. No automatic migration is performed — update your config
+explicitly:
+
+1. **Back up** the existing config.
+2. **Generate a v2 reference** with `vlint init` in a scratch directory, then
+   copy the `devices` array (and optionally `rules`) into your config.
+3. **Remove** `viewport` and `deviceScaleFactor` from `defaults` and from every
+   target — they are no longer accepted. Viewport, screen, DPR, mobile, touch,
+   and user agent now live exclusively in each device profile.
+4. **Set** `"schemaVersion": 2` at the top level.
+5. **Validate** non-destructively:
+   ```sh
+   vlint check --url http://localhost:3000/ --format json
+   ```
+
+JSON consumers: the v1 `targets` result array was replaced by the v2 `cases`
+array, where each case carries separate `target` and `device` identity. See
+[Machine consumption](#machine-consumption-json-schema-v2). Version 1 result
+parsers will not parse version 2 output.
 
 ## Browser state (authentication)
 
@@ -234,7 +328,7 @@ is passed through control/ANSI/OSC/bi-directional escape stripping and length ca
 URLs have their query values redacted and their fragments removed.
 
 `--format json` prints a versioned JSON object (see
-[Machine consumption](#machine-consumption-json-schema-v1)).
+[Machine consumption](#machine-consumption-json-schema-v2)).
 
 ### Disclosure boundary
 
@@ -266,17 +360,14 @@ Invalid arguments also exit `2`.
 
 ---
 
-## Machine consumption (JSON schema v1)
+## Machine consumption (JSON schema v2)
 
-The JSON object has a fixed integer `schemaVersion` at the root (currently `1`). The
-run status is one of `clean`, `violations`, or `incomplete`. The schema records target
-and rule dispositions, machine-readable failure stages, and nested violations.
-
-Top-level shape:
+The root `schemaVersion` is `2`. Results represent the target × device audit
+cases explicitly and retain successful cases when another case fails.
 
 ```jsonc
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "status": "clean | violations | incomplete",
   "tool": { "name": "vlint", "version": "0.1.0" },
   "environment": {
@@ -285,31 +376,71 @@ Top-level shape:
     "browser": { "name": "chromium", "version": "<browser-version-or-null>" }
   },
   "summary": {
-    "targets": { "resolved": 1, "complete": 1, "partial": 0, "failed": 0, "notExecuted": 0 },
-    "ruleEvaluations": { "clean": 1, "violations": 0, "failed": 0, "disabled": 0, "notExecuted": 0 },
+    "targets": { "resolved": 1 },
+    "cases": {
+      "resolved": 1,
+      "complete": 1,
+      "partial": 0,
+      "failed": 0,
+      "notExecuted": 0
+    },
+    "ruleEvaluations": {
+      "clean": 1,
+      "violations": 0,
+      "failed": 0,
+      "disabled": 0,
+      "notExecuted": 0
+    },
     "ruleFinalizations": { "passed": 1, "failed": 0, "notExecuted": 0 },
     "violations": 0,
     "matchedElements": 1,
     "executionFailures": 0
   },
-  "targets": [ /* per-target name, url, viewport, status, rules[] with violations[] */ ],
-  "ruleFinalizations": [ /* global zero-label invariant results */ ],
-  "failure": null /* or { stage, code, message, target, rule } when incomplete */
+  "cases": [
+    {
+      "target": { "name": "adhoc", "url": "http://localhost:3000/" },
+      "device": {
+        "name": "macbook-air-13-m5",
+        "viewport": { "width": 1470, "height": 956 },
+        "screen": { "width": 1470, "height": 956 },
+        "deviceScaleFactor": 2,
+        "isMobile": false,
+        "hasTouch": false,
+        "userAgent": null
+      },
+      "locale": "en-US",
+      "timezoneId": "UTC",
+      "status": "complete",
+      "rules": [
+        {
+          "name": "tab-label-single-line",
+          "type": "tab-label-single-line",
+          "status": "clean",
+          "labelsInspected": 1,
+          "violations": [],
+          "failure": null
+        }
+      ],
+      "failures": []
+    }
+  ],
+  "ruleFinalizations": [
+    {
+      "name": "tab-label-single-line",
+      "status": "passed",
+      "labelsInspected": 1,
+      "failure": null
+    }
+  ],
+  "failures": []
 }
 ```
 
-Each violation carries the target name, URL, viewport, the rendered text, a DOM locator
-that re-identifies the element at measurement time, the rule, the measured line count,
-and the element box. The locator is unique at measurement time; its stability across
-code changes is not guaranteed.
-
-### Compatibility policy
-
-Adding optional fields is v1-compatible. Renaming, removing, or changing the type of an
-existing field requires bumping `schemaVersion`. Timestamps and success timing are
-omitted so that the fields and ordering of a stable input are stable across runs.
-
----
+`cases` are ordered by target declaration first and configured device second.
+Failures carry separate nullable `target`, `device`, and `rule` identities.
+Adding optional fields is v2-compatible; renaming, removing, or changing a
+field type requires another `schemaVersion` bump. Timestamps are intentionally
+omitted so stable inputs produce stable output.
 
 ## Browser cache hygiene
 

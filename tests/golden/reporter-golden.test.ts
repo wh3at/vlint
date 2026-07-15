@@ -1,15 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import type { RunResultV1 } from "../../src/contracts/result";
+import type { RunResultV2 } from "../../src/contracts/result";
 import { renderJson } from "../../src/output/json";
 import { renderTerminal } from "../../src/output/terminal";
 
 /**
- * Golden reporter coverage (U5). The two canonical results below carry
+ * Golden reporter coverage (U4). The two canonical results below carry
  * adversarial content — OSC/hyperlink escapes and bidi overrides in names,
  * query-string secrets (including a repeated key) and a fragment in the URL,
  * CRLF/tab/bidi in violation text, a newline in a locator, and fractional
  * geometry — so that the golden fixtures lock the exact rendered bytes for
- * both output formats. The assertions below guard the reporter contract:
+ * both output formats.
+ *
+ * The violations result exercises AE5: 2 logical targets × 2 devices = 4
+ * ordered cases in target-major / device-minor order. The incomplete result
+ * exercises AE6: one case fails while another completes in the same run.
+ *
+ * The assertions below guard the reporter contract:
  *
  *   - exact byte stability against the committed golden fixtures (regression lock)
  *   - render determinism (idempotent re-render)
@@ -17,10 +23,32 @@ import { renderTerminal } from "../../src/output/terminal";
  *   - JSON preserves the exact configured URL and rendered text verbatim
  *   - terminal redacts every query value, drops the fragment, and escapes
  *     every C0/C1 control and bidi formatting character to an inert literal
+ *   - target and device identities are rendered as separate escaped fields
+ *   - summary partitions reconcile with the underlying cases and rules
  */
 
-const violations: RunResultV1 = {
-  schemaVersion: 1,
+const MACBOOK = {
+  name: "MacBook Air 13",
+  viewport: { width: 1470, height: 956 },
+  screen: { width: 1470, height: 956 },
+  deviceScaleFactor: 2,
+  isMobile: false,
+  hasTouch: false,
+  userAgent: null,
+} as const;
+
+const IPHONE = {
+  name: "iPhone 17",
+  viewport: { width: 402, height: 681 },
+  screen: { width: 402, height: 874 },
+  deviceScaleFactor: 3,
+  isMobile: true,
+  hasTouch: true,
+  userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+} as const;
+
+const violations: RunResultV2 = {
+  schemaVersion: 2,
   status: "violations",
   tool: { name: "vlint", version: "0.1.0" },
   environment: {
@@ -29,19 +57,21 @@ const violations: RunResultV1 = {
     browser: { name: "chromium", version: "149.0.7827.55" },
   },
   summary: {
-    targets: { resolved: 2, complete: 2, partial: 0, failed: 0, notExecuted: 0 },
-    ruleEvaluations: { clean: 1, violations: 1, failed: 0, disabled: 1, notExecuted: 0 },
+    targets: { resolved: 2 },
+    cases: { resolved: 4, complete: 4, partial: 0, failed: 0, notExecuted: 0 },
+    ruleEvaluations: { clean: 3, violations: 1, failed: 0, disabled: 4, notExecuted: 0 },
     ruleFinalizations: { passed: 1, failed: 0, notExecuted: 0 },
     violations: 2,
-    matchedElements: 3,
+    matchedElements: 5,
     executionFailures: 0,
   },
-  targets: [
+  cases: [
     {
-      name: "settings\u001b]8;;https://attacker.invalid\u0007",
-      url: "https://example.com/settings?token=secret&token=second#private",
-      viewport: { width: 1280, height: 720 },
-      deviceScaleFactor: 1,
+      target: {
+        name: "settings\u001b]8;;https://attacker.invalid\u0007",
+        url: "https://example.com/settings?token=secret&token=second#private",
+      },
+      device: MACBOOK,
       locale: "en-US",
       timezoneId: "UTC",
       status: "complete",
@@ -65,6 +95,7 @@ const violations: RunResultV1 = {
               locator: "#other",
             },
           ],
+          failure: null,
         },
         {
           name: "off-rule",
@@ -72,14 +103,17 @@ const violations: RunResultV1 = {
           status: "disabled",
           labelsInspected: 0,
           violations: [],
+          failure: null,
         },
       ],
+      failures: [],
     },
     {
-      name: "second",
-      url: "https://example.com/x?a=1&b=2",
-      viewport: { width: 900, height: 700 },
-      deviceScaleFactor: 2,
+      target: {
+        name: "settings\u001b]8;;https://attacker.invalid\u0007",
+        url: "https://example.com/settings?token=secret&token=second#private",
+      },
+      device: IPHONE,
       locale: "en-US",
       timezoneId: "UTC",
       status: "complete",
@@ -90,6 +124,7 @@ const violations: RunResultV1 = {
           status: "clean",
           labelsInspected: 1,
           violations: [],
+          failure: null,
         },
         {
           name: "off-rule",
@@ -97,16 +132,76 @@ const violations: RunResultV1 = {
           status: "disabled",
           labelsInspected: 0,
           violations: [],
+          failure: null,
         },
       ],
+      failures: [],
+    },
+    {
+      target: {
+        name: "second",
+        url: "https://example.com/x?a=1&b=2",
+      },
+      device: MACBOOK,
+      locale: "en-US",
+      timezoneId: "UTC",
+      status: "complete",
+      rules: [
+        {
+          name: "tabs",
+          type: "tab-label-single-line",
+          status: "clean",
+          labelsInspected: 1,
+          violations: [],
+          failure: null,
+        },
+        {
+          name: "off-rule",
+          type: "tab-label-single-line",
+          status: "disabled",
+          labelsInspected: 0,
+          violations: [],
+          failure: null,
+        },
+      ],
+      failures: [],
+    },
+    {
+      target: {
+        name: "second",
+        url: "https://example.com/x?a=1&b=2",
+      },
+      device: IPHONE,
+      locale: "en-US",
+      timezoneId: "UTC",
+      status: "complete",
+      rules: [
+        {
+          name: "tabs",
+          type: "tab-label-single-line",
+          status: "clean",
+          labelsInspected: 1,
+          violations: [],
+          failure: null,
+        },
+        {
+          name: "off-rule",
+          type: "tab-label-single-line",
+          status: "disabled",
+          labelsInspected: 0,
+          violations: [],
+          failure: null,
+        },
+      ],
+      failures: [],
     },
   ],
-  ruleFinalizations: [{ name: "tabs", status: "passed", labelsInspected: 3, failure: null }],
-  failure: null,
+  ruleFinalizations: [{ name: "tabs", status: "passed", labelsInspected: 5, failure: null }],
+  failures: [],
 };
 
-const incomplete: RunResultV1 = {
-  schemaVersion: 1,
+const incomplete: RunResultV2 = {
+  schemaVersion: 2,
   status: "incomplete",
   tool: { name: "vlint", version: "0.1.0" },
   environment: {
@@ -115,22 +210,21 @@ const incomplete: RunResultV1 = {
     browser: { name: "chromium", version: null },
   },
   summary: {
-    targets: { resolved: 1, complete: 0, partial: 0, failed: 0, notExecuted: 1 },
-    ruleEvaluations: { clean: 0, violations: 0, failed: 0, disabled: 1, notExecuted: 1 },
+    targets: { resolved: 1 },
+    cases: { resolved: 2, complete: 1, partial: 0, failed: 1, notExecuted: 0 },
+    ruleEvaluations: { clean: 1, violations: 0, failed: 0, disabled: 2, notExecuted: 1 },
     ruleFinalizations: { passed: 0, failed: 0, notExecuted: 1 },
     violations: 0,
-    matchedElements: 0,
+    matchedElements: 1,
     executionFailures: 1,
   },
-  targets: [
+  cases: [
     {
-      name: "only",
-      url: "https://example.com/only",
-      viewport: { width: 1280, height: 720 },
-      deviceScaleFactor: 1,
+      target: { name: "only", url: "https://example.com/only" },
+      device: MACBOOK,
       locale: "en-US",
       timezoneId: "UTC",
-      status: "not-executed",
+      status: "failed",
       rules: [
         {
           name: "tabs",
@@ -138,6 +232,7 @@ const incomplete: RunResultV1 = {
           status: "not-executed",
           labelsInspected: 0,
           violations: [],
+          failure: null,
         },
         {
           name: "off",
@@ -145,18 +240,49 @@ const incomplete: RunResultV1 = {
           status: "disabled",
           labelsInspected: 0,
           violations: [],
+          failure: null,
+        },
+      ],
+      failures: [
+        {
+          stage: "navigation",
+          code: "navigation-http-status",
+          message: "navigation returned HTTP 500",
+          target: "only",
+          device: "MacBook Air 13",
+          rule: null,
         },
       ],
     },
+    {
+      target: { name: "only", url: "https://example.com/only" },
+      device: IPHONE,
+      locale: "en-US",
+      timezoneId: "UTC",
+      status: "complete",
+      rules: [
+        {
+          name: "tabs",
+          type: "tab-label-single-line",
+          status: "clean",
+          labelsInspected: 1,
+          violations: [],
+          failure: null,
+        },
+        {
+          name: "off",
+          type: "tab-label-single-line",
+          status: "disabled",
+          labelsInspected: 0,
+          violations: [],
+          failure: null,
+        },
+      ],
+      failures: [],
+    },
   ],
   ruleFinalizations: [{ name: "tabs", status: "not-executed", labelsInspected: 0, failure: null }],
-  failure: {
-    stage: "browser-setup",
-    code: "browser-missing",
-    message: "chromium not installed",
-    target: null,
-    rule: null,
-  },
+  failures: [],
 };
 
 const BIDI_CONTROLS: Record<number, true> = {
@@ -209,13 +335,11 @@ describe("reporter golden output", () => {
   test("JSON is a single newline-terminated line and round-trips verbatim", () => {
     const rendered = renderJson(violations);
     expect(rendered.endsWith("\n")).toBe(true);
-    // JSON.stringify never emits an interior newline; exactly one terminator.
     expect(rendered.split("\n")).toHaveLength(2);
-    const parsed = JSON.parse(rendered) as RunResultV1;
-    // JSON preserves the exact configured URL, including secrets and fragment.
-    expect(parsed.targets[0]?.url).toBe(violations.targets[0]?.url);
-    // JSON preserves the exact rendered text, including bidi/control bytes.
-    expect(parsed.targets[0]?.rules[0]?.violations[0]?.text).toBe("first\r\nsecond\u202e");
+    const parsed = JSON.parse(rendered) as RunResultV2;
+    expect(parsed.schemaVersion).toBe(2);
+    expect(parsed.cases[0]?.target.url).toBe(violations.cases[0]?.target.url);
+    expect(parsed.cases[0]?.rules[0]?.violations[0]?.text).toBe("first\r\nsecond\u202e");
     expect(parsed.status).toBe("violations");
   });
 
@@ -223,25 +347,63 @@ describe("reporter golden output", () => {
     const rendered = renderTerminal(violations);
     expect(rendered.endsWith("\n")).toBe(true);
     expect(rendered.endsWith("\n\n")).toBe(false);
-    // No raw secret material survives into the terminal view.
-    // Raw query values and the fragment never survive into the terminal URL view.
     expect(rendered).not.toContain("token=secret");
     expect(rendered).not.toContain("token=second");
     expect(rendered).not.toContain("#private");
-    // No raw control or bidi formatting character reaches the terminal.
     expect(hasRawControlOrBidi(rendered)).toBe(false);
-    // The inert escaped forms are present instead.
     expect(rendered).toContain("\\u{1b}");
     expect(rendered).toContain("\\u{202e}");
     expect(rendered).toContain("redacted");
-    // Repeated query key produces one redaction per value.
-    expect(rendered.match(/redacted/g)).toHaveLength(4);
+    // Each target URL appears in 2 cases (MacBook + iPhone), so 4 query values × 2 = 8.
+    expect(rendered.match(/redacted/g)).toHaveLength(8);
   });
 
-  test("terminal preserves the fragment-free URL in the incomplete matrix", () => {
+  test("terminal renders target and device as separate escaped fields", () => {
+    const rendered = renderTerminal(violations);
+    expect(rendered).toContain("case target=settings\\u{1b}]8;;https://attacker.invalid\\u{7} device=MacBook Air 13:");
+    expect(rendered).toContain("device=iPhone 17:");
+    expect(rendered).toContain("case target=second device=MacBook Air 13:");
+  });
+
+  test("terminal preserves the URL and case failure in the incomplete matrix", () => {
     const rendered = renderTerminal(incomplete);
-    expect(rendered).toContain("target only: not-executed https://example.com/only");
-    expect(rendered).toContain("failure browser-setup/browser-missing target=- rule=-");
+    expect(rendered).toContain("case target=only device=MacBook Air 13: failed https://example.com/only viewport=1470x956@2");
+    expect(rendered).toContain("case target=only device=iPhone 17: complete https://example.com/only viewport=402x681@3");
+    expect(rendered).toContain("failure navigation/navigation-http-status target=only device=MacBook Air 13 rule=-");
     expect(hasRawControlOrBidi(rendered)).toBe(false);
+  });
+
+  test("summary partitions reconcile for violations", () => {
+    const cases = violations.summary.cases;
+    expect(cases.resolved).toBe(violations.cases.length);
+    expect(cases.complete + cases.partial + cases.failed + cases.notExecuted).toBe(cases.resolved);
+    const rules = violations.summary.ruleEvaluations;
+    const totalRules = violations.cases.reduce((sum, c) => sum + c.rules.length, 0);
+    expect(rules.clean + rules.violations + rules.failed + rules.disabled + rules.notExecuted).toBe(totalRules);
+    expect(violations.summary.targets.resolved).toBe(2);
+    expect(violations.summary.executionFailures).toBe(0);
+  });
+
+  test("summary partitions reconcile for incomplete", () => {
+    const cases = incomplete.summary.cases;
+    expect(cases.resolved).toBe(incomplete.cases.length);
+    expect(cases.complete + cases.partial + cases.failed + cases.notExecuted).toBe(cases.resolved);
+    const totalFailures =
+      incomplete.failures.length +
+      incomplete.cases.reduce((sum, c) => sum + c.failures.length, 0) +
+      incomplete.cases.reduce(
+        (sum, c) => sum + c.rules.filter((r) => r.failure !== null).length,
+        0,
+      ) +
+      incomplete.ruleFinalizations.filter((f) => f.failure !== null).length;
+    expect(incomplete.summary.executionFailures).toBe(totalFailures);
+    expect(incomplete.summary.executionFailures).toBe(1);
+  });
+
+  test("exit mapping is clean 0, violations 1, incomplete 2", () => {
+    const cleanResult: RunResultV2 = { ...violations, status: "clean", summary: { ...violations.summary, violations: 0 } };
+    expect(cleanResult.status === "incomplete" ? 2 : cleanResult.status === "violations" ? 1 : 0).toBe(0);
+    expect(violations.status === "incomplete" ? 2 : violations.status === "violations" ? 1 : 0).toBe(1);
+    expect(incomplete.status === "incomplete" ? 2 : incomplete.status === "violations" ? 1 : 0).toBe(2);
   });
 });

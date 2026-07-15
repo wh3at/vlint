@@ -1,7 +1,8 @@
 import type {
   CommandProviderConfig,
   CommandProviderOutput,
-  ConfigV1,
+  ConfigV2,
+  DeviceProfile,
   ProviderConfig,
   ReadyCondition,
   RuleInstance,
@@ -124,25 +125,15 @@ function timezoneAt(value: unknown, path: string): string {
 function defaultsAt(value: unknown, path: string, validateKeys = true): TargetDefaults {
   const object = objectAt(value, path);
   if (validateKeys) {
-    exactKeys(
-      object,
-      ["viewport", "deviceScaleFactor", "locale", "timezoneId", "timeoutMs", "browserState", "readyCondition"],
-      path,
-    );
+    exactKeys(object, ["locale", "timezoneId", "timeoutMs", "browserState", "readyCondition"], path);
   }
   const result: {
-    viewport?: Viewport;
-    deviceScaleFactor?: number;
     locale?: string;
     timezoneId?: string;
     timeoutMs?: number;
     browserState?: string;
     readyCondition?: ReadyCondition;
   } = {};
-  if (object.viewport !== undefined) result.viewport = viewportAt(object.viewport, `${path}.viewport`);
-  if (object.deviceScaleFactor !== undefined) {
-    result.deviceScaleFactor = finiteNumberAt(object.deviceScaleFactor, `${path}.deviceScaleFactor`, 0.1, 10);
-  }
   if (object.locale !== undefined) result.locale = localeAt(object.locale, `${path}.locale`);
   if (object.timezoneId !== undefined) result.timezoneId = timezoneAt(object.timezoneId, `${path}.timezoneId`);
   if (object.timeoutMs !== undefined) {
@@ -190,18 +181,7 @@ function targetAt(value: unknown, path: string, ruleNames: ReadonlySet<string>):
   const object = objectAt(value, path);
   exactKeys(
     object,
-    [
-      "name",
-      "url",
-      "viewport",
-      "deviceScaleFactor",
-      "locale",
-      "timezoneId",
-      "timeoutMs",
-      "browserState",
-      "readyCondition",
-      "ruleOverrides",
-    ],
+    ["name", "url", "locale", "timezoneId", "timeoutMs", "browserState", "readyCondition", "ruleOverrides"],
     path,
   );
   const base = defaultsAt(object, path, false);
@@ -235,6 +215,38 @@ function targetsAt(
     names.add(target.name);
   }
   return targets;
+}
+
+function deviceAt(value: unknown, path: string): DeviceProfile {
+  const object = objectAt(value, path);
+  exactKeys(
+    object,
+    ["name", "viewport", "screen", "deviceScaleFactor", "isMobile", "hasTouch", "userAgent"],
+    path,
+  );
+  const result: DeviceProfile = {
+    name: nameAt(object.name, `${path}.name`),
+    viewport: viewportAt(object.viewport, `${path}.viewport`),
+    screen: viewportAt(object.screen, `${path}.screen`),
+    deviceScaleFactor: finiteNumberAt(object.deviceScaleFactor, `${path}.deviceScaleFactor`, 0.1, 10),
+    isMobile: booleanAt(object.isMobile, `${path}.isMobile`),
+    hasTouch: booleanAt(object.hasTouch, `${path}.hasTouch`),
+  };
+  if (object.userAgent === undefined) return result;
+  const userAgent = stringAt(object.userAgent, `${path}.userAgent`);
+  if (userAgent.length === 0) issue(`${path}.userAgent`, "must not be empty");
+  return { ...result, userAgent };
+}
+
+function devicesAt(value: unknown, path: string): readonly DeviceProfile[] {
+  if (!Array.isArray(value) || value.length === 0) issue(path, "expected non-empty array");
+  const devices = value.map((item, index) => deviceAt(item, `${path}[${index}]`));
+  const names = new Set<string>();
+  for (const device of devices) {
+    if (names.has(device.name)) issue(path, `duplicate device name: ${device.name}`);
+    names.add(device.name);
+  }
+  return devices;
 }
 
 function ruleAt(value: unknown, path: string): RuleInstance {
@@ -320,26 +332,27 @@ function failureFor(source: Source, message: string): Failure {
     code: source === "config" ? "config-schema-invalid" : "provider-output-invalid",
     message,
     target: null,
+    device: null,
     rule: null,
   };
 }
 
-export function parseConfig(value: unknown): BoundaryResult<ConfigV1> {
+export function parseConfig(value: unknown): BoundaryResult<ConfigV2> {
   try {
     const object = objectAt(value, "config");
-    exactKeys(object, ["schemaVersion", "provider", "defaults", "rules"], "config");
-    if (object.schemaVersion !== 1) issue("config.schemaVersion", "expected 1");
+    exactKeys(object, ["schemaVersion", "devices", "provider", "defaults", "rules"], "config");
+    if (object.schemaVersion !== 2) issue("config.schemaVersion", "expected 2");
     const rules = object.rules === undefined ? undefined : rulesAt(object.rules, "config.rules");
     const ruleNames = new Set((rules ?? [{ name: "tab-label-single-line" }]).map((rule) => rule.name));
+    const devices = devicesAt(object.devices, "config.devices");
     const config: {
-      schemaVersion: 1;
-      provider: ProviderConfig;
+      schemaVersion: 2;
+      devices: readonly DeviceProfile[];
+      provider?: ProviderConfig;
       defaults?: TargetDefaults;
       rules?: readonly RuleInstance[];
-    } = {
-      schemaVersion: 1,
-      provider: providerAt(object.provider, "config.provider", ruleNames),
-    };
+    } = { schemaVersion: 2, devices };
+    if (object.provider !== undefined) config.provider = providerAt(object.provider, "config.provider", ruleNames);
     if (object.defaults !== undefined) config.defaults = defaultsAt(object.defaults, "config.defaults");
     if (rules !== undefined) config.rules = rules;
     return boundarySuccess(config);
@@ -363,6 +376,7 @@ export function parseCommandProviderOutput(
         code: "provider-empty",
         message: "provider returned zero targets",
         target: null,
+        device: null,
         rule: null,
       });
     }

@@ -14,6 +14,7 @@
     "test:acceptance": "bun test tests/acceptance",
     "build:linux-x64": "bun run scripts/build.ts linux-x64",
     "build:feasibility": "bun run scripts/build.ts feasibility",
+    "package:release": "bun run scripts/package-release.ts",
     "release:validate": "bun run scripts/release-validate.ts",
     "build:fixture-server": "bun run scripts/build.ts fixture-server",
     "test:feasibility": "bun run build:feasibility && bun run build:fixture-server && bun test tests/smoke/compiled-runtime.test.ts"

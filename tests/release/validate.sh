@@ -8,9 +8,8 @@
 #                                     cache/launch seam with a test-only probe.
 #
 #   validate.sh release <archive> \   U6 release gate. Validates the production
-#       <checksum> [fixture-server]   archive (vlint-v<semver>-linux-x64.tar.gz)
-#                                     plus SHA256SUMS against the actual compiled
-#                                     CLI inside a clean, network-isolated guest.
+#       <checksum> <fixture> <deb> \   tarball, Ubuntu package, tag-fixed installer,
+#       <installer>                  and SHA256SUMS against the compiled CLI.
 #
 # Both modes build the same image, run everything inside disposable guests as a
 # non-root user, and tear down all host state (image + temp dirs) on exit.
@@ -18,6 +17,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 IMAGE="vlint-u1-feasibility:local"
+BASE_IMAGE="ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf"
 TMP=$(mktemp -d)
 HOME_OK="$TMP/home-ok"
 HOME_EMPTY="$TMP/home-empty"
@@ -178,19 +178,23 @@ printf 'U1 compiled Playwright feasibility gate passed\n'
 }
 
 # ---------------------------------------------------------------------------
-# U6 release gate: validate the shipped archive against the real compiled CLI.
+# U6 release gate: validate every shipped asset against the real compiled CLI.
 #   $1 archive     - vlint-v<semver>-linux-x64.tar.gz
-#   $2 checksum    - SHA256SUMS (filename-relative entry for the archive)
-#   $3 fixture     - compiled single-line-tab fixture server (optional;
-#                    defaults to $ROOT/dist/vlint-release-fixture-server)
+#   $2 checksum    - SHA256SUMS for archive, .deb, and installer
+#   $3 fixture     - compiled single-line-tab fixture server
+#   $4 deb         - vlint_<semver>_amd64.deb
+#   $5 installer   - install-v<semver>.sh
 # ---------------------------------------------------------------------------
 run_release() {
   archive=$1
   checksum=$2
-  fixture=${3:-$ROOT/dist/vlint-release-fixture-server}
+  fixture=$3
+  deb=$4
+  installer=$5
 
-  if [ -z "$archive" ] || [ -z "$checksum" ]; then
-    printf 'release mode requires <archive> and <checksum>\n' >&2
+  if [ -z "$archive" ] || [ -z "$checksum" ] || [ -z "$fixture" ] \
+    || [ -z "$deb" ] || [ -z "$installer" ]; then
+    printf 'release mode requires <archive> <checksum> <fixture> <deb> <installer>\n' >&2
     exit 2
   fi
 
@@ -198,8 +202,12 @@ run_release() {
   abs_archive=$(CDPATH= cd -- "$(dirname -- "$archive")" && pwd)/$(basename -- "$archive")
   abs_checksum=$(CDPATH= cd -- "$(dirname -- "$checksum")" && pwd)/$(basename -- "$checksum")
   abs_fixture=$(CDPATH= cd -- "$(dirname -- "$fixture")" && pwd)/$(basename -- "$fixture")
+  abs_deb=$(CDPATH= cd -- "$(dirname -- "$deb")" && pwd)/$(basename -- "$deb")
+  abs_installer=$(CDPATH= cd -- "$(dirname -- "$installer")" && pwd)/$(basename -- "$installer")
 
   base=$(basename -- "$abs_archive")
+  deb_base=$(basename -- "$abs_deb")
+  installer_base=$(basename -- "$abs_installer")
   semver=${base#vlint-v}
   semver=${semver%-linux-x64.tar.gz}
 
@@ -208,18 +216,21 @@ run_release() {
   mkdir -p "$EXTRACT"
   chmod 0777 "$EXTRACT"
 
-  # --- Integrity + staging: checksum, extraction, mode, inside the guest. ---
-  # The archive is staged under its real name so `sha256sum -c` verifies both
-  # the digest and the filename binding straight from the published SHA256SUMS.
+  # Integrity + staging. Real published names preserve manifest filename binding.
   docker run --rm --user 10001:10001 \
-    -e HOME=/home/vlint \
     -e ARCHIVE_NAME="$base" \
-    -v "$abs_archive:/in/archive.tar.gz:ro" \
+    -e DEB_NAME="$deb_base" \
+    -e INSTALLER_NAME="$installer_base" \
+    -v "$abs_archive:/in/archive:ro" \
+    -v "$abs_deb:/in/deb:ro" \
+    -v "$abs_installer:/in/installer:ro" \
     -v "$abs_checksum:/in/SHA256SUMS:ro" \
     -v "$EXTRACT:/work" \
     "$IMAGE" sh -c '
       set -eu
-      cp /in/archive.tar.gz "/work/$ARCHIVE_NAME"
+      cp /in/archive "/work/$ARCHIVE_NAME"
+      cp /in/deb "/work/$DEB_NAME"
+      cp /in/installer "/work/$INSTALLER_NAME"
       cp /in/SHA256SUMS /work/SHA256SUMS
       cd /work
       sha256sum -c SHA256SUMS
@@ -229,6 +240,48 @@ run_release() {
       mode=$(stat -c "%a" vlint)
       test "$mode" = "755" || { echo "expected mode 0755, got $mode" >&2; exit 1; }
     '
+
+
+  # Exercise the installer without network by substituting only curl transport.
+  INSTALL_HOME="$TMP/installer-home"
+  mkdir -p "$INSTALL_HOME"
+  chmod 0777 "$INSTALL_HOME"
+  installer_output=$(docker run --rm --network none --user 10001:10001 \
+    -e HOME=/home/vlint \
+    -e VLINT_INSTALL_DIR=bin \
+    -e ARCHIVE_NAME="$base" \
+    -v "$abs_archive:/in/archive:ro" \
+    -v "$abs_checksum:/in/SHA256SUMS:ro" \
+    -v "$abs_installer:/in/installer:ro" \
+    -v "$INSTALL_HOME:/work" \
+    -w /work \
+    "$IMAGE" sh -c '
+      set -eu
+      mkdir -p /work/fake-bin
+      cat > /work/fake-bin/curl <<'"'"'EOF'"'"'
+#!/bin/sh
+set -eu
+output=
+url=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -o) output=$2; shift 2 ;;
+    -*) shift ;;
+    *) url=$1; shift ;;
+  esac
+done
+case "$url" in
+  */SHA256SUMS) cp /in/SHA256SUMS "$output" ;;
+  */"$ARCHIVE_NAME") cp /in/archive "$output" ;;
+  *) exit 22 ;;
+esac
+EOF
+      chmod 0755 /work/fake-bin/curl
+      PATH="/work/fake-bin:$PATH" sh /in/installer
+      /work/bin/vlint --version
+    ')
+  assert_contains "$installer_output" "vlint v$semver installed"
+  assert_contains "$installer_output" "vlint $semver"
 
   # --- Network-enabled guest: version + idempotent browser install + force. ---
   version_output=$(docker run --rm --user 10001:10001 \
@@ -242,7 +295,7 @@ run_release() {
     -e HOME=/home/vlint \
     -v "$HOME_OK:/home/vlint" \
     -v "$EXTRACT:/opt/release:ro" \
-    "$IMAGE" /opt/release/vlint browser install)
+    "$IMAGE" /opt/release/vlint browser install --with-deps)
   assert_contains "$install_output" 'chromium'
   assert_contains "$install_output" 'ready'
 
@@ -260,12 +313,92 @@ run_release() {
     "$IMAGE" /opt/release/vlint browser install --force)
   assert_contains "$force_output" 'reinstalled'
 
-  # --- Network-disabled guest: persisted cache drives a clean check (exit 0). ---
-  check_output=$(docker run --rm --network none --user 10001:10001 \
-    -e HOME=/home/vlint \
-    -v "$HOME_OK:/home/vlint" \
+  # Exercise --with-deps where the browser libraries are demonstrably absent.
+  DEPS_HOME="$TMP/deps-home"
+  DEPS_PROJECT="$TMP/deps-project"
+  mkdir -p "$DEPS_HOME" "$DEPS_PROJECT"
+  chmod 0777 "$DEPS_HOME" "$DEPS_PROJECT"
+  deps_output=$(docker run --rm --user 0 \
+    -e DEBIAN_FRONTEND=noninteractive \
+    -e HOME=/cache \
+    -v "$DEPS_HOME:/cache" \
+    -v "$DEPS_PROJECT:/project" \
     -v "$EXTRACT:/opt/release:ro" \
     -v "$abs_fixture:/opt/server:ro" \
+    "$BASE_IMAGE" sh -c '
+      set -eu
+      if dpkg-query -W libnss3 >/dev/null 2>&1; then
+        echo "expected base guest without libnss3" >&2
+        exit 1
+      fi
+      /opt/release/vlint browser install --with-deps
+      dpkg-query -W libnss3 >/dev/null
+      cd /project
+      /opt/release/vlint init >/dev/null
+      /opt/server 4175 >/tmp/server.out & server=$!
+      sleep 1
+      set +e
+      /opt/release/vlint check --url http://127.0.0.1:4175/ --format json
+      status=$?
+      set -e
+      kill -TERM "$server"
+      wait "$server" 2>/dev/null || true
+      exit "$status"
+    ')
+  assert_contains "$deps_output" 'chromium'
+  assert_contains "$deps_output" 'ready'
+  assert_contains "$deps_output" '"schemaVersion":2'
+  assert_contains "$deps_output" '"status":"clean"'
+  assert_contains "$deps_output" 'macbook-air-13-m5'
+  assert_contains "$deps_output" 'iphone-17'
+
+  # Validate the documented .deb quick start in an otherwise vanilla Ubuntu
+  # guest. A missing Depends entry must fail apt install, setup, or browser launch.
+  DEB_HOME="$TMP/deb-home"
+  SETUP_PROJECT="$TMP/setup-project"
+  mkdir -p "$DEB_HOME" "$SETUP_PROJECT"
+  chmod 0777 "$DEB_HOME" "$SETUP_PROJECT"
+  deb_setup_output=$(docker run --rm --user 0 \
+    -e DEBIAN_FRONTEND=noninteractive \
+    -e HOME=/cache \
+    -v "$DEB_HOME:/cache" \
+    -v "$SETUP_PROJECT:/project" \
+    -v "$abs_deb:/tmp/vlint.deb:ro" \
+    -v "$abs_fixture:/opt/server:ro" \
+    "$BASE_IMAGE" sh -c '
+      set -eu
+      apt-get update >/dev/null
+      apt-get install -y /tmp/vlint.deb >/dev/null
+      test "$(dpkg-deb -f /tmp/vlint.deb Package)" = "vlint"
+      test "$(dpkg-deb -f /tmp/vlint.deb Architecture)" = "amd64"
+      cd /project
+      vlint setup
+      vlint setup
+      /opt/server 4174 >/tmp/server.out & server=$!
+      sleep 1
+      set +e
+      vlint check --url http://127.0.0.1:4174/ --format json
+      status=$?
+      set -e
+      kill -TERM "$server"
+      wait "$server" 2>/dev/null || true
+      exit "$status"
+    ')
+  assert_contains "$deb_setup_output" 'config created'
+  assert_contains "$deb_setup_output" 'config already-present'
+  assert_contains "$deb_setup_output" '"schemaVersion":2'
+  assert_contains "$deb_setup_output" '"status":"clean"'
+  assert_contains "$deb_setup_output" 'macbook-air-13-m5'
+  assert_contains "$deb_setup_output" 'iphone-17'
+
+  # Network-disabled guest: the cache created solely by setup drives a clean check.
+  check_output=$(docker run --rm --network none --user 10001:10001 \
+    -e HOME=/home/vlint \
+    -v "$DEB_HOME:/home/vlint" \
+    -v "$SETUP_PROJECT:/project:ro" \
+    -v "$EXTRACT:/opt/release:ro" \
+    -v "$abs_fixture:/opt/server:ro" \
+    -w /project \
     "$IMAGE" sh -c '
       set +e
       /opt/server 4173 >/tmp/server.out & server=$!
@@ -284,8 +417,10 @@ run_release() {
       test "$term_status" -eq 0
       exit 0
     ')
-  assert_contains "$check_output" '"schemaVersion":1'
+  assert_contains "$check_output" '"schemaVersion":2'
   assert_contains "$check_output" '"status":"clean"'
+  assert_contains "$check_output" 'macbook-air-13-m5'
+  assert_contains "$check_output" 'iphone-17'
 
   # --- No browser + no network: check must NOT auto-install; typed failure. ---
   set +e
@@ -293,8 +428,13 @@ run_release() {
     -e HOME=/home/vlint \
     -v "$HOME_EMPTY:/home/vlint" \
     -v "$EXTRACT:/opt/release:ro" \
-    -v "$abs_fixture:/opt/server:ro" \
-    "$IMAGE" /opt/release/vlint check --url http://127.0.0.1:4173/ --format json 2>&1)
+    "$IMAGE" sh -c '
+      set -eu
+      mkdir /tmp/project
+      cd /tmp/project
+      /opt/release/vlint init >/dev/null
+      /opt/release/vlint check --url http://127.0.0.1:4173/ --format json
+    ' 2>&1)
   missing_check_status=$?
   set -e
   assert_status "$missing_check_status" 2
@@ -325,7 +465,7 @@ case "${1:-feasibility}" in
     run_release "$@"
     ;;
   *)
-    printf 'usage: %s [feasibility | release <archive> <checksum> [fixture-server]]\n' "$0" >&2
+    printf 'usage: %s [feasibility | release <archive> <checksum> <fixture> <deb> <installer>]\n' "$0" >&2
     exit 2
     ;;
 esac

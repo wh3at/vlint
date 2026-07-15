@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ideation: vlint installation simplification</title>
+  <style>
+    :root { color-scheme: light dark; --bg:#f6f7f9; --panel:#fff; --text:#18212f; --muted:#596579; --line:#d9dee7; --accent:#2457d6; --soft:#edf3ff; --warn:#fff3d8; --bad:#ffeded; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#10141b; --panel:#171d27; --text:#e8edf5; --muted:#aab4c4; --line:#303949; --accent:#8eb1ff; --soft:#1c2c4a; --warn:#3a2e12; --bad:#3a2023; } }
+    * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--text); font:15px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:920px; margin:0 auto; padding:48px 24px 72px; } h1,h2,h3 { line-height:1.25; } h1 { font-size:2rem; margin:.25rem 0 1rem; } h2 { margin-top:2.5rem; font-size:1.35rem; } h3 { margin:.2rem 0 .8rem; font-size:1.15rem; }
+    p,li { max-width:76ch; } code { font: .92em ui-monospace,SFMono-Regular,Consolas,monospace; background:var(--soft); padding:.1rem .3rem; border-radius:4px; }
+    .eyebrow { color:var(--accent); font-weight:750; letter-spacing:.08em; text-transform:uppercase; font-size:.75rem; }
+    .meta,.stats { display:flex; flex-wrap:wrap; gap:.55rem; color:var(--muted); } .chip { border:1px solid var(--line); border-radius:999px; padding:.28rem .65rem; background:var(--panel); }
+    .callout { background:var(--warn); border-radius:10px; padding:1rem 1.15rem; margin:1.2rem 0; }
+    .flow { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin:1rem 0; } .flow span { background:var(--soft); border-radius:8px; padding:.55rem .75rem; font-weight:650; } .flow b { color:var(--muted); }
+    .jump { display:grid; gap:.35rem; padding-left:1.2rem; } a { color:var(--accent); }
+    article { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:1.2rem 1.3rem; margin:1rem 0; }
+    dl { display:grid; grid-template-columns:7rem 1fr; gap:.45rem .8rem; margin:0; } dt { color:var(--muted); font-weight:700; } dd { margin:0; }
+    table { width:100%; border-collapse:collapse; background:var(--panel); } th,td { border:1px solid var(--line); padding:.65rem; text-align:left; vertical-align:top; } th { background:var(--soft); }
+    footer { margin-top:3rem; color:var(--muted); font-size:.85rem; border-top:1px solid var(--line); padding-top:1rem; }
+    @media (max-width:640px) { main { padding:28px 16px 48px; } dl { grid-template-columns:1fr; } dt { margin-top:.35rem; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Repository-grounded ideation</div>
+    <h1>vlint のインストール簡略化</h1>
+    <div class="meta">
+      <span class="chip">Date: <time datetime="2026-07-15">2026-07-15</time></span>
+      <span class="chip">Topic: installation-simplification</span>
+      <span class="chip">Focus: README Install / OS prerequisites / Browser setup</span>
+      <span class="chip">Mode: repo-grounded</span>
+    </div>
+  </header>
+
+  <section id="grounding-context">
+    <h2>Grounding Context</h2>
+    <p>現状は、version と repository path の置換、archive と checksum の個別取得、検証、展開、PATH への配置、22個の Ubuntu package、Playwright browser、project config の準備が別々です。しかも README は <code>vlint init</code> を案内せず、設定 schema v1 を掲載していますが、実装は schema v2 を生成します。</p>
+    <div class="callout"><strong>先に直すべき不整合:</strong> <code>src/commands/check.ts:24-26</code> は <code>--url</code> 分岐より先に config を読みます。したがって README の「ad-hoc URL check は config 不要」は現行実装と一致しません。なお、更新対象は設定 schema であり、JSON出力 schema v1 は別契約なので変えません。</div>
+  </section>
+
+  <section id="topic-axes">
+    <h2>Topic Axes</h2>
+    <ul>
+      <li>Binary acquisition — download、checksum、PATH、version選択</li>
+      <li>System prerequisites — Ubuntu共有libraryとroot権限</li>
+      <li>First-run setup — browser cache、config、初回check</li>
+      <li>Recovery and trust —失敗時の自己解決性とsupply-chain境界</li>
+    </ul>
+  </section>
+
+  <section id="ranked-ideas">
+    <h2>Ranked Ideas</h2>
+    <ol class="jump">
+      <li><a href="#idea-1">コピー可能な Quick Start を先頭へ</a></li>
+      <li><a href="#idea-2">tag固定・user-local installer</a></li>
+      <li><a href="#idea-3"><code>browser install --with-deps</code></a></li>
+      <li><a href="#idea-4">Ubuntu 24.04専用 <code>.deb</code></a></li>
+      <li><a href="#idea-5">明示的 <code>vlint setup</code></a></li>
+    </ol>
+
+    <article id="idea-1">
+      <h3>1. コピー可能な Quick Start を README 先頭へ</h3>
+      <div class="flow"><span>binary install</span><b>→</b><span>OS deps</span><b>→</b><span>vlint init</span><b>→</b><span>browser install</span><b>→</b><span>check --url</span></div>
+      <dl>
+        <dt>Description</dt><dd><code>&lt;OWNER&gt;/&lt;REPO&gt;</code> を実在する <code>wh3at/vlint</code> に置換し、詳細説明より前に一つの線形ブロックを置きます。既存 <code>vlint init</code> を初回導線へ加え、設定例をschema v2へ同期します。providerなしのinit生成configでは引数なしcheckが <code>targets-empty</code> になるため、最初の成功例は <code>vlint check --url ...</code> にします。</dd>
+        <dt>Axis</dt><dd>First-run setup</dd>
+        <dt>Basis</dt><dd>direct: <code>README.md:41-52, 93-107, 123-125, 140-168</code>; <code>src/cli.ts:84-86,119-126</code>; <code>src/commands/init.ts:131-135</code>; <code>src/commands/check.ts:24-31</code>.</dd>
+        <dt>Rationale</dt><dd>コード変更なしで、コピー不能なplaceholder、未記載の必須コマンド、schema不整合を同時に除去できます。操作数削減より先に「書いてある通りでは動かない」状態を解消するP0です。</dd>
+        <dt>Downsides</dt><dd>詳細節との重複を持つため、release時にQuick Startも検証する仕組みが必要です。</dd>
+        <dt>Confidence</dt><dd>98%</dd><dt>Complexity</dt><dd>Low</dd>
+      </dl>
+    </article>
+
+    <article id="idea-2">
+      <h3>2. tag固定・user-local installer</h3>
+      <dl>
+        <dt>Description</dt><dd>release asset として version固定の installer を配り、temp directoryでarchiveと該当checksum entryを取得・検証してから <code>~/.local/bin/vlint</code> へatomic installします。標準導線は <code>curl -fsSLO .../install.sh &amp;&amp; sh install.sh</code> とし、<code>curl | sudo sh</code> は避けます。手動検証手順は残します。</dd>
+        <dt>Axis</dt><dd>Binary acquisition</dd>
+        <dt>Basis</dt><dd>direct: <code>README.md:40-54</code> の5操作を1つに畳めます。external: GitHubは固定asset名なら <a href="https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases">latest release download URL</a> を提供しますが、再現性のためdefaultはtag固定にします。</dd>
+        <dt>Rationale</dt><dd>Node/Bun/package manager不要という製品特性を保ったまま、最も面倒な取得・検証・展開・配置を自動化します。</dd>
+        <dt>Downsides</dt><dd><code>~/.local/bin</code> がPATH外なら案内が必要です。checksumは署名ではなく、scriptとarchiveが同じGitHub trust rootに属する点は現状と同じです。asset追加時は現行の単一entry <code>SHA256SUMS</code> 検証を見直す必要があります。</dd>
+        <dt>Confidence</dt><dd>90%</dd><dt>Complexity</dt><dd>Medium</dd>
+      </dl>
+    </article>
+
+    <article id="idea-3">
+      <h3>3. <code>vlint browser install --with-deps</code></h3>
+      <dl>
+        <dt>Description</dt><dd>通常の <code>browser install</code> は非特権のまま維持し、明示flag時だけUbuntu packageとbrowser payloadを順に導入します。vlint自体は一般userで起動し、apt subprocessだけを昇格させ、browser cacheをroot所有にしません。</dd>
+        <dt>Axis</dt><dd>System prerequisites</dd>
+        <dt>Basis</dt><dd>direct: <code>README.md:75-84,93-96</code> の二つの導入ブロックを一つにできます。external: Playwright公式にも <a href="https://playwright.dev/docs/browsers">install --with-deps</a> があります。</dd>
+        <dt>Rationale</dt><dd>Ubuntu package listの手動コピーとPlaywright側dependency tableのdriftを減らし、PRDが禁じる <code>check</code> 中の暗黙導入とは分離された明示操作を保てます。</dd>
+        <dt>Downsides</dt><dd>現READMEの「OS packageを変更しない」保証をflag付き例外へ変更します。sudo・apt network・失敗途中状態の設計と検証が必要です。</dd>
+        <dt>Confidence</dt><dd>84%</dd><dt>Complexity</dt><dd>Medium</dd>
+      </dl>
+    </article>
+
+    <article id="idea-4">
+      <h3>4. Ubuntu 24.04 amd64専用 <code>.deb</code></h3>
+      <dl>
+        <dt>Description</dt><dd>GitHub Releaseにchecksummed local <code>.deb</code> を追加し、binary配置とREADMEの共有library群を package <code>Depends</code> へまとめます。browser downloadはpostinstで行わず、userとしての明示的 <code>vlint browser install</code> を残します。</dd>
+        <dt>Axis</dt><dd>System prerequisites</dd>
+        <dt>Basis</dt><dd>direct: 対応環境は <code>README.md:9-11</code> のUbuntu 24.04 x64だけです。external: <a href="https://www.debian.org/doc/debian-policy/ch-relationships.html">Debian Policy</a> はruntime必須packageを <code>Depends</code> で宣言する契約を定めます。</dd>
+        <dt>Rationale</dt><dd><code>sudo apt install ./vlint_..._amd64.deb</code> 一回でsystem binaryとOS libraryを標準package transactionへ寄せられます。</dd>
+        <dt>Downsides</dt><dd>build metadata、uninstall、依存名、clean Ubuntu install、release checksumを新たに保守します。local deb自体はAPT repository署名の恩恵を受けないため、release checksum検証は残ります。</dd>
+        <dt>Confidence</dt><dd>78%</dd><dt>Complexity</dt><dd>High</dd>
+      </dl>
+    </article>
+
+    <article id="idea-5">
+      <h3>5. 明示的 <code>vlint setup</code></h3>
+      <dl>
+        <dt>Description</dt><dd><code>vlint init</code> と <code>vlint browser install</code> を一つの明示コマンドに合成します。有効な既存configはskip、未存在ならexclusive create、invalid/unreadable/symlink等はfail。途中でbrowser導入が失敗しても再実行で回復可能なidempotent挙動にします。</dd>
+        <dt>Axis</dt><dd>First-run setup</dd>
+        <dt>Basis</dt><dd>direct: 二つの機能はすでに <code>src/cli.ts:78-86,106-126</code> に独立して存在し、initは <code>src/commands/init.ts:139-189</code> で安全なexclusive createを行います。</dd>
+        <dt>Rationale</dt><dd>PRDの「checkとbrowser導入を別操作にする」を守りつつ、初回setupを一 invocationにします。</dd>
+        <dt>Downsides</dt><dd>project-local configとuser-global browser cacheを一コマンドに混ぜ、削減は2 invocationから1だけです。上位案より効果が小さいため最後です。</dd>
+        <dt>Confidence</dt><dd>82%</dd><dt>Complexity</dt><dd>Medium</dd>
+      </dl>
+    </article>
+  </section>
+
+  <section id="rejection-summary">
+    <h2>Rejection Summary</h2>
+    <table>
+      <thead><tr><th>#</th><th>Idea</th><th>Reason Rejected / Deferred</th></tr></thead>
+      <tbody>
+        <tr><td>6</td><td><code>check --install-browser</code></td><td>Refuted。明示flagでも、PRDの「通常検査とbrowser導入は別操作」に反します。</td></tr>
+        <tr><td>7</td><td><code>vlint doctor</code></td><td>Deferred。失敗ループは減らしますが、nominal install操作を減らさず一コマンド増やします。失敗hint強化は補助策として有効です。</td></tr>
+        <tr><td>8</td><td>Homebrew / mise</td><td>Deferred。既存利用者には便利ですが、vlintのためにpackage managerを入れると現行より重く、OS libraryとbrowserも未解決です。</td></tr>
+        <tr><td>9</td><td>公式container</td><td>Deferred。CI/disposable用途には適しますが、Docker、network、volume、browser sandbox、cache ownershipという別の操作面を増やします。</td></tr>
+        <tr><td>10</td><td>installer内でsudo aptとbrowserまで全自動</td><td>Rejected。短く見えても、remote scriptにroot変更と大容量downloadを同時委譲し、trust/失敗境界が不透明です。</td></tr>
+        <tr><td>11</td><td>Homebrew tapを主要導線にする</td><td>Rejected。Ubuntu 24.04専用toolに新しいbootstrap、formula更新、trust surfaceを足す価値が不足します。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section id="sources">
+    <h2>Sources &amp; References</h2>
+    <ul>
+      <li><a href="https://github.com/wh3at/vlint/blob/main/README.md">README.md</a></li>
+      <li><a href="https://github.com/wh3at/vlint/blob/main/src/cli.ts">src/cli.ts</a></li>
+      <li><a href="https://github.com/wh3at/vlint/blob/main/src/commands/init.ts">src/commands/init.ts</a></li>
+      <li><a href="https://github.com/wh3at/vlint/blob/main/src/commands/check.ts">src/commands/check.ts</a></li>
+      <li><a href="https://github.com/wh3at/vlint/blob/main/.github/workflows/release.yml">.github/workflows/release.yml</a></li>
+      <li><a href="https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases">GitHub Docs: Linking to releases</a></li>
+      <li><a href="https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases">GitHub Docs: Immutable releases</a></li>
+      <li><a href="https://playwright.dev/docs/browsers">Playwright: Browsers and dependencies</a></li>
+      <li><a href="https://www.debian.org/doc/debian-policy/ch-relationships.html">Debian Policy: Declaring relationships between packages</a></li>
+    </ul>
+  </section>
+
+  <footer class="composition-signal">Composed 2026-07-15T00:00Z by ce-ideate from the request to simplify vlint README installation steps.</footer>
+</main>
+</body>
+</html>

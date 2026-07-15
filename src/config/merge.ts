@@ -1,9 +1,12 @@
 import { isAbsolute, resolve } from "node:path";
 import type {
+  DeviceProfile,
+  EffectiveAuditCase,
   EffectiveRule,
   EffectiveRuleForTarget,
   EffectiveTarget,
   LoadedConfig,
+  ReadyState,
   ResolvedCheckPlan,
   RuleInstance,
   Target,
@@ -11,8 +14,6 @@ import type {
 } from "../contracts/config";
 
 const BUILTIN_DEFAULTS = {
-  viewport: { width: 1280, height: 720 },
-  deviceScaleFactor: 1,
   locale: "en-US",
   timezoneId: "UTC",
   timeoutMs: 30_000,
@@ -35,7 +36,6 @@ export function normalizeRules(rules: readonly RuleInstance[] | undefined): read
   }));
 }
 
-
 function effectiveRulesForTarget(
   rules: readonly EffectiveRule[],
   target: Target,
@@ -51,21 +51,18 @@ function effectiveRulesForTarget(
   });
 }
 
-export function makeEffectiveTarget(
-  target: Target,
-  defaults: TargetDefaults,
-  rules: readonly EffectiveRule[],
-  directory: string,
-): EffectiveTarget {
-  const viewport = target.viewport ?? defaults.viewport ?? BUILTIN_DEFAULTS.viewport;
-  const readyCondition = target.readyCondition ?? defaults.readyCondition;
+interface Presentation {
+  readonly locale: string;
+  readonly timezoneId: string;
+  readonly timeoutMs: number;
+  readonly browserState: string | null;
+  readonly readyCondition: { readonly selector: string; readonly state: ReadyState } | null;
+}
+
+function resolvePresentation(target: Target, defaults: TargetDefaults, directory: string): Presentation {
   const browserState = target.browserState ?? defaults.browserState;
+  const readyCondition = target.readyCondition ?? defaults.readyCondition;
   return {
-    name: target.name,
-    url: target.url,
-    viewport,
-    deviceScaleFactor:
-      target.deviceScaleFactor ?? defaults.deviceScaleFactor ?? BUILTIN_DEFAULTS.deviceScaleFactor,
     locale: target.locale ?? defaults.locale ?? BUILTIN_DEFAULTS.locale,
     timezoneId: target.timezoneId ?? defaults.timezoneId ?? BUILTIN_DEFAULTS.timezoneId,
     timeoutMs: target.timeoutMs ?? defaults.timeoutMs ?? BUILTIN_DEFAULTS.timeoutMs,
@@ -75,17 +72,62 @@ export function makeEffectiveTarget(
       readyCondition === undefined
         ? null
         : { selector: readyCondition.selector, state: readyCondition.state ?? "visible" },
+  };
+}
+
+export function makeEffectiveTarget(
+  target: Target,
+  device: DeviceProfile,
+  defaults: TargetDefaults,
+  rules: readonly EffectiveRule[],
+  directory: string,
+): EffectiveTarget {
+  return {
+    name: target.name,
+    url: target.url,
+    viewport: device.viewport,
+    deviceScaleFactor: device.deviceScaleFactor,
+    ...resolvePresentation(target, defaults, directory),
+    rules: effectiveRulesForTarget(rules, target),
+  };
+}
+
+function makeAuditCase(
+  target: Target,
+  device: DeviceProfile,
+  defaults: TargetDefaults,
+  rules: readonly EffectiveRule[],
+  directory: string,
+): EffectiveAuditCase {
+  return {
+    name: target.name,
+    url: target.url,
+    deviceName: device.name,
+    viewport: device.viewport,
+    screen: device.screen,
+    deviceScaleFactor: device.deviceScaleFactor,
+    isMobile: device.isMobile,
+    hasTouch: device.hasTouch,
+    userAgent: device.userAgent ?? null,
+    ...resolvePresentation(target, defaults, directory),
     rules: effectiveRulesForTarget(rules, target),
   };
 }
 
 export function resolveTargets(config: LoadedConfig, targets: readonly Target[]): ResolvedCheckPlan {
-  return {
-    rules: config.rules,
-    targets: targets.map((target) =>
-      makeEffectiveTarget(target, config.defaults, config.rules, config.directory),
+  const primaryDevice = config.devices[0];
+  const logicalTargets =
+    primaryDevice === undefined
+      ? []
+      : targets.map((target) =>
+          makeEffectiveTarget(target, primaryDevice, config.defaults, config.rules, config.directory),
+        );
+  const cases = targets.flatMap((target) =>
+    config.devices.map((device) =>
+      makeAuditCase(target, device, config.defaults, config.rules, config.directory),
     ),
-  };
+  );
+  return { targets: logicalTargets, cases, rules: config.rules };
 }
 
 export function resolveAdHocTarget(config: LoadedConfig, url: string): ResolvedCheckPlan {

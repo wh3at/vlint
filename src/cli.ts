@@ -1,14 +1,20 @@
 import { boundaryFailure, boundarySuccess } from "./contracts/failure";
 import { runBrowserInstall } from "./commands/browser-install";
 import { runCheckCommand } from "./commands/check";
+import { CONFIG_NAME, runInitCommand, type InitResult } from "./commands/init";
+import { runSetupCommand, type SetupResult } from "./commands/setup";
 import {
+  isDependenciesInstallerWorkerInvocation,
+  isDependenciesSupervisorWorkerInvocation,
   isInstallerWorkerInvocation,
   isOopDownloaderInvocation,
+  runDependenciesInstallerWorkerMain,
+  runDependenciesSupervisorWorkerMain,
   runInstallerWorkerMain,
   runOopDownloaderMain,
 } from "./browser/install";
 import type { BoundaryResult } from "./contracts/failure";
-import type { RunResultV1 } from "./contracts/result";
+import type { RunResultV2 } from "./contracts/result";
 import { parseAdHocUrl } from "./config/schema";
 import { renderJson } from "./output/json";
 import { escapeTerminal, renderTerminal } from "./output/terminal";
@@ -18,7 +24,9 @@ export type OutputFormat = "terminal" | "json";
 export type CliInvocation =
   | { readonly kind: "version" }
   | { readonly kind: "check"; readonly url: string | null; readonly format: OutputFormat }
-  | { readonly kind: "browser-install"; readonly force: boolean }
+  | { readonly kind: "browser-install"; readonly force: boolean; readonly withDeps: boolean }
+  | { readonly kind: "init" }
+  | { readonly kind: "setup" }
   | { readonly kind: "invalid"; readonly message: string };
 
 export interface BrowserInstallResult {
@@ -28,8 +36,10 @@ export interface BrowserInstallResult {
 
 export interface CliRuntime {
   readonly version: string;
-  check(url: string | null, signal?: AbortSignal): Promise<RunResultV1>;
-  install(force: boolean, signal?: AbortSignal): Promise<BoundaryResult<BrowserInstallResult>>;
+  check(url: string | null, signal?: AbortSignal): Promise<RunResultV2>;
+  install(force: boolean, withDeps: boolean, signal?: AbortSignal): Promise<BoundaryResult<BrowserInstallResult>>;
+  init(signal?: AbortSignal): Promise<BoundaryResult<InitResult>>;
+  setup(signal?: AbortSignal): Promise<BoundaryResult<SetupResult>>;
 }
 
 export interface CliIo {
@@ -73,10 +83,28 @@ export function parseCli(args: readonly string[]): CliInvocation {
     return { kind: "check", url, format };
   }
   if (args[0] === "browser" && args[1] === "install") {
-    if (args.length === 2) return { kind: "browser-install", force: false };
-    if (args.length === 3 && args[2] === "--force") return { kind: "browser-install", force: true };
-    if (args[2] === "--force" && args[3] === "--force") return invalid("duplicate option: --force");
-    return unknownArgument(args[2] ?? "");
+    let force = false;
+    let withDeps = false;
+    for (const argument of args.slice(2)) {
+      if (argument === "--force") {
+        if (force) return invalid("duplicate option: --force");
+        force = true;
+      } else if (argument === "--with-deps") {
+        if (withDeps) return invalid("duplicate option: --with-deps");
+        withDeps = true;
+      } else {
+        return unknownArgument(argument);
+      }
+    }
+    return { kind: "browser-install", force, withDeps };
+  }
+  if (args[0] === "init") {
+    if (args.length !== 1) return unknownArgument(args[1] ?? "");
+    return { kind: "init" };
+  }
+  if (args[0] === "setup") {
+    if (args.length !== 1) return unknownArgument(args[1] ?? "");
+    return { kind: "setup" };
   }
   return unknownArgument(args[0] ?? "");
 }
@@ -97,7 +125,7 @@ export async function runCli(
     return 0;
   }
   if (invocation.kind === "browser-install") {
-    const installed = await runtime.install(invocation.force, signal);
+    const installed = await runtime.install(invocation.force, invocation.withDeps, signal);
     if (!installed.ok) {
       io.stderr(
         `vlint: ${installed.failure.code}: ${escapeTerminal(installed.failure.message)}\n`,
@@ -106,6 +134,29 @@ export async function runCli(
     }
     io.stdout(
       `vlint browser: chromium ${escapeTerminal(installed.value.revision)} ready (${installed.value.action})\n`,
+    );
+    return 0;
+  }
+  if (invocation.kind === "init") {
+    const initialized = await runtime.init(signal);
+    if (!initialized.ok) {
+      io.stderr(`vlint: ${initialized.failure.code}: ${escapeTerminal(initialized.failure.message)}\n`);
+      return 2;
+    }
+    io.stdout(`vlint init: created ${CONFIG_NAME}\n`);
+    return 0;
+  }
+  if (invocation.kind === "setup") {
+    const setup = await runtime.setup(signal);
+    if (!setup.ok) {
+      io.stderr(`vlint: ${setup.failure.code}: ${escapeTerminal(setup.failure.message)}\n`);
+      return 2;
+    }
+    const action = setup.value.browser.kind === "repaired"
+      ? "reinstalled"
+      : setup.value.browser.kind;
+    io.stdout(
+      `vlint setup: config ${setup.value.config}; chromium ${escapeTerminal(setup.value.browser.browser.revision)} ready (${action})\n`,
     );
     return 0;
   }
@@ -130,9 +181,15 @@ const productionRuntime: CliRuntime = {
   version: TOOL_VERSION,
   check: (url, signal) =>
     runCheckCommand(process.cwd(), url, process.env, TOOL_VERSION, signal),
-  async install(force, signal) {
+  init: (signal) => runInitCommand(process.cwd(), signal),
+  setup: (signal) => runSetupCommand(process.cwd(), process.env, signal),
+  async install(force, withDeps, signal) {
+    const args = [
+      ...(force ? ["--force"] : []),
+      ...(withDeps ? ["--with-deps"] : []),
+    ];
     const command = await runBrowserInstall({
-      args: force ? ["--force"] : [],
+      args,
       environment: process.env,
       ...(signal === undefined ? {} : { signal }),
     });
@@ -168,7 +225,11 @@ async function runProductionCli(): Promise<0 | 1 | 2> {
 }
 
 if (import.meta.main) {
-  if (isInstallerWorkerInvocation(process.argv)) {
+  if (isDependenciesSupervisorWorkerInvocation(process.argv)) {
+    await runDependenciesSupervisorWorkerMain();
+  } else if (isDependenciesInstallerWorkerInvocation(process.argv)) {
+    await runDependenciesInstallerWorkerMain();
+  } else if (isInstallerWorkerInvocation(process.argv)) {
     await runInstallerWorkerMain(process.argv);
   } else if (process.argv.some((argument) => isOopDownloaderInvocation(argument))) {
     runOopDownloaderMain();
