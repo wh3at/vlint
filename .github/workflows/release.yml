@@ -246,7 +246,7 @@ jobs:
         env:
           ARCHIVE: release-artifacts/${{ needs.provenance.outputs.archive }}
           CHECKSUM: release-artifacts/SHA256SUMS
-          FIXTURE: release-artifacts/vlint-release-fixture-server
+          FIXTURE: release-artifacts/dist/vlint-release-fixture-server
         run: |
           # actions/download-artifact does not preserve executable mode.
           chmod 0755 "$FIXTURE"
