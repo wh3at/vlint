@@ -62,7 +62,7 @@ describe.skipIf(!binaryPresent)(
       const cwd = await temporaryDirectory();
       const result = await execBinary(["--version"], cwd);
       expect(result.exitCode, result.stderr).toBe(0);
-      expect(result.stdout).toBe("vlint 0.3.0\n");
+      expect(result.stdout).toBe("vlint 0.4.0\n");
       expect(result.stderr).toBe("");
     });
 
@@ -109,7 +109,7 @@ describe.skipIf(!binaryPresent)(
       expect(result.stdout.split("\n")).toHaveLength(2);
       const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(parsed.status).toBe("incomplete");
-      expect(parsed.tool).toEqual({ name: "vlint", version: "0.3.0" });
+      expect(parsed.tool).toEqual({ name: "vlint", version: "0.4.0" });
       expect(parsed.failures[0]).toMatchObject({ stage: "config", code: "config-not-found" });
     });
 
