@@ -299,7 +299,7 @@ export async function runCli(
 
 declare const __VLINT_VERSION__: string;
 const TOOL_VERSION =
-  typeof __VLINT_VERSION__ === "string" ? __VLINT_VERSION__ : "0.3.0";
+  typeof __VLINT_VERSION__ === "string" ? __VLINT_VERSION__ : "0.4.0";
 
 const productionRuntime: CliRuntime = {
   version: TOOL_VERSION,
