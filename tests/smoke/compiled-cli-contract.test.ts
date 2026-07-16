@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -43,6 +43,7 @@ interface ProcessResult {
 async function execBinary(args: readonly string[], cwd: string): Promise<ProcessResult> {
   const process = Bun.spawn([binary, ...args], {
     cwd,
+    env: { ...Bun.env, HOME: join(cwd, "home") },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -65,6 +66,39 @@ describe.skipIf(!binaryPresent)(
       expect(result.stderr).toBe("");
     });
 
+    test.each([
+      [[], "Usage: vlint", "check"],
+      [["--help"], "Usage: vlint", "browser"],
+      [["check", "--help"], "Usage: vlint check", "--format"],
+      [["browser", "--help"], "Usage: vlint browser", "install"],
+      [["browser", "install", "--help"], "Usage: vlint browser install", "--with-deps"],
+      [["init", "--help"], "Usage: vlint init", "Create vlint.config.json"],
+      [["setup", "--help"], "Usage: vlint setup", "install the browser"],
+      [["help", "check"], "Usage: vlint check", "--format"],
+    ] as const)("renders compiled help for %#", async (args, usage, detail) => {
+      const cwd = await temporaryDirectory();
+      const result = await execBinary(args, cwd);
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.stdout).toContain(usage);
+      expect(result.stdout).toContain(detail);
+      expect(result.stdout.endsWith("\n")).toBe(true);
+      expect(result.stderr).toBe("");
+      expect(await readdir(cwd)).toEqual([]);
+    });
+
+    test.each([
+      ["unsafe positional", ["check", "bad\u001b", "--help"]],
+      ["invalid option value", ["check", "--format", "yaml", "--help"]],
+      ["missing option value", ["check", "--format", "--help"]],
+    ] as const)("compiled help wins over %s", async (_name, args) => {
+      const cwd = await temporaryDirectory();
+      const result = await execBinary(args, cwd);
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Usage: vlint check");
+      expect(result.stdout).not.toContain("\u001b");
+      expect(result.stderr).toBe("");
+    });
+
     test("no-config JSON check writes one result line and exits 2", async () => {
       const cwd = await temporaryDirectory();
       const result = await execBinary(["check", "--format", "json"], cwd);
@@ -79,13 +113,50 @@ describe.skipIf(!binaryPresent)(
       expect(parsed.failures[0]).toMatchObject({ stage: "config", code: "config-not-found" });
     });
 
-    test("invalid grammar writes to stderr only and exits 2", async () => {
+    test("invalid grammar writes to stderr only and exits 1", async () => {
       const cwd = await temporaryDirectory();
       const result = await execBinary(["bogus"], cwd);
-      expect(result.exitCode, result.stdout).toBe(2);
+      expect(result.exitCode, result.stdout).toBe(1);
       expect(result.stdout).toBe("");
       expect(result.stderr.endsWith("\n")).toBe(true);
-      expect(result.stderr).toContain("vlint: invalid-arguments:");
+      expect(result.stderr).toContain("error: unknown command 'bogus'");
     });
+
+    test("compiled invalid diagnostics are inert and redact URL credentials", async () => {
+      const cwd = await temporaryDirectory();
+      const unsafePayloads = [
+        ["\u0007", "\\u{7}"],
+        ["\u009b", "\\u{9b}"],
+        ["\u001b[31m", "\\u{1b}"],
+        ["\u001b]0;owned\u0007", "\\u{1b}"],
+        ["\r", "\\r"],
+        ["\n", "\\n"],
+        ["\t", "\\t"],
+        ["\u061c", "\\u{61c}"],
+      ] as const;
+      const positions = [
+        (payload: string) => [`bad${payload}`],
+        (payload: string) => ["check", `--bad${payload}`],
+        (payload: string) => ["check", "--format", `json${payload}`],
+      ];
+      for (const [payload, escaped] of unsafePayloads) {
+        const markedPayload = `x${payload}y`;
+        for (const args of positions.map((build) => build(markedPayload))) {
+          const unsafe = await execBinary(args, cwd);
+          expect(unsafe.exitCode).toBe(1);
+          expect(unsafe.stdout).toBe("");
+          expect(unsafe.stderr).not.toContain(markedPayload);
+          expect(unsafe.stderr).toContain(escaped);
+        }
+      }
+
+      const credential = await execBinary([
+        "https://user:password@example.com/x?token=secret#fragment\u001b",
+      ], cwd);
+      expect(credential.exitCode).toBe(1);
+      expect(credential.stderr).not.toContain("user:password");
+      expect(credential.stderr).not.toContain("secret");
+      expect(credential.stderr).not.toContain("fragment");
+    }, 30_000);
   },
 );

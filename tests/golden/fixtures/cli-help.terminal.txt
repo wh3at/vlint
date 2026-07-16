@@ -1,0 +1,64 @@
+$ vlint --help
+Usage: vlint [options] [command]
+
+Detect UI layout violations in declared targets.
+
+Options:
+  -V, --version    output the version number
+  -h, --help       display help for command
+
+Commands:
+  check [options]  Run configured layout checks.
+  browser          Manage the pinned Chromium browser.
+  init             Create vlint.config.json.
+  setup            Create config if needed and install the browser.
+  help [command]   display help for command
+
+$ vlint check --help
+Usage: vlint check [options]
+
+Run configured layout checks.
+
+Options:
+  --url <url>        Check one absolute HTTP(S) URL instead of provider targets.
+  --format <format>  Select terminal or JSON output. (choices: "terminal",
+                     "json", default: "terminal")
+  -h, --help         display help for command
+
+$ vlint browser --help
+Usage: vlint browser [options] [command]
+
+Manage the pinned Chromium browser.
+
+Options:
+  -h, --help         display help for command
+
+Commands:
+  install [options]  Install or repair the pinned Chromium browser.
+  help [command]     display help for command
+
+$ vlint browser install --help
+Usage: vlint browser install [options]
+
+Install or repair the pinned Chromium browser.
+
+Options:
+  --force      Repair or reinstall the browser payload.
+  --with-deps  Install Ubuntu system dependencies first.
+  -h, --help   display help for command
+
+$ vlint init --help
+Usage: vlint init [options]
+
+Create vlint.config.json.
+
+Options:
+  -h, --help  display help for command
+
+$ vlint setup --help
+Usage: vlint setup [options]
+
+Create config if needed and install the browser.
+
+Options:
+  -h, --help  display help for command

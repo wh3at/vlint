@@ -17,6 +17,7 @@ diagnostics to locate the offending target and element.
 - [Install](#install)
 - [OS prerequisites](#os-prerequisites)
 - [Browser setup](#browser-setup)
+- [Command help](#command-help)
 - [Running checks](#running-checks)
 - [Configuration](#configuration)
 - [Browser state (authentication)](#browser-state-authentication)
@@ -148,6 +149,22 @@ configuration, and installs the browser payload. Invalid, unreadable, or
 symlinked configurations fail rather than being replaced. If browser
 installation fails after config creation, rerunning `vlint setup` safely
 continues from the existing config.
+
+## Command help
+
+Run `vlint` with no arguments, or use `-h` / `--help`, to discover commands without reading configuration or starting browser work:
+
+```sh
+vlint
+vlint --help
+vlint check --help
+vlint browser --help
+vlint browser install --help
+vlint init --help
+vlint setup --help
+```
+
+Help is generated from the same command and option definitions used for parsing. Root, intermediate, and executable-command help writes to stdout and exits `0`. A recognized help flag takes precedence within its resolved command scope, including when neighboring arguments are invalid.
 
 ## Running checks
 
@@ -385,10 +402,10 @@ observed byte count are used.
 | Code | Meaning |
 | --- | --- |
 | `0` | All targets inspected, no violations (`clean`). |
-| `1` | All targets inspected, one or more violations found (`violations`). |
-| `2` | Run did not complete (`incomplete`): config, target resolution, browser, navigation, authentication, font, ready-condition, or rule-evaluation failure. Observed violations are still included in JSON. |
+| `1` | All targets inspected with violations (`violations`), or the CLI rejected invalid command-line usage. |
+| `2` | A valid command did not complete: config, target resolution, browser, navigation, authentication, font, ready-condition, rule-evaluation, setup, or install failure. Observed check violations are still included in JSON. |
 
-Invalid arguments also exit `2`.
+CLI usage errors write to stderr and exit `1` without producing a check result. A completed check with violations instead writes its normal terminal or JSON result to stdout and also exits `1`.
 
 ---
 
