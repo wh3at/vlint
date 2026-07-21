@@ -61,6 +61,27 @@ export type FailureCode =
   | "rule-script-failed"
   | "signal-interrupt";
 
+export interface BrowserSetupDiagnostic {
+  readonly requirements: {
+    readonly name: string;
+    readonly revision: string;
+    readonly browserVersion: string;
+    readonly executablePath: string;
+    readonly cacheRoot: string;
+  };
+  readonly status: string;
+  readonly environment: {
+    readonly xdgCacheHome: string | undefined;
+    readonly playwrightBrowsersPath: string | undefined;
+  };
+  readonly detectedRevisions: readonly {
+    readonly revision: string;
+    readonly path: string;
+  }[];
+  readonly executablePresent: boolean;
+  readonly executableAccessible: boolean;
+}
+
 export interface Failure {
   readonly stage: FailureStage;
   readonly code: FailureCode;
@@ -68,6 +89,7 @@ export interface Failure {
   readonly target: string | null;
   readonly device: string | null;
   readonly rule: string | null;
+  readonly browserDiagnostic?: BrowserSetupDiagnostic;
 }
 
 export type BoundaryResult<T> =

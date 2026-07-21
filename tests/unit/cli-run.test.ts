@@ -73,6 +73,9 @@ function harness(options: {
         },
       });
     },
+    async status() {
+      return boundarySuccess({ output: "browser status: ready\n", ready: true });
+    },
   };
   return {
     stdout,
@@ -110,6 +113,7 @@ describe("CLI process contract", () => {
     [["check", "--help"], "Usage: vlint check"],
     [["browser", "--help"], "Usage: vlint browser"],
     [["browser", "install", "--help"], "Usage: vlint browser install"],
+    [["browser", "status", "--help"], "Usage: vlint browser status"],
     [["help", "check"], "Usage: vlint check"],
   ] as const)("renders side-effect-free help for %#", async (args, usage) => {
     const testHarness = harness();
@@ -227,5 +231,25 @@ describe("CLI process contract", () => {
     expect(testHarness.stderr).toEqual([
       "vlint: config-invalid-json: invalid\\u{1b}\n",
     ]);
+  });
+
+  test("status returns ready for a ready runtime and does not increment check/install counters", async () => {
+    const testHarness = harness();
+    expect(await runCli(["browser", "status"], testHarness.runtime, testHarness.io)).toBe(0);
+    expect(testHarness.stdout).toHaveLength(1);
+    expect(testHarness.stdout[0]).toContain("browser status:");
+    expect(testHarness.stderr).toEqual([]);
+    expect(testHarness.counts()).toEqual({ checks: 0, installs: 0, inits: 0, setups: 0 });
+  });
+
+  test("status with invalid format exits 1 as parse error before runtime", async () => {
+    const testHarness = harness();
+    expect(await runCli(
+      ["browser", "status", "--format", "xml"],
+      testHarness.runtime,
+      testHarness.io,
+    )).toBe(1);
+    expect(testHarness.stdout).toEqual([]);
+    expect(testHarness.stderr).toHaveLength(1);
   });
 });

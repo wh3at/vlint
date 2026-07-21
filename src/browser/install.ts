@@ -1,11 +1,12 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import coreBundle from "playwright-core/lib/coreBundle";
 import {
   boundaryFailure,
   boundarySuccess,
   type BoundaryResult,
+  type BrowserSetupDiagnostic,
   type Failure,
 } from "../contracts/failure";
 import { interruptFailure, isAbortError, raceAbort, signalAborted } from "./readiness";
@@ -81,6 +82,9 @@ export interface InstallOptions {
   readonly installAction?: () => Promise<void>;
   /** Test-only seam overriding the actual-version probe. */
   readonly versionProbe?: VersionProbe;
+  readonly directoryScanner?: DirectoryScanner;
+  readonly existsChecker?: ExistsChecker;
+  readonly executableAccessChecker?: ExecutableAccessChecker;
 }
 
 export interface InstallDependenciesOptions {
@@ -456,22 +460,45 @@ async function runDependenciesInstallAction(
   }
 }
 
-function verifyAndClassify(
+function postInstallVerify(
   force: boolean,
-  wasPresent: boolean,
-  probe: VersionProbe | undefined,
+  wasReady: boolean,
+  options: InstallOptions,
 ): BoundaryResult<InstallOutcome> {
-  let browser: ManagedBrowserInfo;
-  try {
-    const executable = bundle.registry.registry.findExecutable(MANAGED_BROWSER_NAME);
-    executable.executablePathOrDie("javascript");
-    browser = findManagedBrowser();
-  } catch {
+  const after = inspectBrowserRequirements({
+    ...(options.environment !== undefined ? { environment: options.environment } : {}),
+    ...(options.versionProbe !== undefined ? { versionProbe: options.versionProbe } : {}),
+    ...(options.directoryScanner !== undefined
+      ? { directoryScanner: options.directoryScanner }
+      : {}),
+    ...(options.existsChecker !== undefined ? { existsChecker: options.existsChecker } : {}),
+    ...(options.executableAccessChecker !== undefined
+      ? { executableAccessChecker: options.executableAccessChecker }
+      : {}),
+  });
+  if (!after.ok) {
     return boundaryFailure(
       browserSetupFailure("browser-install-failed", "Chromium installation failed; rerun 'vlint browser install'"),
     );
   }
-  const verified = verifyActualBrowserVersion(browser.executablePath, browser.browserVersion, probe);
+
+  const info = after.value;
+  if (info.status !== "ready") {
+    return boundaryFailure(
+      browserSetupFailure(
+        "browser-install-failed",
+        force
+          ? "Chromium installation completed but is not ready; rerun 'vlint browser install'"
+          : "Chromium installation failed; rerun 'vlint browser install'",
+      ),
+    );
+  }
+
+  const verified = verifyActualBrowserVersion(
+    info.requirements.executablePath,
+    info.requirements.browserVersion,
+    options.versionProbe,
+  );
   if (!verified.ok) {
     if (!force) return boundaryFailure(verified.failure);
     return boundaryFailure(
@@ -481,8 +508,17 @@ function verifyAndClassify(
       ),
     );
   }
-  const kind: InstallOutcomeKind = force ? "repaired" : wasPresent ? "already-present" : "installed";
-  return boundarySuccess({ kind, browser });
+
+  const kind: InstallOutcomeKind = force ? "repaired" : wasReady ? "already-present" : "installed";
+  return boundarySuccess({
+    kind,
+    browser: {
+      name: MANAGED_BROWSER_NAME,
+      revision: info.requirements.revision,
+      browserVersion: info.requirements.browserVersion,
+      executablePath: info.requirements.executablePath,
+    },
+  });
 }
 
 /**
@@ -510,23 +546,49 @@ export async function installBrowserDependencies(
 
 /**
  * Installs (or repairs) the managed Chromium headless shell via a detached
- * internal worker. Idempotent when the cache is valid; `force` triggers a
- * Playwright-owned repair. Never downloads during `vlint check`.
+ * internal worker. Uses the cache-state classifier to no-op when ready,
+ * or invoke the Playwright repair path for missing/partial/mismatched
+ * cache states. Never downloads during `vlint check`.
  *
  * After the worker exits 0, the parent re-verifies the binary's actual
  * `--version`. A no-force install leaving a mismatched cache fails with
- * `browser-incompatible` (+ `--force` hint) rather than claiming
- * `already-present`; a force repair that still mismatches is
- * `browser-install-failed`. An abort mid-install kills the worker group (grace
- * then force) and returns a sanitized `signal-interrupt`. Raw downloader
- * progress/exceptions never reach the terminal.
+ * `browser-incompatible` (+ `--force` hint); a force repair that still
+ * mismatches is `browser-install-failed`. An abort mid-install kills the
+ * worker group (grace then force) and returns a sanitized `signal-interrupt`.
+ * Raw downloader progress/exceptions never reach the terminal.
  */
 export async function installBrowser(options: InstallOptions): Promise<BoundaryResult<InstallOutcome>> {
   const guard = rejectAmbientBrowserOverrides("install", options.environment);
   if (!guard.ok) return boundaryFailure(guard.failure);
   if (signalAborted(options.signal)) return boundaryFailure(interruptFailure());
 
-  const wasPresent = managedExecutablePresent();
+  const before = inspectBrowserRequirements({
+    ...(options.environment !== undefined ? { environment: options.environment } : {}),
+    ...(options.versionProbe !== undefined ? { versionProbe: options.versionProbe } : {}),
+    ...(options.directoryScanner !== undefined
+      ? { directoryScanner: options.directoryScanner }
+      : {}),
+    ...(options.existsChecker !== undefined ? { existsChecker: options.existsChecker } : {}),
+    ...(options.executableAccessChecker !== undefined
+      ? { executableAccessChecker: options.executableAccessChecker }
+      : {}),
+  });
+  if (!before.ok) return boundaryFailure(before.failure);
+
+  const wasReady = before.value.status === "ready";
+
+  if (wasReady && !options.force) {
+    return boundarySuccess({
+      kind: "already-present",
+      browser: {
+        name: MANAGED_BROWSER_NAME,
+        revision: before.value.requirements.revision,
+        browserVersion: before.value.requirements.browserVersion,
+        executablePath: before.value.requirements.executablePath,
+      },
+    });
+  }
+
   const outcome = await runInstallAction(options);
   if (outcome.aborted) return boundaryFailure(interruptFailure());
   if (!outcome.success) {
@@ -534,19 +596,211 @@ export async function installBrowser(options: InstallOptions): Promise<BoundaryR
       browserSetupFailure("browser-install-failed", "Chromium installation failed; rerun 'vlint browser install'"),
     );
   }
-  return verifyAndClassify(options.force, wasPresent, options.versionProbe);
+  return postInstallVerify(options.force, wasReady, options);
+}
+
+function snapshotToDiagnostic(snapshot: BrowserSnapshot): BrowserSetupDiagnostic {
+  return {
+    requirements: {
+      name: snapshot.requirements.name,
+      revision: snapshot.requirements.revision,
+      browserVersion: snapshot.requirements.browserVersion,
+      executablePath: snapshot.requirements.executablePath,
+      cacheRoot: snapshot.requirements.cacheRoot,
+    },
+    status: snapshot.status,
+    environment: {
+      xdgCacheHome: snapshot.environment.xdgCacheHome,
+      playwrightBrowsersPath: snapshot.environment.playwrightBrowsersPath,
+    },
+    detectedRevisions: snapshot.detectedRevisions.map((e) => ({
+      revision: e.revision,
+      path: e.path,
+    })),
+    executablePresent: snapshot.executablePresent,
+    executableAccessible: snapshot.executableAccessible,
+  };
+}
+
+function browserSetupFailureWithDiagnostic(
+  code: Failure["code"],
+  message: string,
+  diagnostic: BrowserSetupDiagnostic,
+): Failure {
+  const base = browserSetupFailure(code, message);
+  return { ...base, browserDiagnostic: diagnostic };
 }
 
 /**
  * Check-path resolution: confirms the managed executable is present AND that its
  * actual `--version` matches the pinned registry version, without downloading.
+ * When the browser is not ready, attaches a structured diagnostic payload.
  */
 export function resolveManagedExecutableForCheck(
   environment: EnvironmentView | undefined = process.env,
   probe: VersionProbe | undefined = undefined,
+  extraSeams: {
+    readonly directoryScanner?: DirectoryScanner;
+    readonly existsChecker?: ExistsChecker;
+    readonly executableAccessChecker?: ExecutableAccessChecker;
+  } = {},
 ): BoundaryResult<ManagedBrowserInfo> {
-  const guard = rejectAmbientBrowserOverrides("check", environment);
+  const snapshot = inspectBrowserRequirements({
+    environment,
+    ...(probe !== undefined ? { versionProbe: probe } : {}),
+    ...extraSeams,
+  });
+  if (!snapshot.ok) return boundaryFailure(snapshot.failure);
+
+  const info = snapshot.value;
+
+  if (info.status !== "ready") {
+    return boundaryFailure(
+      browserSetupFailureWithDiagnostic(
+        "browser-missing",
+        "Managed Chromium is not installed; run 'vlint browser install'",
+        snapshotToDiagnostic(info),
+      ),
+    );
+  }
+
+  const verified = verifyActualBrowserVersion(
+    info.requirements.executablePath,
+    info.requirements.browserVersion,
+    probe,
+  );
+  if (!verified.ok) return boundaryFailure(verified.failure);
+
+  return boundarySuccess({
+    name: MANAGED_BROWSER_NAME,
+    revision: info.requirements.revision,
+    browserVersion: info.requirements.browserVersion,
+    executablePath: info.requirements.executablePath,
+  });
+}
+
+// ── U1: Browser requirements snapshot and cache-state classifier ──────────
+
+export type ReadinessStatus =
+  | "ready"
+  | "missing"
+  | "partial"
+  | "revision-mismatch"
+  | "not-executable";
+
+export interface CacheEntry {
+  readonly revision: string;
+  readonly path: string;
+}
+
+export interface EnvironmentFlags {
+  readonly xdgCacheHome: string | undefined;
+  readonly playwrightBrowsersPath: string | undefined;
+}
+
+export interface BrowserRequirements {
+  readonly name: ManagedBrowserName;
+  readonly revision: string;
+  readonly browserVersion: string;
+  readonly executablePath: string;
+  readonly cacheRoot: string;
+}
+
+export interface BrowserSnapshot {
+  readonly requirements: BrowserRequirements;
+  readonly status: ReadinessStatus;
+  readonly environment: EnvironmentFlags;
+  readonly detectedRevisions: readonly CacheEntry[];
+  readonly executablePresent: boolean;
+  readonly executableAccessible: boolean;
+}
+
+export type DirectoryScanner = (path: string) => readonly string[];
+export type ExistsChecker = (path: string) => boolean;
+export type ExecutableAccessChecker = (path: string) => boolean;
+
+export interface SnapshotOptions {
+  readonly environment?: EnvironmentView;
+  readonly directoryScanner?: DirectoryScanner;
+  readonly existsChecker?: ExistsChecker;
+  readonly executableAccessChecker?: ExecutableAccessChecker;
+  readonly versionProbe?: VersionProbe;
+}
+
+const CHROMIUM_HEADLESS_SHELL_PREFIX = "chromium_headless_shell-";
+const CHROMIUM_PREFIX = "chromium-";
+
+function defaultDirectoryScanner(path: string): readonly string[] {
+  try {
+    return readdirSync(path);
+  } catch {
+    return [];
+  }
+}
+
+function defaultExistsChecker(path: string): boolean {
+  return existsSync(path);
+}
+
+function defaultExecutableAccessChecker(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function cacheRootPath(executablePath: string): string {
+  return dirname(dirname(dirname(executablePath)));
+}
+
+interface ScanResult {
+  readonly headlessShell: readonly CacheEntry[];
+  readonly chromium: readonly CacheEntry[];
+}
+
+function scanCacheDirectory(
+  cacheRoot: string,
+  scanner: DirectoryScanner,
+): ScanResult {
+  const headlessShell: CacheEntry[] = [];
+  const chromium: CacheEntry[] = [];
+  try {
+    for (const name of scanner(cacheRoot)) {
+      if (name.startsWith(CHROMIUM_HEADLESS_SHELL_PREFIX)) {
+        headlessShell.push({
+          revision: name.slice(CHROMIUM_HEADLESS_SHELL_PREFIX.length),
+          path: join(cacheRoot, name),
+        });
+      } else if (name.startsWith(CHROMIUM_PREFIX)) {
+        chromium.push({
+          revision: name.slice(CHROMIUM_PREFIX.length),
+          path: join(cacheRoot, name),
+        });
+      }
+    }
+  } catch {
+    /* cache root not accessible */
+  }
+  return { headlessShell, chromium };
+}
+
+function detectEnvironmentFlags(env: EnvironmentView): EnvironmentFlags {
+  return {
+    xdgCacheHome: env["XDG_CACHE_HOME"],
+    playwrightBrowsersPath: env["PLAYWRIGHT_BROWSERS_PATH"],
+  };
+}
+
+export function inspectBrowserRequirements(
+  options: SnapshotOptions = {},
+): BoundaryResult<BrowserSnapshot> {
+  const env = options.environment ?? process.env;
+
+  const guard = rejectAmbientBrowserOverrides("check", env);
   if (!guard.ok) return boundaryFailure(guard.failure);
+
   let browser: ManagedBrowserInfo;
   try {
     browser = findManagedBrowser();
@@ -558,12 +812,60 @@ export function resolveManagedExecutableForCheck(
       ),
     );
   }
-  if (!existsSync(browser.executablePath)) {
-    return boundaryFailure(
-      browserSetupFailure("browser-missing", "Managed Chromium is not installed; run 'vlint browser install'"),
-    );
+
+  const scanner = options.directoryScanner ?? defaultDirectoryScanner;
+  const existsCheck = options.existsChecker ?? defaultExistsChecker;
+  const executableCheck =
+    options.executableAccessChecker ?? defaultExecutableAccessChecker;
+
+  const cacheRoot = cacheRootPath(browser.executablePath);
+  const { headlessShell: cacheEntries, chromium: chromiumEntries } =
+    scanCacheDirectory(cacheRoot, scanner);
+  const pinnedRevision = browser.revision;
+
+  const hasPinnedHeadlessShell = cacheEntries.some(
+    (e) => e.revision === pinnedRevision,
+  );
+  const hasAnyHeadlessShell = cacheEntries.length > 0;
+  const hasPinnedChromium = chromiumEntries.some(
+    (e) => e.revision === pinnedRevision,
+  );
+
+  const executablePath = browser.executablePath;
+  const executablePresent = existsCheck(executablePath);
+  const executableAccessible =
+    executablePresent && executableCheck(executablePath);
+
+  let status: ReadinessStatus;
+
+  if (hasPinnedHeadlessShell) {
+    if (!executablePresent) {
+      status = "partial";
+    } else if (!executableAccessible) {
+      status = "not-executable";
+    } else {
+      status = "ready";
+    }
+  } else if (hasPinnedChromium) {
+    status = "partial";
+  } else if (hasAnyHeadlessShell) {
+    status = "revision-mismatch";
+  } else {
+    status = "missing";
   }
-  const verified = verifyActualBrowserVersion(browser.executablePath, browser.browserVersion, probe);
-  if (!verified.ok) return boundaryFailure(verified.failure);
-  return boundarySuccess(browser);
+
+  return boundarySuccess({
+    requirements: {
+      name: MANAGED_BROWSER_NAME,
+      revision: browser.revision,
+      browserVersion: browser.browserVersion,
+      executablePath: browser.executablePath,
+      cacheRoot,
+    },
+    status,
+    environment: detectEnvironmentFlags(env),
+    detectedRevisions: cacheEntries,
+    executablePresent,
+    executableAccessible,
+  });
 }

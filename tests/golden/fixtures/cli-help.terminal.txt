@@ -35,6 +35,7 @@ Options:
 
 Commands:
   install [options]  Install or repair the pinned Chromium browser.
+  status [options]   Show browser readiness without downloading or installing.
   help [command]     display help for command
 
 $ vlint browser install --help
@@ -46,6 +47,16 @@ Options:
   --force      Repair or reinstall the browser payload.
   --with-deps  Install Ubuntu system dependencies first.
   -h, --help   display help for command
+
+$ vlint browser status --help
+Usage: vlint browser status [options]
+
+Show browser readiness without downloading or installing.
+
+Options:
+  --format <format>  Select terminal or JSON output. (choices: "terminal",
+                     "json", default: "terminal")
+  -h, --help         display help for command
 
 $ vlint init --help
 Usage: vlint init [options]
