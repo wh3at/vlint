@@ -1,4 +1,5 @@
 import { Command, CommanderError, Option } from "commander";
+import vlintPackage from "../package.json";
 import { boundaryFailure, boundarySuccess } from "./contracts/failure";
 import { runBrowserInstall } from "./commands/browser-install";
 import { runBrowserStatus, type BrowserStatusOutput } from "./commands/browser-status";
@@ -322,7 +323,7 @@ export async function runCli(
 
 declare const __VLINT_VERSION__: string;
 const TOOL_VERSION =
-  typeof __VLINT_VERSION__ === "string" ? __VLINT_VERSION__ : "0.4.0";
+  typeof __VLINT_VERSION__ === "string" ? __VLINT_VERSION__ : vlintPackage.version;
 
 const productionRuntime: CliRuntime = {
   version: TOOL_VERSION,
