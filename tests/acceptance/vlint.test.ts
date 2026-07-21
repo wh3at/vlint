@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, test } from "bun:test";
+import vlintPackage from "../../package.json";
 import type { RunResultV3 } from "../../src/contracts/result";
 import { isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
 import { startFixtureServer } from "../fixtures/app/server";
@@ -138,7 +139,7 @@ describe.skipIf(!binaryPresent)(
       const cwd = await tempDir();
       const result = await execBinary(["--version"], cwd);
       expect(result.exitCode, result.stderr).toBe(0);
-      expect(result.stdout).toBe("vlint 0.4.0\n");
+      expect(result.stdout).toBe(`vlint ${vlintPackage.version}\n`);
       expect(result.stderr).toBe("");
     });
 
@@ -159,7 +160,7 @@ describe.skipIf(!binaryPresent)(
       const parsed = JSON.parse(result.stdout) as RunResultV3;
       expect(parsed.schemaVersion).toBe(3);
       expect(parsed.status).toBe("clean");
-      expect(parsed.tool).toEqual({ name: "vlint", version: "0.4.0" });
+      expect(parsed.tool).toEqual({ name: "vlint", version: vlintPackage.version });
       expect(parsed.environment).toMatchObject({ platform: "linux", arch: "x64" });
       expect(typeof parsed.environment.browser.version).toBe("string");
       expect(parsed.environment.browser.version!.length).toBeGreaterThan(0);
