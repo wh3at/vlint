@@ -5,13 +5,19 @@ import {
 } from "../contracts/failure";
 import {
   inspectBrowserRequirements,
+  type DirectoryScanner,
   type EnvironmentView,
+  type ExistsChecker,
+  type ExecutableAccessChecker,
 } from "../browser/install";
 
 export interface BrowserStatusOptions {
   readonly format: "terminal" | "json";
   readonly environment?: EnvironmentView;
   readonly signal?: AbortSignal;
+  readonly directoryScanner?: DirectoryScanner;
+  readonly existsChecker?: ExistsChecker;
+  readonly executableAccessChecker?: ExecutableAccessChecker;
 }
 
 export interface BrowserStatusOutput {
@@ -35,6 +41,15 @@ export function runBrowserStatus(
 
   const snapshot = inspectBrowserRequirements({
     ...(options.environment !== undefined ? { environment: options.environment } : {}),
+    ...(options.directoryScanner !== undefined
+      ? { directoryScanner: options.directoryScanner }
+      : {}),
+    ...(options.existsChecker !== undefined
+      ? { existsChecker: options.existsChecker }
+      : {}),
+    ...(options.executableAccessChecker !== undefined
+      ? { executableAccessChecker: options.executableAccessChecker }
+      : {}),
   });
   if (!snapshot.ok) return boundaryFailure(snapshot.failure);
 

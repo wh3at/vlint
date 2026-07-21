@@ -11,6 +11,9 @@ import {
   rejectAmbientBrowserOverrides,
   resolveManagedExecutableForCheck,
   verifyActualBrowserVersion,
+  type DirectoryScanner,
+  type ExistsChecker,
+  type ExecutableAccessChecker,
   type VersionProbe,
   type VersionProbeResult,
 } from "../../src/browser/install";
@@ -30,6 +33,49 @@ function matchingProbe(): VersionProbe {
 
 function probe(result: VersionProbeResult): VersionProbe {
   return () => result;
+}
+
+function notReadyThenReadySeams(): {
+  directoryScanner: DirectoryScanner;
+  existsChecker: ExistsChecker;
+  executableAccessChecker: ExecutableAccessChecker;
+} {
+  let callCount = 0;
+  const pinnedRevision = findManagedBrowser().revision;
+  return {
+    directoryScanner: () => {
+      callCount++;
+      if (callCount <= 1) return [];
+      return [`chromium_headless_shell-${pinnedRevision}`];
+    },
+    existsChecker: () => callCount > 1,
+    executableAccessChecker: () => callCount > 1,
+  };
+}
+
+function neverReadySeams(): {
+  directoryScanner: DirectoryScanner;
+  existsChecker: ExistsChecker;
+  executableAccessChecker: ExecutableAccessChecker;
+} {
+  return {
+    directoryScanner: () => [],
+    existsChecker: () => false,
+    executableAccessChecker: () => false,
+  };
+}
+
+function readySeams(): {
+  directoryScanner: DirectoryScanner;
+  existsChecker: ExistsChecker;
+  executableAccessChecker: ExecutableAccessChecker;
+} {
+  const pinnedRevision = findManagedBrowser().revision;
+  return {
+    directoryScanner: () => [`chromium_headless_shell-${pinnedRevision}`],
+    existsChecker: () => true,
+    executableAccessChecker: () => true,
+  };
 }
 
 test("rejectAmbientBrowserOverrides rejects PLAYWRIGHT_BROWSERS_PATH for both install and check", () => {
@@ -73,7 +119,7 @@ test("verifyActualBrowserVersion accepts a matching version and rejects mismatch
 
 
 test("resolveManagedExecutableForCheck resolves when the actual version matches (injected probe)", () => {
-  const result = resolveManagedExecutableForCheck(CLEAN_ENV, matchingProbe());
+  const result = resolveManagedExecutableForCheck(CLEAN_ENV, matchingProbe(), readySeams());
   expect(result.ok).toBe(true);
   if (result.ok) expect(result.value.name).toBe("chromium-headless-shell");
 });
@@ -84,7 +130,7 @@ test("resolveManagedExecutableForCheck fails with cache override when PLAYWRIGHT
 });
 
 test("installBrowser classifies already-present when the actual version matches (injected install + probe)", async () => {
-  const result = await installBrowser({ force: false, environment: CLEAN_ENV, installAction: async () => undefined, versionProbe: matchingProbe() });
+  const result = await installBrowser({ force: false, environment: CLEAN_ENV, installAction: async () => undefined, versionProbe: matchingProbe(), ...readySeams() });
   expect(result.ok).toBe(true);
   if (result.ok) expect(result.value.kind).toBe("already-present");
 });
@@ -100,6 +146,7 @@ test("installBrowser no-force mismatch fails with browser-incompatible and --for
     environment: CLEAN_ENV,
     installAction: async () => undefined,
     versionProbe: probe({ exitCode: 0, timedOut: false, stdout: "Google Chrome for Testing 148.0.0.0" }),
+    ...notReadyThenReadySeams(),
   });
   expect(result.ok).toBe(false);
   if (!result.ok) {
@@ -127,6 +174,7 @@ test("installBrowser maps an installer failure to a sanitized browser-install-fa
       throw new Error(sentinel);
     },
     versionProbe: matchingProbe(),
+    ...notReadyThenReadySeams(),
   });
   expect(result.ok).toBe(false);
   if (!result.ok) {
@@ -149,6 +197,7 @@ test("installBrowser suppresses Playwright installer console output during the i
         console.log("DOWNLOAD-PROGRESS-LEAK 50%");
       },
       versionProbe: matchingProbe(),
+      ...notReadyThenReadySeams(),
     });
     expect(result.ok).toBe(true);
     expect(spyCalls).toBe(0); // the adapter's suppression swallowed the progress line
@@ -623,6 +672,7 @@ test("runBrowserStatus returns JSON with status missing and metadata via --forma
   const result = runBrowserStatus({
     format: "json",
     environment: CLEAN_ENV,
+    ...neverReadySeams(),
   });
   expect(result.ok).toBe(true);
   if (result.ok) {
@@ -637,7 +687,7 @@ test("runBrowserStatus returns JSON with status missing and metadata via --forma
 });
 
 test("runBrowserStatus returns terminal output with repair hint for non-ready status", () => {
-  const result = runBrowserStatus({ format: "terminal", environment: CLEAN_ENV });
+  const result = runBrowserStatus({ format: "terminal", environment: CLEAN_ENV, ...neverReadySeams() });
   expect(result.ok).toBe(true);
   if (result.ok) {
     expect(result.value.ready).toBe(false);
