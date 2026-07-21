@@ -1,6 +1,7 @@
 import { Command, CommanderError, Option } from "commander";
 import { boundaryFailure, boundarySuccess } from "./contracts/failure";
 import { runBrowserInstall } from "./commands/browser-install";
+import { runBrowserStatus, type BrowserStatusOutput } from "./commands/browser-status";
 import { runCheckCommand } from "./commands/check";
 import { CONFIG_NAME, runInitCommand, type InitResult } from "./commands/init";
 import { runSetupCommand, type SetupResult } from "./commands/setup";
@@ -25,6 +26,7 @@ export type OutputFormat = "terminal" | "json";
 export type CliInvocation =
   | { readonly kind: "check"; readonly url: string | null; readonly format: OutputFormat }
   | { readonly kind: "browser-install"; readonly force: boolean; readonly withDeps: boolean }
+  | { readonly kind: "browser-status"; readonly format: OutputFormat }
   | { readonly kind: "init" }
   | { readonly kind: "setup" };
 
@@ -46,6 +48,7 @@ export interface CliRuntime {
   readonly version: string;
   check(url: string | null, signal?: AbortSignal): Promise<RunResultV3>;
   install(force: boolean, withDeps: boolean, signal?: AbortSignal): Promise<BoundaryResult<BrowserInstallResult>>;
+  status(format: "terminal" | "json", signal?: AbortSignal): Promise<BoundaryResult<BrowserStatusOutput>>;
   init(signal?: AbortSignal): Promise<BoundaryResult<InitResult>>;
   setup(signal?: AbortSignal): Promise<BoundaryResult<SetupResult>>;
 }
@@ -168,6 +171,17 @@ function buildCliProgram(version: string, rawArgs: readonly string[]): {
         withDeps: options.withDeps === true,
       };
     });
+  browser
+    .command("status")
+    .description("Show browser readiness without downloading or installing.")
+    .addOption(
+      new Option("--format <format>", "Select terminal or JSON output.")
+        .choices(["terminal", "json"])
+        .default("terminal"),
+    )
+    .action((options: { format: OutputFormat }) => {
+      selected = { kind: "browser-status", format: options.format };
+    });
 
   program
     .command("init")
@@ -268,6 +282,15 @@ export async function runCli(
     );
     return 0;
   }
+  if (invocation.kind === "browser-status") {
+    const statusResult = await runtime.status(invocation.format, signal);
+    if (!statusResult.ok) {
+      io.stderr(`vlint: ${statusResult.failure.code}: ${escapeTerminal(statusResult.failure.message)}\n`);
+      return 2;
+    }
+    io.stdout(statusResult.value.output);
+    return statusResult.value.ready ? 0 : 2;
+  }
   if (invocation.kind === "init") {
     const initialized = await runtime.init(signal);
     if (!initialized.ok) {
@@ -325,6 +348,14 @@ const productionRuntime: CliRuntime = {
       action,
     });
   },
+  status: (format, signal) =>
+    Promise.resolve(
+      runBrowserStatus({
+        format,
+        environment: process.env,
+        ...(signal !== undefined ? { signal } : {}),
+      }),
+    ),
 };
 
 async function runProductionCli(): Promise<0 | 1 | 2> {

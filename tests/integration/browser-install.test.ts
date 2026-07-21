@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   findManagedBrowser,
+  inspectBrowserRequirements,
   installBrowser,
   installBrowserDependencies,
   isDependenciesInstallerWorkerInvocation,
@@ -10,10 +11,14 @@ import {
   rejectAmbientBrowserOverrides,
   resolveManagedExecutableForCheck,
   verifyActualBrowserVersion,
+  type DirectoryScanner,
+  type ExistsChecker,
+  type ExecutableAccessChecker,
   type VersionProbe,
   type VersionProbeResult,
 } from "../../src/browser/install";
 import { parseBrowserInstallArgs, runBrowserInstall } from "../../src/commands/browser-install";
+import { runBrowserStatus } from "../../src/commands/browser-status";
 
 const CLEAN_ENV = {} as const;
 
@@ -28,6 +33,49 @@ function matchingProbe(): VersionProbe {
 
 function probe(result: VersionProbeResult): VersionProbe {
   return () => result;
+}
+
+function notReadyThenReadySeams(): {
+  directoryScanner: DirectoryScanner;
+  existsChecker: ExistsChecker;
+  executableAccessChecker: ExecutableAccessChecker;
+} {
+  let callCount = 0;
+  const pinnedRevision = findManagedBrowser().revision;
+  return {
+    directoryScanner: () => {
+      callCount++;
+      if (callCount <= 1) return [];
+      return [`chromium_headless_shell-${pinnedRevision}`];
+    },
+    existsChecker: () => callCount > 1,
+    executableAccessChecker: () => callCount > 1,
+  };
+}
+
+function neverReadySeams(): {
+  directoryScanner: DirectoryScanner;
+  existsChecker: ExistsChecker;
+  executableAccessChecker: ExecutableAccessChecker;
+} {
+  return {
+    directoryScanner: () => [],
+    existsChecker: () => false,
+    executableAccessChecker: () => false,
+  };
+}
+
+function readySeams(): {
+  directoryScanner: DirectoryScanner;
+  existsChecker: ExistsChecker;
+  executableAccessChecker: ExecutableAccessChecker;
+} {
+  const pinnedRevision = findManagedBrowser().revision;
+  return {
+    directoryScanner: () => [`chromium_headless_shell-${pinnedRevision}`],
+    existsChecker: () => true,
+    executableAccessChecker: () => true,
+  };
 }
 
 test("rejectAmbientBrowserOverrides rejects PLAYWRIGHT_BROWSERS_PATH for both install and check", () => {
@@ -71,7 +119,7 @@ test("verifyActualBrowserVersion accepts a matching version and rejects mismatch
 
 
 test("resolveManagedExecutableForCheck resolves when the actual version matches (injected probe)", () => {
-  const result = resolveManagedExecutableForCheck(CLEAN_ENV, matchingProbe());
+  const result = resolveManagedExecutableForCheck(CLEAN_ENV, matchingProbe(), readySeams());
   expect(result.ok).toBe(true);
   if (result.ok) expect(result.value.name).toBe("chromium-headless-shell");
 });
@@ -82,7 +130,7 @@ test("resolveManagedExecutableForCheck fails with cache override when PLAYWRIGHT
 });
 
 test("installBrowser classifies already-present when the actual version matches (injected install + probe)", async () => {
-  const result = await installBrowser({ force: false, environment: CLEAN_ENV, installAction: async () => undefined, versionProbe: matchingProbe() });
+  const result = await installBrowser({ force: false, environment: CLEAN_ENV, installAction: async () => undefined, versionProbe: matchingProbe(), ...readySeams() });
   expect(result.ok).toBe(true);
   if (result.ok) expect(result.value.kind).toBe("already-present");
 });
@@ -98,6 +146,7 @@ test("installBrowser no-force mismatch fails with browser-incompatible and --for
     environment: CLEAN_ENV,
     installAction: async () => undefined,
     versionProbe: probe({ exitCode: 0, timedOut: false, stdout: "Google Chrome for Testing 148.0.0.0" }),
+    ...notReadyThenReadySeams(),
   });
   expect(result.ok).toBe(false);
   if (!result.ok) {
@@ -125,6 +174,7 @@ test("installBrowser maps an installer failure to a sanitized browser-install-fa
       throw new Error(sentinel);
     },
     versionProbe: matchingProbe(),
+    ...notReadyThenReadySeams(),
   });
   expect(result.ok).toBe(false);
   if (!result.ok) {
@@ -147,6 +197,7 @@ test("installBrowser suppresses Playwright installer console output during the i
         console.log("DOWNLOAD-PROGRESS-LEAK 50%");
       },
       versionProbe: matchingProbe(),
+      ...notReadyThenReadySeams(),
     });
     expect(result.ok).toBe(true);
     expect(spyCalls).toBe(0); // the adapter's suppression swallowed the progress line
@@ -311,4 +362,345 @@ test("worker and OOP downloader invocations require their exact internal shape",
   ])).toBe(false);
   expect(isOopDownloaderInvocation("/some/path/oopBrowserDownload.js")).toBe(true);
   expect(isOopDownloaderInvocation(undefined)).toBe(false);
+});
+
+// ── U1: inspectBrowserRequirements tests ──────────────────────────────────
+
+test("inspectBrowserRequirements returns ready when executable is present, executable, and version matches", () => {
+  const browser = findManagedBrowser();
+  const result = inspectBrowserRequirements({
+    environment: CLEAN_ENV,
+    directoryScanner: () => [`chromium_headless_shell-${browser.revision}`],
+    existsChecker: () => true,
+    executableAccessChecker: () => true,
+    versionProbe: matchingProbe(),
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.value.status).toBe("ready");
+    expect(result.value.requirements.revision).toBe(browser.revision);
+  }
+});
+
+test("inspectBrowserRequirements returns missing when no cache entries exist", () => {
+  const result = inspectBrowserRequirements({
+    environment: CLEAN_ENV,
+    directoryScanner: () => [],
+    existsChecker: () => false,
+    executableAccessChecker: () => true,
+    versionProbe: matchingProbe(),
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.value.status).toBe("missing");
+});
+
+test("inspectBrowserRequirements returns partial when pinned directory exists but executable is absent", () => {
+  const browser = findManagedBrowser();
+  const result = inspectBrowserRequirements({
+    environment: CLEAN_ENV,
+    directoryScanner: () => [`chromium_headless_shell-${browser.revision}`],
+    existsChecker: () => false,
+    executableAccessChecker: () => true,
+    versionProbe: matchingProbe(),
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.value.status).toBe("partial");
+    expect(result.value.executablePresent).toBe(false);
+  }
+});
+
+test("inspectBrowserRequirements returns partial when pinned chromium exists but headless shell is absent", () => {
+  const browser = findManagedBrowser();
+  const result = inspectBrowserRequirements({
+    environment: CLEAN_ENV,
+    directoryScanner: () => [`chromium-${browser.revision}`],
+    existsChecker: () => false,
+    executableAccessChecker: () => true,
+    versionProbe: matchingProbe(),
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.value.status).toBe("partial");
+});
+
+test("inspectBrowserRequirements returns revision-mismatch when only older revisions exist", () => {
+  const result = inspectBrowserRequirements({
+    environment: CLEAN_ENV,
+    directoryScanner: () => [
+      "chromium_headless_shell-1000",
+      "chromium_headless_shell-999",
+    ],
+    existsChecker: () => false,
+    executableAccessChecker: () => true,
+    versionProbe: matchingProbe(),
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.value.status).toBe("revision-mismatch");
+    expect(result.value.detectedRevisions).toHaveLength(2);
+  }
+});
+
+test("inspectBrowserRequirements returns not-executable when executable exists but is not executable", () => {
+  const browser = findManagedBrowser();
+  const result = inspectBrowserRequirements({
+    environment: CLEAN_ENV,
+    directoryScanner: () => [`chromium_headless_shell-${browser.revision}`],
+    existsChecker: () => true,
+    executableAccessChecker: () => false,
+    versionProbe: matchingProbe(),
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.value.status).toBe("not-executable");
+    expect(result.value.executablePresent).toBe(true);
+    expect(result.value.executableAccessible).toBe(false);
+  }
+});
+
+test("inspectBrowserRequirements rejects PLAYWRIGHT_BROWSERS_PATH before inspecting the cache", () => {
+  const result = inspectBrowserRequirements({
+    environment: { PLAYWRIGHT_BROWSERS_PATH: "/somewhere" },
+    directoryScanner: () => [],
+  });
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.failure.code).toBe("browser-cache-override-unsupported");
+});
+
+test("inspectBrowserRequirements reports XDG_CACHE_HOME in environment flags", () => {
+  const result = inspectBrowserRequirements({
+    environment: { XDG_CACHE_HOME: "/custom/cache" },
+    directoryScanner: () => [],
+    existsChecker: () => false,
+    versionProbe: matchingProbe(),
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.value.environment.xdgCacheHome).toBe("/custom/cache");
+  }
+});
+
+// ── U2: resolveManagedExecutableForCheck diagnostics ──────────────────────
+
+test("resolveManagedExecutableForCheck returns diagnostic with status missing when no cache entries exist", () => {
+  const result = resolveManagedExecutableForCheck(
+    CLEAN_ENV,
+    matchingProbe(),
+    {
+      directoryScanner: () => [],
+      existsChecker: () => false,
+      executableAccessChecker: () => true,
+    },
+  );
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.failure.code).toBe("browser-missing");
+    expect(result.failure.browserDiagnostic).toBeDefined();
+    expect(result.failure.browserDiagnostic?.status).toBe("missing");
+    expect(result.failure.browserDiagnostic?.requirements.revision).toBeDefined();
+    expect(result.failure.browserDiagnostic?.requirements.cacheRoot).toBeDefined();
+  }
+});
+
+test("resolveManagedExecutableForCheck returns diagnostic with status partial when pinned dir exists but executable absent", () => {
+  const browser = findManagedBrowser();
+  const result = resolveManagedExecutableForCheck(
+    CLEAN_ENV,
+    matchingProbe(),
+    {
+      directoryScanner: () => [`chromium_headless_shell-${browser.revision}`],
+      existsChecker: () => false,
+      executableAccessChecker: () => true,
+    },
+  );
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.failure.code).toBe("browser-missing");
+    expect(result.failure.browserDiagnostic?.status).toBe("partial");
+  }
+});
+
+test("resolveManagedExecutableForCheck returns diagnostic with status revision-mismatch when only older revisions exist", () => {
+  const result = resolveManagedExecutableForCheck(
+    CLEAN_ENV,
+    matchingProbe(),
+    {
+      directoryScanner: () => [
+        "chromium_headless_shell-1000",
+        "chromium_headless_shell-999",
+      ],
+      existsChecker: () => false,
+      executableAccessChecker: () => true,
+    },
+  );
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.failure.code).toBe("browser-missing");
+    expect(result.failure.browserDiagnostic?.status).toBe("revision-mismatch");
+    expect(result.failure.browserDiagnostic?.detectedRevisions.length).toBe(2);
+  }
+});
+
+test("resolveManagedExecutableForCheck returns diagnostic with status not-executable when executable is not accessible", () => {
+  const browser = findManagedBrowser();
+  const result = resolveManagedExecutableForCheck(
+    CLEAN_ENV,
+    matchingProbe(),
+    {
+      directoryScanner: () => [`chromium_headless_shell-${browser.revision}`],
+      existsChecker: () => true,
+      executableAccessChecker: () => false,
+    },
+  );
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.failure.code).toBe("browser-missing");
+    expect(result.failure.browserDiagnostic?.status).toBe("not-executable");
+    expect(result.failure.browserDiagnostic?.executablePresent).toBe(true);
+    expect(result.failure.browserDiagnostic?.executableAccessible).toBe(false);
+  }
+});
+
+test("resolveManagedExecutableForCheck rejects PLAYWRIGHT_BROWSERS_PATH before inspecting the cache", () => {
+  const result = resolveManagedExecutableForCheck(
+    { PLAYWRIGHT_BROWSERS_PATH: "/somewhere" },
+    matchingProbe(),
+  );
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.failure.code).toBe("browser-cache-override-unsupported");
+});
+
+// ── U3: installBrowser idempotent no-op and repair ────────────────────────
+
+test("installBrowser returns already-present without invoking install when ready (injected seams)", async () => {
+  const browser = findManagedBrowser();
+  let installCalled = false;
+  const result = await installBrowser({
+    force: false,
+    environment: CLEAN_ENV,
+    installAction: async () => {
+      installCalled = true;
+    },
+    versionProbe: matchingProbe(),
+    directoryScanner: () => [`chromium_headless_shell-${browser.revision}`],
+    existsChecker: () => true,
+    executableAccessChecker: () => true,
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.value.kind).toBe("already-present");
+  expect(installCalled).toBe(false);
+});
+
+test("installBrowser invokes install and returns installed when partial repaired by install action", async () => {
+  const browser = findManagedBrowser();
+  let executableExists = false;
+  let installCalled = false;
+  const result = await installBrowser({
+    force: false,
+    environment: CLEAN_ENV,
+    installAction: async () => {
+      installCalled = true;
+      executableExists = true;
+    },
+    versionProbe: matchingProbe(),
+    directoryScanner: () => [`chromium_headless_shell-${browser.revision}`],
+    existsChecker: () => executableExists,
+    executableAccessChecker: () => true,
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.value.kind).toBe("installed");
+    expect(result.value.browser.revision).toBe(browser.revision);
+  }
+  expect(installCalled).toBe(true);
+});
+
+test("installBrowser invokes install for revision-mismatch and succeeds when post-install is ready", async () => {
+  const browser = findManagedBrowser();
+  let hasPinned = false;
+  const scanner = () => (hasPinned
+    ? [`chromium_headless_shell-${browser.revision}`]
+    : ["chromium_headless_shell-1000", "chromium_headless_shell-999"]);
+  const result = await installBrowser({
+    force: false,
+    environment: CLEAN_ENV,
+    installAction: async () => {
+      hasPinned = true;
+    },
+    versionProbe: matchingProbe(),
+    directoryScanner: scanner,
+    existsChecker: () => hasPinned,
+    executableAccessChecker: () => true,
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.value.kind).toBe("installed");
+});
+
+test("installBrowser returns repaired when forced install succeeds", async () => {
+  const browser = findManagedBrowser();
+  const result = await installBrowser({
+    force: true,
+    environment: CLEAN_ENV,
+    installAction: async () => undefined,
+    versionProbe: matchingProbe(),
+    directoryScanner: () => [`chromium_headless_shell-${browser.revision}`],
+    existsChecker: () => true,
+    executableAccessChecker: () => true,
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.value.kind).toBe("repaired");
+});
+
+test("installBrowser fails with browser-install-failed when post-install executable is still not executable", async () => {
+  const browser = findManagedBrowser();
+  const result = await installBrowser({
+    force: false,
+    environment: CLEAN_ENV,
+    installAction: async () => undefined,
+    versionProbe: matchingProbe(),
+    directoryScanner: () => [`chromium_headless_shell-${browser.revision}`],
+    existsChecker: () => true,
+    executableAccessChecker: () => false,
+  });
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.failure.code).toBe("browser-install-failed");
+});
+
+// ── U4: browser status command ────────────────────────────────────────────
+
+test("runBrowserStatus returns JSON with status missing and metadata via --format json", () => {
+  const result = runBrowserStatus({
+    format: "json",
+    environment: CLEAN_ENV,
+    ...neverReadySeams(),
+  });
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.value.ready).toBe(false);
+    const parsed = JSON.parse(result.value.output);
+    expect(parsed.status).toBeDefined();
+    expect(parsed.requirements).toBeDefined();
+    expect(parsed.requirements.revision).toBeDefined();
+    expect(parsed.requirements.executablePath).toBeDefined();
+    expect(parsed.requirements.cacheRoot).toBeDefined();
+  }
+});
+
+test("runBrowserStatus returns terminal output with repair hint for non-ready status", () => {
+  const result = runBrowserStatus({ format: "terminal", environment: CLEAN_ENV, ...neverReadySeams() });
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.value.ready).toBe(false);
+    expect(result.value.output).toContain("browser status:");
+    expect(result.value.output).toContain("vlint browser install");
+  }
+});
+
+test("runBrowserStatus reports PLAYWRIGHT_BROWSERS_PATH override before cache inspection", () => {
+  const result = runBrowserStatus({
+    format: "terminal",
+    environment: { PLAYWRIGHT_BROWSERS_PATH: "/somewhere" },
+  });
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.failure.code).toBe("browser-cache-override-unsupported");
 });

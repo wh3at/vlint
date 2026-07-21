@@ -72,6 +72,7 @@ describe.skipIf(!binaryPresent)(
       [["check", "--help"], "Usage: vlint check", "--format"],
       [["browser", "--help"], "Usage: vlint browser", "install"],
       [["browser", "install", "--help"], "Usage: vlint browser install", "--with-deps"],
+      [["browser", "status", "--help"], "Usage: vlint browser status", "--format"],
       [["init", "--help"], "Usage: vlint init", "Create vlint.config.json"],
       [["setup", "--help"], "Usage: vlint setup", "install the browser"],
       [["help", "check"], "Usage: vlint check", "--format"],

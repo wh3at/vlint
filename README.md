@@ -129,10 +129,16 @@ Browser acquisition is always a separate, explicit operation. `vlint check`
 never downloads, updates, or silently installs a browser.
 
 ```sh
+vlint browser status                # inspect readiness without downloading
+vlint browser status --format json  # machine-readable readiness for CI
 vlint browser install               # pinned Chromium headless shell only
 vlint browser install --force       # repair/reinstall browser payload
 vlint browser install --with-deps   # Ubuntu libraries, then browser payload
 ```
+
+`vlint browser status` classifies the cache into `ready`, `missing`,
+`partial`, `revision-mismatch`, or `not-executable` and exits `0` when ready,
+`2` otherwise. It never installs, repairs, or launches a browser.
 
 `--force` and `--with-deps` may be combined. The browser revision is pinned to
 the embedded Playwright version, and installation is idempotent. After upgrading
@@ -160,6 +166,7 @@ vlint --help
 vlint check --help
 vlint browser --help
 vlint browser install --help
+vlint browser status --help
 vlint init --help
 vlint setup --help
 ```
@@ -511,8 +518,12 @@ omitted so stable inputs produce stable output.
 - vlint uses the **standard Playwright browser cache only**
   (`~/.cache/ms-playwright` under the default `HOME`). It does not accept alternate
   cache locations or download origins.
+- When the pinned browser is not ready, `vlint browser status` and `vlint check`
+  report a structured diagnosis that distinguishes missing, partial (only the full
+  Chromium payload present), revision-mismatch (different Playwright revision),
+  and not-executable states. Run `vlint browser install` to repair.
 - `PLAYWRIGHT_BROWSERS_PATH` is **unsupported** and causes a `browser-cache-override-unsupported`
-  failure on both `install` and `check`.
+  failure on `install`, `check`, and `status`.
 - On `install`, `PLAYWRIGHT_DOWNLOAD_HOST` and `PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST` are
   **unsupported** and cause a `browser-download-host-override-unsupported` failure.
 - **Do not restore a browser cache produced by a different trust domain.** CI and
@@ -527,8 +538,15 @@ vlint does not create or manage your CI, git hooks, or agent completion gates. A
 command to your existing checks yourself. For example, in CI after your app is running:
 
 ```sh
-vlint browser install        # once, in a network-enabled step
-vlint check --format json    # in the step that runs your checks
+vlint browser install              # once, in a network-enabled step
+vlint check --format json          # in the step that runs your checks
+```
+
+Use `vlint browser status` as a preflight check without downloading:
+
+```sh
+vlint browser status --format json  # exits 0 when ready, 2 otherwise
+vlint browser install               # repair or install when not ready
 ```
 
 Because `check` returns distinct exit codes, you can gate directly on the result:

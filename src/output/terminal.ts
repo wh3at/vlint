@@ -59,8 +59,26 @@ function failureLine(failure: {
   readonly target: string | null;
   readonly device: string | null;
   readonly rule: string | null;
+  readonly browserDiagnostic?: {
+    readonly status: string;
+    readonly requirements: {
+      readonly revision: string;
+      readonly cacheRoot: string;
+    };
+    readonly detectedRevisions: readonly {
+      readonly revision: string;
+    }[];
+  };
 }): string {
-  return `failure ${failure.stage}/${failure.code} target=${escapeNullable(failure.target)} device=${escapeNullable(failure.device)} rule=${escapeNullable(failure.rule)}: ${escapeTerminal(failure.message)}`;
+  let line = `failure ${failure.stage}/${failure.code} target=${escapeNullable(failure.target)} device=${escapeNullable(failure.device)} rule=${escapeNullable(failure.rule)}: ${escapeTerminal(failure.message)}`;
+  if (failure.browserDiagnostic !== undefined) {
+    const diag = failure.browserDiagnostic;
+    const revisions = diag.detectedRevisions.length > 0
+      ? ` revisions=${escapeTerminal(diag.detectedRevisions.map((e) => e.revision).join(","))}`
+      : "";
+    line += `\n  browser status=${escapeTerminal(diag.status)} revision=${escapeTerminal(diag.requirements.revision)} cache=${escapeTerminal(diag.requirements.cacheRoot)}${revisions}`;
+  }
+  return line;
 }
 
 export function renderTerminal(result: RunResultV3): string {
