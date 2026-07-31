@@ -543,7 +543,7 @@ describe.skipIf(!binaryPresent)(
 
     // ============================================================= Multi-device
     // AE1-AE8 and mobile-only regression: compiled binary proof for the
-    // version 2 multi-device contract. These tests exercise the real init
+    // standard multi-device contract. These tests exercise the real init
     // command, the standard two-device config, cross-product ordering,
     // collect-all failure isolation, and the desktop-clean/mobile-violation
     // regression that motivated the feature.

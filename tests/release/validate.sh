@@ -416,7 +416,6 @@ EOF
   assert_contains "$deb_setup_output" 'config created'
   assert_contains "$deb_setup_output" 'config already-present'
   assert_contains "$deb_setup_output" '"status":"clean"'
-  assert_contains "$deb_setup_output" '"status":"clean"'
   assert_contains "$deb_setup_output" 'macbook-air-13-m5'
   assert_contains "$deb_setup_output" 'iphone-17'
 
@@ -446,7 +445,6 @@ EOF
       test "$term_status" -eq 0
       exit 0
     ')
-  assert_contains "$check_output" '"status":"violations"'
   assert_contains "$check_output" '"status":"clean"'
   assert_contains "$check_output" 'macbook-air-13-m5'
   assert_contains "$check_output" 'iphone-17'

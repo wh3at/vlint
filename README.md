@@ -24,7 +24,7 @@ diagnostics to locate the offending target and element.
 - [Browser state (authentication)](#browser-state-authentication)
 - [Output: terminal vs JSON](#output-terminal-vs-json)
 - [Exit codes](#exit-codes)
-- [Machine consumption (JSON schema v4)](#machine-consumption-json-schema-v4)
+- [Machine consumption (JSON)](#machine-consumption-json)
 - [Browser cache hygiene](#browser-cache-hygiene)
 - [Consumer integration](#consumer-integration)
 - [Building from source](#building-from-source)
@@ -204,6 +204,11 @@ perform logins.
 
 `vlint.config.json` is the only configuration source. It is read from the
 current working directory, must be valid JSON, and must not exceed 8 MiB.
+
+> **Beta contract.** vlint is in beta. Configuration and JSON output follow one
+> current contract with no `schemaVersion` field and no compatibility guarantees.
+> Breaking changes may land without migration paths until the API stabilizes.
+
 Generate the standard MacBook Air 13-inch and iPhone 17 profiles with:
 
 ```sh
@@ -214,7 +219,6 @@ An expanded config with a static provider has this shape:
 
 ```jsonc
 {
-  "schemaVersion": 2,
   "devices": [
     {
       "name": "macbook-air-13-m5",
@@ -257,7 +261,6 @@ An expanded config with a static provider has this shape:
 
 | Field | Description |
 | --- | --- |
-| `schemaVersion` | Must be `2` or `3`. Version `3` is required to register local rules. `vlint init` and `vlint setup` create version `3` configs. |
 | `devices` | Non-empty ordered device profiles with unique names. This is the only authority for viewport, screen, DPR, mobile mode, touch, and optional user agent. |
 | `defaults` | Shared target defaults: `locale`, `timezoneId`, `timeoutMs` (`100`–`300000`), `readyCondition`, and `browserState`. |
 | `rules` | Rule instances. Missing built-in types are injected in deterministic `tab-label-single-line`, configured rules, `page-horizontal-overflow` order. |
@@ -321,54 +324,6 @@ chains, or text content.
 A provider non-zero exit, timeout, oversized/invalid output, or zero targets is a
 run failure.
 
-### Migrating from schema version 1
-
-Schema version 1 baked a single `1280×720` viewport into the binary and allowed
-viewport/DPR overrides at the target and defaults level. Version 2 makes the
-ordered `devices` array the sole viewport authority and requires
-`"schemaVersion": 2`. No automatic migration is performed — update your config
-explicitly:
-
-1. **Back up** the existing config.
-2. **Generate a v2 reference** with `vlint init` in a scratch directory, then
-   copy the `devices` array (and optionally `rules`) into your config.
-3. **Remove** `viewport` and `deviceScaleFactor` from `defaults` and from every
-   target — they are no longer accepted. Viewport, screen, DPR, mobile, touch,
-   and user agent now live exclusively in each device profile.
-4. **Set** `"schemaVersion": 2` at the top level.
-5. **Validate** non-destructively:
-   ```sh
-   vlint check --url http://localhost:3000/ --format json
-   ```
-
-Historical v1 consumers must first adopt the target/device `cases` shape described
-under [Machine consumption](#machine-consumption-json-schema-v4).
-
-### Migrating result consumers from v3 to v4
-
-Configuration may remain at schema version `2` or `3`; the emitted **result** contract
-changes to version `4` when this release is used. There are no compatibility aliases:
-
-1. Require root result `"schemaVersion": 4`.
-2. Accept `local` rule results and violations in addition to built-in variants.
-3. Read each violation's `type` discriminator. Local violations provide `message`,
-   `geometry`, `locator`, and JSON-compatible `details`; built-in variants are unchanged.
-4. Built-in tab and overflow violations retain their existing fields.
-
-### Migrating result consumers from v2 to v3
-
-Configuration stays at schema version `2` or `3`; only the emitted result contract
-changed between v2 and v3. Historical v2 consumers should first adopt v3, then v4:
-
-1. Require root result `"schemaVersion": 3` (or `4` on this release).
-2. Rename rule/fact/finalization `labelsInspected` and summary
-   `matchedElements` to `elementsInspected`.
-3. Read each violation's `type` discriminator. Tab violations retain `text`,
-   `lineCount`, `geometry`, and `locator`; overflow violations provide
-   `overflowPx`, `geometry`, `locator`, and `computedStyle`.
-4. Accept `page-horizontal-overflow` rule results and finalizations in addition
-   to `tab-label-single-line`.
-
 ## Local rule plugins
 
 Projects can register trusted, self-contained TypeScript rules in `vlint.config.json`.
@@ -388,11 +343,10 @@ external Bun, Node, or package files.
 - Synchronous infinite loops or `process.exit()` can still hang or terminate vlint;
   asynchronous loader, browser, and finalizer work is bounded by timeouts.
 
-Example version `3` declaration:
+Example declaration with a local rule:
 
 ```jsonc
 {
-  "schemaVersion": 3,
   "devices": [/* ... */],
   "rules": [
     { "name": "tab-label-single-line", "type": "tab-label-single-line" },
@@ -445,8 +399,8 @@ reached, the run fails as `incomplete` (exit 2).
 is passed through control/ANSI/OSC/bi-directional escape stripping and length caps;
 URLs have their query values redacted and their fragments removed.
 
-`--format json` prints a versioned JSON object (see
-[Machine consumption](#machine-consumption-json-schema-v4)).
+`--format json` prints a structured JSON object (see
+[Machine consumption](#machine-consumption-json)).
 
 ### Disclosure boundary
 
@@ -479,15 +433,17 @@ CLI usage errors write to stderr and exit `1` without producing a check result. 
 
 ---
 
-## Machine consumption (JSON schema v4)
+## Machine consumption (JSON)
 
-The root result `schemaVersion` is `4`. Configuration may be schema version `2` or `3`.
+`vlint check --format json` emits one JSON object per run. During beta there is no
+root `schemaVersion` field and no compatibility promise across releases — consumers
+should pin the vlint version they parse against.
+
 Results represent target × device audit cases explicitly and retain successful
 cases when another case fails.
 
 ```jsonc
 {
-  "schemaVersion": 4,
   "status": "clean | violations | incomplete",
   "tool": { "name": "vlint", "version": "0.4.0" },
   "environment": {
@@ -589,9 +545,8 @@ cases when another case fails.
 `cases` are ordered by target declaration first and configured device second.
 Failures carry separate nullable `target`, `device`, and `rule` identities.
 Local violations use the generic `local` envelope with `message`, `locator`,
-`geometry`, and JSON-compatible `details`. Adding optional fields is v4-compatible;
-renaming, removing, or changing a field type requires another result `schemaVersion`
-bump. Timestamps are intentionally omitted so stable inputs produce stable output.
+`geometry`, and JSON-compatible `details`. Timestamps are intentionally omitted so
+stable inputs produce stable output.
 
 ## Browser cache hygiene
 
