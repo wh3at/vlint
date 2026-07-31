@@ -241,15 +241,121 @@ const AsyncFunctionCtor = Object.getPrototypeOf(async function asyncFunctionCtor
   ...args: string[]
 ) => (...args: unknown[]) => Promise<unknown>;
 
+const CALLBACK_ASSIGNMENT_MARKERS = [
+  "const __vlint_callback = ",
+  "let __vlint_callback = ",
+  "var __vlint_callback = ",
+] as const;
+
+function extractTranspiledAssignmentRhs(transformed: string, variableName: string): string {
+  const markers = [
+    `const ${variableName} = `,
+    `let ${variableName} = `,
+    `var ${variableName} = `,
+  ];
+  let start = -1;
+  for (const marker of markers) {
+    const index = transformed.indexOf(marker);
+    if (index >= 0) {
+      start = index + marker.length;
+      break;
+    }
+  }
+  if (start < 0) {
+    throw new Error("plugin callback assignment was not found in transpiled output");
+  }
+
+  let index = start;
+  while (index < transformed.length && /\s/.test(transformed[index] ?? "")) index += 1;
+
+  let depthParen = 0;
+  let depthBrace = 0;
+  let depthBracket = 0;
+  let inSingle = false;
+  let inDouble = false;
+  let inTemplate = false;
+  let escaped = false;
+
+  const atTopLevel = (): boolean =>
+    depthParen === 0 && depthBrace === 0 && depthBracket === 0 && !inSingle && !inDouble && !inTemplate;
+
+  for (; index < transformed.length; index += 1) {
+    const char = transformed[index]!;
+    const next = transformed[index + 1];
+
+    if (inSingle) {
+      if (!escaped && char === "'") inSingle = false;
+      escaped = !escaped && char === "\\";
+      continue;
+    }
+    if (inDouble) {
+      if (!escaped && char === '"') inDouble = false;
+      escaped = !escaped && char === "\\";
+      continue;
+    }
+    if (inTemplate) {
+      if (!escaped && char === "`") inTemplate = false;
+      escaped = !escaped && char === "\\";
+      continue;
+    }
+
+    if (char === "'" ) {
+      inSingle = true;
+      escaped = false;
+      continue;
+    }
+    if (char === '"') {
+      inDouble = true;
+      escaped = false;
+      continue;
+    }
+    if (char === "`") {
+      inTemplate = true;
+      escaped = false;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      while (index < transformed.length && transformed[index] !== "\n") index += 1;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      index += 2;
+      while (index < transformed.length - 1 && !(transformed[index] === "*" && transformed[index + 1] === "/")) {
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+
+    if (char === "(") depthParen += 1;
+    else if (char === ")") depthParen = Math.max(0, depthParen - 1);
+    else if (char === "{") depthBrace += 1;
+    else if (char === "}") depthBrace = Math.max(0, depthBrace - 1);
+    else if (char === "[") depthBracket += 1;
+    else if (char === "]") depthBracket = Math.max(0, depthBracket - 1);
+    else if (char === ";" && atTopLevel()) {
+      return transformed.slice(start, index).trim();
+    }
+  }
+
+  throw new Error("plugin callback expression was not terminated in transpiled output");
+}
+
 export function transpilePluginCallbackSource(source: string): string {
   const transpiler = new Bun.Transpiler({ loader: "ts" });
   const wrapped = `const __vlint_callback = ${source};`;
-  const transformed = transpiler.transformSync(wrapped);
-  const match = transformed.match(/const __vlint_callback = ([\s\S]+);/);
-  if (match?.[1] === undefined) {
+  let transformed: string;
+  try {
+    transformed = transpiler.transformSync(wrapped);
+  } catch {
     throw new Error("plugin callback could not be transpiled");
   }
-  return match[1].trim();
+  for (const marker of CALLBACK_ASSIGNMENT_MARKERS) {
+    if (transformed.includes(marker)) {
+      return extractTranspiledAssignmentRhs(transformed, "__vlint_callback");
+    }
+  }
+  throw new Error("plugin callback could not be transpiled");
 }
 
 function reconstructFinalize(source: string): PluginFinalizeFn {

@@ -8,6 +8,7 @@ import {
   loadLocalPluginRegistry,
   loadPluginContract,
   localPluginsConfigured,
+  transpilePluginCallbackSource,
 } from "../../src/plugins/load";
 import { validatePluginSettings } from "../../src/plugins/schema";
 import type { LoadedConfig } from "../../src/contracts/config";
@@ -141,6 +142,51 @@ describe("plugin loader", () => {
     expect(loaded.ok).toBe(false);
     if (loaded.ok) return;
     expect(loaded.failure.code).toBe("plugin-dependency-forbidden");
+  });
+
+  test("rejects re-export runtime dependencies", async () => {
+    const directory = await temporaryDirectory();
+    const path = await copyFixture(directory, "reexport-rule.ts");
+    await copyFixture(directory, "helper.ts");
+    const loaded = await loadPluginContract({
+      configDirectory: directory,
+      relativePath: path,
+      ruleName: "reexport",
+    });
+    expect(loaded.ok).toBe(false);
+    if (loaded.ok) return;
+    expect(loaded.failure.code).toBe("plugin-dependency-forbidden");
+    expect(loaded.failure.message).toContain("./helper");
+  });
+
+  test("rejects dynamic import() runtime dependencies", async () => {
+    const directory = await temporaryDirectory();
+    const path = await copyFixture(directory, "dynamic-import-rule.ts");
+    await copyFixture(directory, "helper.ts");
+    const loaded = await loadPluginContract({
+      configDirectory: directory,
+      relativePath: path,
+      ruleName: "dynamic-import",
+    });
+    expect(loaded.ok).toBe(false);
+    if (loaded.ok) return;
+    expect(loaded.failure.code).toBe("plugin-dependency-forbidden");
+    expect(loaded.failure.message).toContain("./helper");
+  });
+
+  test("rejects require() runtime dependencies", async () => {
+    const directory = await temporaryDirectory();
+    const path = await copyFixture(directory, "require-rule.ts");
+    await copyFixture(directory, "helper.ts");
+    const loaded = await loadPluginContract({
+      configDirectory: directory,
+      relativePath: path,
+      ruleName: "require-rule",
+    });
+    expect(loaded.ok).toBe(false);
+    if (loaded.ok) return;
+    expect(loaded.failure.code).toBe("plugin-dependency-forbidden");
+    expect(loaded.failure.message).toContain("./helper");
   });
 
   test("allows type-only imports reported by the scanner", async () => {
@@ -330,6 +376,15 @@ describe("plugin loader", () => {
     const { validateEffectiveLocalSettings } = await import("../../src/plugins/load");
     const effective = validateEffectiveLocalSettings(registry.value, plan);
     expect(effective.ok).toBe(false);
+  });
+
+  test("transpilePluginCallbackSource preserves callbacks with interior semicolons", () => {
+    const source =
+      'async (ctx) => { for (let i = 0; i < 1; i++) { const msg = "a; b"; return { elementsInspected: 0, violations: [] }; } }';
+    const transpiled = transpilePluginCallbackSource(source);
+    expect(transpiled).toContain("for (let i = 0");
+    expect(transpiled).toContain('const msg = "a; b"');
+    expect(transpiled).toContain("elementsInspected: 0");
   });
 });
 

@@ -3,9 +3,10 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
-import type { EffectiveAuditCase, EffectiveLocalRule } from "../../src/contracts/config";
+import type { EffectiveAuditCase, EffectiveLocalRule, LoadedConfig } from "../../src/contracts/config";
 import type { JsonSettings } from "../../src/contracts/plugins";
 import type { LocalViolation, RuleEvaluationOutcome } from "../../src/contracts/evaluation";
+import { resolveTargets } from "../../src/config/merge";
 import { evaluateLocalRule } from "../../src/plugins/evaluate";
 import { loadPluginContract } from "../../src/plugins/load";
 import { PLUGIN_EVALUATION_TIMEOUT_MS } from "../../src/plugins/evaluate";
@@ -49,6 +50,37 @@ function localRule(name: string, settings: JsonSettings = {}): EffectiveLocalRul
     enabled: true,
     path: "duplicate-spacing-rule.ts",
     settings,
+  };
+}
+
+function spacingConfig(): LoadedConfig {
+  return {
+    path: `${fixtureRoot}/vlint.config.json`,
+    directory: fixtureRoot,
+    schemaVersion: 3,
+    devices: [
+      {
+        name: "desk",
+        viewport: { width: 1280, height: 800 },
+        screen: { width: 1280, height: 800 },
+        deviceScaleFactor: 1,
+        isMobile: false,
+        hasTouch: false,
+      },
+    ],
+    defaults: {},
+    rules: [
+      {
+        name: "duplicate-spacing",
+        type: "local",
+        enabled: true,
+        path: "duplicate-spacing-rule.ts",
+        settings: {
+          shellSelector: "#app-shell",
+          contentSelector: "#content",
+        },
+      },
+    ],
   };
 }
 
@@ -335,5 +367,107 @@ describe("local rule browser evaluation", () => {
     expect(outcomeB.facts.violations).toHaveLength(0);
     expect(outcomeA.facts.elementsInspected).toBe(2);
     expect(outcomeB.facts.elementsInspected).toBe(2);
+  });
+
+  test("target enabled:false keeps the local rule disabled for that pair (AE5)", async () => {
+    const config = spacingConfig();
+    const plan = resolveTargets(config, [
+      {
+        name: "enabled-target",
+        url: "https://example.com/enabled",
+      },
+      {
+        name: "disabled-target",
+        url: "https://example.com/disabled",
+        ruleOverrides: { "duplicate-spacing": { enabled: false } },
+      },
+    ]);
+    const enabledCase = plan.cases.find((auditCase) => auditCase.name === "enabled-target");
+    const disabledCase = plan.cases.find((auditCase) => auditCase.name === "disabled-target");
+    expect(enabledCase?.rules[0]).toMatchObject({ enabled: true });
+    expect(disabledCase?.rules[0]).toMatchObject({ enabled: false });
+
+    const loaded = await loadSpacingContract(fixtureRoot);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok || enabledCase === undefined || disabledCase === undefined) return;
+
+    const enabledRule = enabledCase.rules[0] as EffectiveLocalRule;
+    const disabledRule = disabledCase.rules[0] as EffectiveLocalRule;
+    const page = await newPage();
+    await page.goto(`${fixtureUrl}/spacing-violation.html`, { waitUntil: "domcontentloaded" });
+    const enabledOutcome = await evaluateLocalRule(page, enabledRule, loaded.value, enabledCase);
+    await page.close();
+    expect(enabledOutcome.facts.violations).toHaveLength(1);
+
+    if (disabledRule.enabled) {
+      throw new Error("disabled target override should keep the local rule disabled");
+    }
+  });
+
+  test("target settings overlay changes only the overridden pair (AE5)", async () => {
+    const config = spacingConfig();
+    const plan = resolveTargets(config, [
+      {
+        name: "baseline-target",
+        url: "https://example.com/baseline",
+        ruleOverrides: {
+          "duplicate-spacing": {
+            settings: {
+              shellSelector: "#missing-shell",
+              contentSelector: "#missing-content",
+            },
+          },
+        },
+      },
+      {
+        name: "overlay-target",
+        url: "https://example.com/overlay",
+        ruleOverrides: {
+          "duplicate-spacing": {
+            settings: {
+              shellSelector: "#app-shell",
+              contentSelector: "#content",
+            },
+          },
+        },
+      },
+    ]);
+    const baselineCase = plan.cases.find((auditCase) => auditCase.name === "baseline-target");
+    const overlayCase = plan.cases.find((auditCase) => auditCase.name === "overlay-target");
+    expect(baselineCase).toBeDefined();
+    expect(overlayCase).toBeDefined();
+    if (baselineCase === undefined || overlayCase === undefined) return;
+
+    const baselineRuleFromPlan = baselineCase.rules.find((rule) => rule.type === "local");
+    const overlayRuleFromPlan = overlayCase.rules.find((rule) => rule.type === "local");
+    expect(baselineRuleFromPlan).toMatchObject({
+      settings: {
+        shellSelector: "#missing-shell",
+        contentSelector: "#missing-content",
+      },
+    });
+    expect(overlayRuleFromPlan).toMatchObject({
+      settings: {
+        shellSelector: "#app-shell",
+        contentSelector: "#content",
+      },
+    });
+
+    const loaded = await loadSpacingContract(fixtureRoot);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+
+    const baselineRule = baselineCase.rules[0] as EffectiveLocalRule;
+    const overlayRule = overlayCase.rules[0] as EffectiveLocalRule;
+    const page = await newPage();
+    await page.goto(`${fixtureUrl}/spacing-violation.html`, { waitUntil: "domcontentloaded" });
+    const baselineOutcome = await evaluateLocalRule(page, baselineRule, loaded.value, baselineCase);
+    const overlayOutcome = await evaluateLocalRule(page, overlayRule, loaded.value, overlayCase);
+    await page.close();
+    expect(baselineOutcome.facts).toEqual({ elementsInspected: 0, violations: [] });
+    expect(overlayOutcome.facts.violations).toHaveLength(1);
+    expect(overlayOutcome.facts.violations[0]?.message).toBe(
+      "duplicate horizontal spacing in content region",
+    );
   });
 });
