@@ -28,13 +28,13 @@ afterEach(async () => {
 });
 
 describe("vlint init: standard config generation", () => {
-  test("builds a two-device, no-provider, standard-rules version 2 config (AE1)", () => {
+  test("builds a two-device, no-provider, standard-rules version 3 config (AE1)", () => {
     const result = buildStandardConfig();
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const config = result.value;
 
-    expect(config.schemaVersion).toBe(2);
+    expect(config.schemaVersion).toBe(3);
     expect(config.provider).toBeUndefined();
     expect(config.devices).toHaveLength(2);
     expect(config.rules).toEqual([

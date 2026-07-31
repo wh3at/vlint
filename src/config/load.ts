@@ -52,6 +52,7 @@ export async function loadConfig(cwd: string): Promise<BoundaryResult<LoadedConf
     return boundarySuccess({
       path,
       directory: dirname(path),
+      schemaVersion: parsed.value.schemaVersion,
       devices: parsed.value.devices,
       ...(parsed.value.provider !== undefined ? { provider: parsed.value.provider } : {}),
       defaults: parsed.value.defaults ?? {},

@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "../../src/config/load";
-import { resolveAdHocTarget, resolveTargets } from "../../src/config/merge";
+import { mergeJsonSettings, resolveAdHocTarget, resolveTargets } from "../../src/config/merge";
 import { parseConfig, parseAdHocUrl } from "../../src/config/schema";
 
 const temporaryDirectories: string[] = [];
@@ -249,7 +249,7 @@ describe("configuration", () => {
 
   test.each([
     ["version 1 config", { schemaVersion: 1, devices: [DESKTOP_DEVICE] }],
-    ["version 3 config", { schemaVersion: 3, devices: [DESKTOP_DEVICE] }],
+    ["version 4 config", { schemaVersion: 4, devices: [DESKTOP_DEVICE] }],
     ["unknown field", { schemaVersion: 2, devices: [DESKTOP_DEVICE], nope: true }],
     ["missing devices", { schemaVersion: 2 }],
     ["empty devices", { schemaVersion: 2, devices: [] }],
@@ -509,5 +509,192 @@ describe("configuration", () => {
         },
       }).ok,
     ).toBe(false);
+  });
+
+  test("accepts a version 3 config with one local declaration and injects built-ins", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      schemaVersion: 3,
+      devices: [DESKTOP_DEVICE],
+      rules: [
+        {
+          name: "spacing",
+          type: "local",
+          path: "rules/spacing.ts",
+          settings: { tolerancePx: 4 },
+        },
+      ],
+    });
+    const loaded = await loadConfig(directory);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.value.schemaVersion).toBe(3);
+    expect(loaded.value.rules.map((rule) => `${rule.name}:${rule.type}`)).toEqual([
+      "tab-label-single-line:tab-label-single-line",
+      "spacing:local",
+      "page-horizontal-overflow:page-horizontal-overflow",
+    ]);
+    const local = loaded.value.rules.find((rule) => rule.type === "local");
+    expect(local).toMatchObject({
+      name: "spacing",
+      path: "rules/spacing.ts",
+      settings: { tolerancePx: 4 },
+      enabled: true,
+    });
+  });
+
+  test("rejects a local declaration in version 2 config", () => {
+    const parsed = parseConfig({
+      schemaVersion: 2,
+      devices: [DESKTOP_DEVICE],
+      rules: [{ name: "spacing", type: "local", path: "rules/spacing.ts" }],
+    });
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.failure.code).toBe("config-schema-invalid");
+    expect(parsed.failure.message).toContain("config.rules[0].type");
+  });
+
+  test.each([
+    [
+      "duplicate local name",
+      {
+        schemaVersion: 3,
+        devices: [DESKTOP_DEVICE],
+        rules: [
+          { name: "dup", type: "local", path: "rules/a.ts" },
+          { name: "dup", type: "local", path: "rules/b.ts" },
+        ],
+      },
+    ],
+    [
+      "missing local path",
+      { schemaVersion: 3, devices: [DESKTOP_DEVICE], rules: [{ name: "spacing", type: "local" }] },
+    ],
+    [
+      "unknown local field",
+      {
+        schemaVersion: 3,
+        devices: [DESKTOP_DEVICE],
+        rules: [{ name: "spacing", type: "local", path: "rules/spacing.ts", extra: true }],
+      },
+    ],
+    [
+      "non-json settings",
+      {
+        schemaVersion: 3,
+        devices: [DESKTOP_DEVICE],
+        rules: [{ name: "spacing", type: "local", path: "rules/spacing.ts", settings: "bad" }],
+      },
+    ],
+    [
+      "absolute local path",
+      {
+        schemaVersion: 3,
+        devices: [DESKTOP_DEVICE],
+        rules: [{ name: "spacing", type: "local", path: "/etc/passwd" }],
+      },
+    ],
+    [
+      "escaping local path",
+      {
+        schemaVersion: 3,
+        devices: [DESKTOP_DEVICE],
+        rules: [{ name: "spacing", type: "local", path: "../outside.ts" }],
+      },
+    ],
+  ])("rejects invalid local config: %s", (_name, value) => {
+    const parsed = parseConfig(value);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.failure.code).toBe("config-schema-invalid");
+  });
+
+  test("accepts structural local target overrides with enabled and settings overlay", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      schemaVersion: 3,
+      devices: [DESKTOP_DEVICE],
+      rules: [
+        {
+          name: "spacing",
+          type: "local",
+          path: "rules/spacing.ts",
+          settings: { shell: { gap: 8 }, enabledPairs: ["desktop"] },
+        },
+      ],
+      provider: {
+        type: "static",
+        targets: [
+          {
+            name: "settings",
+            url: "https://example.com/settings",
+            ruleOverrides: {
+              spacing: {
+                enabled: false,
+                settings: { shell: { gap: 4 }, extra: true },
+              },
+            },
+          },
+        ],
+      },
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok || loaded.value.provider?.type !== "static") throw new Error("expected loaded static config");
+    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    const local = plan.cases[0]?.rules.find((rule) => rule.type === "local");
+    expect(local).toMatchObject({
+      name: "spacing",
+      enabled: false,
+      settings: { shell: { gap: 4 }, enabledPairs: ["desktop"], extra: true },
+    });
+  });
+
+  test("rejects prototype keys in settings and never mutates Object.prototype", () => {
+    const pollutedBefore = (Object.prototype as { polluted?: boolean }).polluted;
+    const settings = Object.create(null) as Record<string, unknown>;
+    settings.__proto__ = { polluted: true };
+    expect(
+      parseConfig({
+        schemaVersion: 3,
+        devices: [DESKTOP_DEVICE],
+        rules: [
+          {
+            name: "spacing",
+            type: "local",
+            path: "rules/spacing.ts",
+            settings,
+          },
+        ],
+      }).ok,
+    ).toBe(false);
+    expect((Object.prototype as { polluted?: boolean }).polluted).toBe(pollutedBefore);
+    expect(
+      parseConfig({
+        schemaVersion: 3,
+        devices: [DESKTOP_DEVICE],
+        rules: [
+          {
+            name: "spacing",
+            type: "local",
+            path: "rules/spacing.ts",
+            settings: { nested: { constructor: { polluted: true } } },
+          },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
+  test("mergeJsonSettings uses prototype-safe recursive object merge", () => {
+    const merged = mergeJsonSettings(
+      { shell: { gap: 8, mode: "strict" }, tags: ["a"] },
+      { shell: { gap: 4 }, tags: ["b"], added: 1 },
+    );
+    expect(merged).toEqual({
+      shell: { gap: 4, mode: "strict" },
+      tags: ["b"],
+      added: 1,
+    });
+    expect(Object.getPrototypeOf(merged)).toBeNull();
   });
 });

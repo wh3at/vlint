@@ -104,9 +104,13 @@ export function renderTerminal(result: RunResultV3): string {
           lines.push(
             `    violation lines=${violation.lineCount} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height} text=${escapeTerminal(violation.text)}`,
           );
-        } else {
+        } else if (violation.type === "page-horizontal-overflow") {
           lines.push(
             `    violation overflow=${violation.overflowPx}px locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height} css=${escapeTerminal(JSON.stringify(violation.computedStyle))}`,
+          );
+        } else {
+          lines.push(
+            `    violation message=${escapeTerminal(violation.message)} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height}`,
           );
         }
       }

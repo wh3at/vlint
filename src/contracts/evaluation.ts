@@ -1,3 +1,4 @@
+import type { JsonValue } from "./plugins";
 import type { Failure } from "./failure";
 
 export interface Geometry {
@@ -8,7 +9,6 @@ export interface Geometry {
 }
 
 interface ViolationBase {
-  readonly type: "tab-label-single-line" | "page-horizontal-overflow";
   readonly geometry: Geometry;
   readonly locator: string;
 }
@@ -42,12 +42,26 @@ export interface PageHorizontalOverflowViolation extends ViolationBase {
   readonly computedStyle: OverflowComputedStyle;
 }
 
-export type Violation = TabLabelSingleLineViolation | PageHorizontalOverflowViolation;
+/** Generic local-rule violation envelope (KTD7). */
+export interface LocalViolation extends ViolationBase {
+  readonly type: "local";
+  readonly message: string;
+  readonly details: JsonValue;
+}
+
+export type Violation =
+  | TabLabelSingleLineViolation
+  | PageHorizontalOverflowViolation
+  | LocalViolation;
 
 export function isTabLabelSingleLineViolation(
   violation: Violation,
 ): violation is TabLabelSingleLineViolation {
   return violation.type === "tab-label-single-line";
+}
+
+export function isLocalViolation(violation: Violation): violation is LocalViolation {
+  return violation.type === "local";
 }
 
 export interface RuleEvaluationFact<TViolation extends Violation = Violation> {
@@ -59,7 +73,6 @@ export interface RuleEvaluationOutcome<TViolation extends Violation = Violation>
   readonly facts: RuleEvaluationFact<TViolation>;
   readonly failure: Failure | null;
 }
-
 
 export type RuleFinalizationStatus = "passed" | "failed" | "not-executed";
 

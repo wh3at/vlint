@@ -14,6 +14,7 @@ import type {
   CaseStatus,
   RuleResultStatus,
   RunResultV3,
+  RunResultV4,
   RunSummary,
 } from "../contracts/result";
 
@@ -44,7 +45,7 @@ export interface CheckOptions {
 
 interface MutableRuleResult {
   name: string;
-  type: "tab-label-single-line" | "page-horizontal-overflow";
+  type: EffectiveRuleForTarget["type"];
   status: RuleResultStatus;
   elementsInspected: number;
   violations: readonly Violation[];
@@ -188,7 +189,7 @@ export function resultForResolutionFailure(toolVersion: string, failure: Failure
   return completedResult(toolVersion, null, 0, [], [], [failure]);
 }
 
-export function exitCodeForResult(result: RunResultV3): 0 | 1 | 2 {
+export function exitCodeForResult(result: RunResultV3 | RunResultV4): 0 | 1 | 2 {
   if (result.status === "incomplete") return 2;
   return result.status === "violations" ? 1 : 0;
 }

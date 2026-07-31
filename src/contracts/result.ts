@@ -1,5 +1,6 @@
 import type { RuleFinalization, Violation } from "./evaluation";
 import type { Failure } from "./failure";
+import type { RuleType } from "./config";
 
 export type RunStatus = "clean" | "violations" | "incomplete";
 export type CaseStatus = "complete" | "partial" | "failed" | "not-executed";
@@ -7,7 +8,7 @@ export type RuleResultStatus = "clean" | "violations" | "failed" | "disabled" | 
 
 export interface RuleResult {
   readonly name: string;
-  readonly type: "tab-label-single-line" | "page-horizontal-overflow";
+  readonly type: RuleType;
   readonly status: RuleResultStatus;
   readonly elementsInspected: number;
   readonly violations: readonly Violation[];
@@ -78,8 +79,8 @@ export interface RunSummary {
   readonly executionFailures: number;
 }
 
-export interface RunResultV3 {
-  readonly schemaVersion: 3;
+interface RunResultBase<TSchemaVersion extends 3 | 4> {
+  readonly schemaVersion: TSchemaVersion;
   readonly status: RunStatus;
   readonly tool: { readonly name: "vlint"; readonly version: string };
   readonly environment: {
@@ -92,4 +93,15 @@ export interface RunResultV3 {
   readonly ruleFinalizations: readonly RuleFinalization[];
   /** Ordered run-wide failures: config, provider, browser launch, browser-wide cleanup, interrupt. */
   readonly failures: readonly Failure[];
+}
+
+export interface RunResultV3 extends RunResultBase<3> {}
+
+/** Result schema v4 adds local rule and violation variants (KTD8). */
+export interface RunResultV4 extends RunResultBase<4> {}
+
+export type RunResult = RunResultV3 | RunResultV4;
+
+export function isRunResultV4(result: RunResult): result is RunResultV4 {
+  return result.schemaVersion === 4;
 }

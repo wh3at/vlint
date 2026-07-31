@@ -1,3 +1,5 @@
+import type { JsonSettings } from "./plugins";
+
 export interface Viewport {
   readonly width: number;
   readonly height: number;
@@ -28,6 +30,8 @@ export interface RuleOverride {
   readonly enabled?: boolean;
   readonly excludeSelectors?: readonly string[];
   readonly minimumLabels?: number;
+  /** JSON settings overlay for local rules (KTD6). */
+  readonly settings?: JsonSettings;
 }
 
 export interface Target extends TargetDefaults {
@@ -65,11 +69,12 @@ export interface CommandProviderConfig {
 
 export type ProviderConfig = StaticProviderConfig | CommandProviderConfig;
 
-export type RuleType = "tab-label-single-line" | "page-horizontal-overflow";
+export type BuiltinRuleType = "tab-label-single-line" | "page-horizontal-overflow";
+
+export type RuleType = BuiltinRuleType | "local";
 
 interface RuleInstanceBase {
   readonly name: string;
-  readonly type: RuleType;
 }
 
 export interface TabLabelSingleLineRuleInstance extends RuleInstanceBase {
@@ -87,7 +92,17 @@ export interface PageHorizontalOverflowRuleInstance extends RuleInstanceBase {
   readonly tolerancePx?: number;
 }
 
-export type RuleInstance = TabLabelSingleLineRuleInstance | PageHorizontalOverflowRuleInstance;
+export interface LocalRuleInstance extends RuleInstanceBase {
+  readonly type: "local";
+  /** Project-relative path to a self-contained TypeScript rule file (R1, R2). */
+  readonly path: string;
+  readonly settings?: JsonSettings;
+}
+
+export type RuleInstance =
+  | TabLabelSingleLineRuleInstance
+  | PageHorizontalOverflowRuleInstance
+  | LocalRuleInstance;
 
 export interface ConfigV2 {
   readonly schemaVersion: 2;
@@ -97,13 +112,22 @@ export interface ConfigV2 {
   readonly rules?: readonly RuleInstance[];
 }
 
+export interface ConfigV3 {
+  readonly schemaVersion: 3;
+  readonly devices: readonly DeviceProfile[];
+  readonly provider?: ProviderConfig;
+  readonly defaults?: TargetDefaults;
+  readonly rules?: readonly RuleInstance[];
+}
+
+export type ParsedConfig = ConfigV2 | ConfigV3;
+
 export interface CommandProviderOutput {
   readonly targets: readonly Target[];
 }
 
 interface EffectiveRuleBase {
   readonly name: string;
-  readonly type: RuleType;
   readonly enabled: boolean;
 }
 
@@ -121,7 +145,17 @@ export interface EffectivePageHorizontalOverflowRule extends EffectiveRuleBase {
   readonly tolerancePx: number;
 }
 
-export type EffectiveRule = EffectiveTabLabelSingleLineRule | EffectivePageHorizontalOverflowRule;
+export interface EffectiveLocalRule extends EffectiveRuleBase {
+  readonly type: "local";
+  readonly path: string;
+  readonly settings: JsonSettings;
+}
+
+export type EffectiveRule =
+  | EffectiveTabLabelSingleLineRule
+  | EffectivePageHorizontalOverflowRule
+  | EffectiveLocalRule;
+
 export type EffectiveRuleForTarget = EffectiveRule;
 
 /**
@@ -176,6 +210,7 @@ export interface EffectiveAuditCase {
 export interface LoadedConfig {
   readonly path: string;
   readonly directory: string;
+  readonly schemaVersion: 2 | 3;
   readonly devices: readonly DeviceProfile[];
   readonly provider?: ProviderConfig;
   readonly defaults: TargetDefaults;

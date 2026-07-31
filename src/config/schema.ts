@@ -2,7 +2,10 @@ import type {
   CommandProviderConfig,
   CommandProviderOutput,
   ConfigV2,
+  ConfigV3,
   DeviceProfile,
+  LocalRuleInstance,
+  ParsedConfig,
   ProviderConfig,
   ReadyCondition,
   RuleInstance,
@@ -13,6 +16,7 @@ import type {
   TargetDefaults,
   Viewport,
 } from "../contracts/config";
+import type { JsonSettings, JsonValue } from "../contracts/plugins";
 import {
   boundaryFailure,
   boundarySuccess,
@@ -25,6 +29,7 @@ const NAME_BYTES = 1024;
 const TEXT_BYTES = 64 * 1024;
 const MIN_TIMEOUT_MS = 100;
 const MAX_TIMEOUT_MS = 300_000;
+const DANGEROUS_JSON_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 class SchemaIssue extends Error {}
 
@@ -83,6 +88,53 @@ function booleanAt(value: unknown, path: string): boolean {
 function stringArrayAt(value: unknown, path: string): readonly string[] {
   if (!Array.isArray(value)) issue(path, "expected array");
   return value.map((item, index) => stringAt(item, `${path}[${index}]`));
+}
+
+function rejectDangerousKey(key: string, path: string): void {
+  if (DANGEROUS_JSON_KEYS.has(key)) issue(path, "forbidden prototype key");
+}
+
+function jsonValueAt(value: unknown, path: string): JsonValue {
+  if (value === null) return null;
+  if (typeof value === "string") return stringAt(value, path);
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) issue(path, "expected finite number");
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, index) => jsonValueAt(item, `${path}[${index}]`));
+  }
+  if (typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    const result: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
+    for (const [key, item] of Object.entries(object)) {
+      rejectDangerousKey(key, `${path}.${key}`);
+      result[key] = jsonValueAt(item, `${path}.${key}`);
+    }
+    return result;
+  }
+  issue(path, "expected JSON value");
+}
+
+function jsonSettingsAt(value: unknown, path: string): JsonSettings {
+  const parsed = jsonValueAt(value, path);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    issue(path, "expected JSON object");
+  }
+  return parsed as JsonSettings;
+}
+
+function localRulePathAt(value: unknown, path: string): string {
+  const rulePath = stringAt(value, path);
+  if (rulePath.length === 0) issue(path, "must not be empty");
+  if (rulePath.includes("\0")) issue(path, "invalid path");
+  if (rulePath.startsWith("/")) issue(path, "expected relative path");
+  const segments = rulePath.split(/[/\\]/);
+  for (const segment of segments) {
+    if (segment === "..") issue(path, "path must not escape the configuration directory");
+  }
+  return rulePath;
 }
 
 function viewportAt(value: unknown, path: string): Viewport {
@@ -155,6 +207,15 @@ function defaultsAt(value: unknown, path: string, validateKeys = true): TargetDe
 
 function ruleOverrideAt(value: unknown, path: string, rule: RuleMetadata): RuleOverride {
   const object = objectAt(value, path);
+  if (rule.type === "local") {
+    exactKeys(object, ["enabled", "settings"], path);
+    const result: { enabled?: boolean; settings?: JsonSettings } = {};
+    if (object.enabled !== undefined) result.enabled = booleanAt(object.enabled, `${path}.enabled`);
+    if (object.settings !== undefined) {
+      result.settings = jsonSettingsAt(object.settings, `${path}.settings`);
+    }
+    return result;
+  }
   if (rule.type === "page-horizontal-overflow") {
     exactKeys(object, ["enabled"], path);
     return object.enabled === undefined ? {} : { enabled: booleanAt(object.enabled, `${path}.enabled`) };
@@ -257,8 +318,23 @@ function devicesAt(value: unknown, path: string): readonly DeviceProfile[] {
   return devices;
 }
 
-function ruleAt(value: unknown, path: string): RuleInstance {
+function ruleAt(value: unknown, path: string, schemaVersion: 2 | 3): RuleInstance {
   const object = objectAt(value, path);
+  if (object.type === "local") {
+    if (schemaVersion < 3) {
+      issue(`${path}.type`, "local rules require config schema version 3");
+    }
+    exactKeys(object, ["name", "type", "path", "settings"], path);
+    const result: LocalRuleInstance = {
+      name: nameAt(object.name, `${path}.name`),
+      type: "local",
+      path: localRulePathAt(object.path, `${path}.path`),
+    };
+    if (object.settings !== undefined) {
+      return { ...result, settings: jsonSettingsAt(object.settings, `${path}.settings`) };
+    }
+    return result;
+  }
   if (object.type === "tab-label-single-line") {
     exactKeys(
       object,
@@ -317,9 +393,9 @@ function ruleAt(value: unknown, path: string): RuleInstance {
   issue(`${path}.type`, "unsupported rule type");
 }
 
-function rulesAt(value: unknown, path: string): readonly RuleInstance[] {
+function rulesAt(value: unknown, path: string, schemaVersion: 2 | 3): readonly RuleInstance[] {
   if (!Array.isArray(value) || value.length === 0) issue(path, "expected non-empty array");
-  const rules = value.map((item, index) => ruleAt(item, `${path}[${index}]`));
+  const rules = value.map((item, index) => ruleAt(item, `${path}[${index}]`, schemaVersion));
   const names = new Set<string>();
   const types = new Set<string>();
   for (const rule of rules) {
@@ -371,27 +447,32 @@ function failureFor(source: Source, message: string): Failure {
   };
 }
 
-export function parseConfig(value: unknown): BoundaryResult<ConfigV2> {
+function parseConfigBody(object: Record<string, unknown>, schemaVersion: 2 | 3): ParsedConfig {
+  const rules = object.rules === undefined ? undefined : rulesAt(object.rules, "config.rules", schemaVersion);
+  const completeRules = rulesWithBuiltins(rules);
+  const rulesByName = new Map(completeRules.map((rule) => [rule.name, rule]));
+  if (rulesByName.size !== completeRules.length) issue("config.rules", "duplicate rule name after default injection");
+  const devices = devicesAt(object.devices, "config.devices");
+  const config: {
+    schemaVersion: 2 | 3;
+    devices: readonly DeviceProfile[];
+    provider?: ProviderConfig;
+    defaults?: TargetDefaults;
+    rules?: readonly RuleInstance[];
+  } = { schemaVersion, devices };
+  if (object.provider !== undefined) config.provider = providerAt(object.provider, "config.provider", rulesByName);
+  if (object.defaults !== undefined) config.defaults = defaultsAt(object.defaults, "config.defaults");
+  if (rules !== undefined) config.rules = rules;
+  return schemaVersion === 2 ? (config as ConfigV2) : (config as ConfigV3);
+}
+
+export function parseConfig(value: unknown): BoundaryResult<ParsedConfig> {
   try {
     const object = objectAt(value, "config");
     exactKeys(object, ["schemaVersion", "devices", "provider", "defaults", "rules"], "config");
-    if (object.schemaVersion !== 2) issue("config.schemaVersion", "expected 2");
-    const rules = object.rules === undefined ? undefined : rulesAt(object.rules, "config.rules");
-    const completeRules = rulesWithBuiltins(rules);
-    const rulesByName = new Map(completeRules.map((rule) => [rule.name, rule]));
-    if (rulesByName.size !== completeRules.length) issue("config.rules", "duplicate rule name after default injection");
-    const devices = devicesAt(object.devices, "config.devices");
-    const config: {
-      schemaVersion: 2;
-      devices: readonly DeviceProfile[];
-      provider?: ProviderConfig;
-      defaults?: TargetDefaults;
-      rules?: readonly RuleInstance[];
-    } = { schemaVersion: 2, devices };
-    if (object.provider !== undefined) config.provider = providerAt(object.provider, "config.provider", rulesByName);
-    if (object.defaults !== undefined) config.defaults = defaultsAt(object.defaults, "config.defaults");
-    if (rules !== undefined) config.rules = rules;
-    return boundarySuccess(config);
+    if (object.schemaVersion === 2) return boundarySuccess(parseConfigBody(object, 2));
+    if (object.schemaVersion === 3) return boundarySuccess(parseConfigBody(object, 3));
+    issue("config.schemaVersion", "expected 2 or 3");
   } catch (error) {
     const message = error instanceof SchemaIssue ? error.message : "config schema validation failed";
     return boundaryFailure(failureFor("config", message));

@@ -72,6 +72,19 @@ async function evaluateWithCancellation(
   signal?: AbortSignal,
 ): Promise<RuleEvaluationOutcome> {
   if (signal?.aborted === true) return interruptedOutcome(rule);
+  if (rule.type === "local") {
+    return {
+      facts: { elementsInspected: 0, violations: [] },
+      failure: {
+        stage: "rule-evaluation",
+        code: "plugin-load-failed",
+        message: "local rule plugin is not loaded",
+        target: null,
+        device: null,
+        rule: rule.name,
+      },
+    };
+  }
   const evaluation =
     rule.type === "tab-label-single-line"
       ? evaluateTabLabelSingleLine(page, rule)

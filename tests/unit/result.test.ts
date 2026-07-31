@@ -8,7 +8,8 @@ import type {
 } from "../../src/contracts/config";
 import { isTabLabelSingleLineViolation, type RuleEvaluationOutcome } from "../../src/contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type Failure } from "../../src/contracts/failure";
-import type { RunResultV3 } from "../../src/contracts/result";
+import type { RunResultV3, RunResultV4 } from "../../src/contracts/result";
+import { isRunResultV4 } from "../../src/contracts/result";
 import {
   exitCodeForResult,
   type CheckDependencies,
@@ -447,5 +448,105 @@ describe("orchestrator result model", () => {
     expect(result.status).toBe("clean");
     expect(result.cases.map((item) => item.status)).toEqual(["complete"]);
     expect(result.summary.cases).toMatchObject({ resolved: 1, complete: 1 });
+  });
+});
+
+describe("result schema v4 contracts", () => {
+  test("local lifecycle failure codes produce incomplete v4 results", () => {
+    const pluginFailure: Failure = {
+      stage: "config",
+      code: "plugin-contract-version-mismatch",
+      message: "plugin contract version is not supported",
+      target: null,
+      device: null,
+      rule: "spacing",
+    };
+    const result: RunResultV4 = {
+      schemaVersion: 4,
+      status: "incomplete",
+      tool: { name: "vlint", version: "0.4.1" },
+      environment: {
+        platform: "linux",
+        arch: "x64",
+        browser: { name: "chromium", version: null },
+      },
+      summary: {
+        targets: { resolved: 0 },
+        cases: { resolved: 0, complete: 0, partial: 0, failed: 0, notExecuted: 0 },
+        ruleEvaluations: { clean: 0, violations: 0, failed: 0, disabled: 0, notExecuted: 0 },
+        ruleFinalizations: { passed: 0, failed: 0, notExecuted: 0 },
+        violations: 0,
+        elementsInspected: 0,
+        executionFailures: 1,
+      },
+      cases: [],
+      ruleFinalizations: [],
+      failures: [pluginFailure],
+    };
+    expect(isRunResultV4(result)).toBe(true);
+    expect(exitCodeForResult(result)).toBe(2);
+    expect(result.failures[0]?.code).toBe("plugin-contract-version-mismatch");
+  });
+
+  test("accepts local rule results and violations in the v4 contract", () => {
+    const result: RunResultV4 = {
+      schemaVersion: 4,
+      status: "violations",
+      tool: { name: "vlint", version: "0.4.1" },
+      environment: {
+        platform: "linux",
+        arch: "x64",
+        browser: { name: "chromium", version: "149.0.0.0" },
+      },
+      summary: {
+        targets: { resolved: 1 },
+        cases: { resolved: 1, complete: 1, partial: 0, failed: 0, notExecuted: 0 },
+        ruleEvaluations: { clean: 0, violations: 1, failed: 0, disabled: 0, notExecuted: 0 },
+        ruleFinalizations: { passed: 1, failed: 0, notExecuted: 0 },
+        violations: 1,
+        elementsInspected: 1,
+        executionFailures: 0,
+      },
+      cases: [
+        {
+          target: { name: "settings", url: "https://example.com/settings" },
+          device: {
+            name: "desk",
+            viewport: { width: 1280, height: 720 },
+            screen: { width: 1280, height: 720 },
+            deviceScaleFactor: 1,
+            isMobile: false,
+            hasTouch: false,
+            userAgent: null,
+          },
+          locale: "en-US",
+          timezoneId: "UTC",
+          status: "complete",
+          rules: [
+            {
+              name: "spacing",
+              type: "local",
+              status: "violations",
+              elementsInspected: 1,
+              violations: [
+                {
+                  type: "local",
+                  message: "duplicate horizontal spacing",
+                  locator: "#content",
+                  geometry: { x: 0, y: 0, width: 100, height: 20 },
+                  details: { shellGap: 16, contentGap: 8 },
+                },
+              ],
+              failure: null,
+            },
+          ],
+          failures: [],
+        },
+      ],
+      ruleFinalizations: [{ name: "spacing", status: "passed", elementsInspected: 1, failure: null }],
+      failures: [],
+    };
+    expect(result.cases[0]?.rules[0]?.type).toBe("local");
+    expect(result.cases[0]?.rules[0]?.violations[0]?.type).toBe("local");
   });
 });
