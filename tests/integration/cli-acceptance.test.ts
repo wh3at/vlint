@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { RunResultV3 } from "../../src/contracts/result";
+import type { RunResultV4 } from "../../src/contracts/result";
 import { boundarySuccess } from "../../src/contracts/failure";
 import { runCli, type BrowserInstallResult, type CliIo, type CliRuntime } from "../../src/cli";
 import { runCheckCommand } from "../../src/commands/check";
@@ -27,6 +27,7 @@ import { loadConfig } from "../../src/config/load";
  */
 
 const providerFixture = join(import.meta.dir, "../fixtures/providers/provider.ts");
+const pluginFixtureRoot = join(import.meta.dir, "../fixtures/plugins");
 const temporaryDirectories: string[] = [];
 
 async function temporaryDirectory(): Promise<string> {
@@ -103,15 +104,15 @@ async function runCheck(
   return { exit, output: harness.output() };
 }
 
-function jsonResult(output: Captured): RunResultV3 {
+function jsonResult(output: Captured): RunResultV4 {
   expect(output.stdout).toHaveLength(1);
   expect(output.stderr).toEqual([]);
   const line = output.stdout[0]!;
   expect(line.endsWith("\n")).toBe(true);
-  return JSON.parse(line) as RunResultV3;
+  return JSON.parse(line) as RunResultV4;
 }
 
-function runFailure(output: Captured): RunResultV3["failures"][number] | undefined {
+function runFailure(output: Captured): RunResultV4["failures"][number] | undefined {
   return jsonResult(output).failures[0];
 }
 
@@ -273,6 +274,64 @@ describe("init boundary: non-destructive standard config generation", () => {
 
     const after = await readFile(configPath, "utf8");
     expect(after).toBe(prior);
+  });
+});
+
+describe("local plugin config boundary maps to exit 2 with typed failures", () => {
+  async function writeLocalConfig(
+    directory: string,
+    ruleFile: string,
+    settings: Record<string, unknown> = {},
+  ): Promise<void> {
+    await copyFile(join(pluginFixtureRoot, ruleFile), join(directory, ruleFile));
+    await writeConfig(directory, {
+      schemaVersion: 3,
+      devices: [MINIMAL_DEVICE],
+      rules: [{
+        name: "spacing",
+        type: "local",
+        path: ruleFile,
+        settings,
+      }],
+      provider: {
+        type: "static",
+        targets: [{ name: "page", url: "http://127.0.0.1:3000/" }],
+      },
+    });
+  }
+
+  test("plugin-settings-invalid with precise config path (AE3)", async () => {
+    const cwd = await temporaryDirectory();
+    await writeLocalConfig(cwd, "valid-rule.ts", { tolerance: "bad" });
+    const { exit, output } = await runCheck(cwd, ["check", "--format", "json"]);
+    expect(exit).toBe(2);
+    const failure = runFailure(output);
+    expect(failure).toMatchObject({ stage: "config", code: "plugin-settings-invalid", rule: "spacing" });
+    expect(failure?.message).toContain("rules.spacing.settings.tolerance");
+    expect(JSON.stringify(output)).not.toContain("valid-rule.ts");
+  });
+
+  test("plugin-dependency-forbidden without raw source (AE6)", async () => {
+    const cwd = await temporaryDirectory();
+    await copyFile(join(pluginFixtureRoot, "helper.ts"), join(cwd, "helper.ts"));
+    await writeLocalConfig(cwd, "imported-rule.ts");
+    const { exit, output } = await runCheck(cwd, ["check", "--format", "json"]);
+    expect(exit).toBe(2);
+    const failure = runFailure(output);
+    expect(failure).toMatchObject({ code: "plugin-dependency-forbidden" });
+    expect(JSON.stringify(output)).not.toContain("import { helper }");
+    expect(JSON.stringify(output)).not.toContain("stack");
+  });
+
+  test("plugin-contract-version-mismatch reports supported version (AE8)", async () => {
+    const cwd = await temporaryDirectory();
+    await writeLocalConfig(cwd, "contract-mismatch-rule.ts");
+    const { exit, output } = await runCheck(cwd, ["check", "--format", "json"]);
+    expect(exit).toBe(2);
+    const failure = runFailure(output);
+    expect(failure).toMatchObject({ code: "plugin-contract-version-mismatch" });
+    expect(failure?.message).toContain("expected 1");
+    expect(JSON.stringify(output)).not.toContain("contract-mismatch-rule.ts");
   });
 });
 

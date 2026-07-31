@@ -1,5 +1,6 @@
-import type { RunResultV3 } from "../contracts/result";
+import type { RunResult } from "../contracts/result";
+import { publishResult } from "./publish";
 
-export function renderJson(result: RunResultV3): string {
-  return `${JSON.stringify(result)}\n`;
+export function renderJson(result: RunResult): string {
+  return `${JSON.stringify(publishResult(result))}\n`;
 }

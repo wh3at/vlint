@@ -377,7 +377,7 @@ EOF
     ')
   assert_contains "$deps_output" 'chromium'
   assert_contains "$deps_output" 'ready'
-  assert_contains "$deps_output" '"schemaVersion":3'
+  assert_contains "$deps_output" '"schemaVersion":4'
   assert_contains "$deps_output" '"status":"clean"'
   assert_contains "$deps_output" 'macbook-air-13-m5'
   assert_contains "$deps_output" 'iphone-17'
@@ -416,7 +416,7 @@ EOF
     ')
   assert_contains "$deb_setup_output" 'config created'
   assert_contains "$deb_setup_output" 'config already-present'
-  assert_contains "$deb_setup_output" '"schemaVersion":3'
+  assert_contains "$deb_setup_output" '"schemaVersion":4'
   assert_contains "$deb_setup_output" '"status":"clean"'
   assert_contains "$deb_setup_output" 'macbook-air-13-m5'
   assert_contains "$deb_setup_output" 'iphone-17'
@@ -447,7 +447,7 @@ EOF
       test "$term_status" -eq 0
       exit 0
     ')
-  assert_contains "$check_output" '"schemaVersion":3'
+  assert_contains "$check_output" '"schemaVersion":4'
   assert_contains "$check_output" '"status":"clean"'
   assert_contains "$check_output" 'macbook-air-13-m5'
   assert_contains "$check_output" 'iphone-17'

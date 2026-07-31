@@ -13,7 +13,7 @@ import {
   type RuleFinalization,
 } from "../../src/contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type Failure } from "../../src/contracts/failure";
-import type { RunResultV3, RunResultV4 } from "../../src/contracts/result";
+import type { RunResultV4 } from "../../src/contracts/result";
 import { isRunResultV4 } from "../../src/contracts/result";
 import {
   exitCodeForResult,
@@ -145,7 +145,7 @@ function dependencies(options: DependencyOptions = {}): CheckDependencies<string
   };
 }
 
-function firstFailure(result: RunResultV3): Failure | undefined {
+function firstFailure(result: RunResultV4): Failure | undefined {
   return (
     result.failures[0] ??
     result.cases.flatMap((c) => c.failures)[0] ??

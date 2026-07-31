@@ -20,10 +20,11 @@ diagnostics to locate the offending target and element.
 - [Command help](#command-help)
 - [Running checks](#running-checks)
 - [Configuration](#configuration)
+- [Local rule plugins](#local-rule-plugins)
 - [Browser state (authentication)](#browser-state-authentication)
 - [Output: terminal vs JSON](#output-terminal-vs-json)
 - [Exit codes](#exit-codes)
-- [Machine consumption (JSON schema v3)](#machine-consumption-json-schema-v3)
+- [Machine consumption (JSON schema v4)](#machine-consumption-json-schema-v4)
 - [Browser cache hygiene](#browser-cache-hygiene)
 - [Consumer integration](#consumer-integration)
 - [Building from source](#building-from-source)
@@ -256,7 +257,7 @@ An expanded config with a static provider has this shape:
 
 | Field | Description |
 | --- | --- |
-| `schemaVersion` | Must be `2`. |
+| `schemaVersion` | Must be `2` or `3`. Version `3` is required to register local rules. `vlint init` and `vlint setup` create version `3` configs. |
 | `devices` | Non-empty ordered device profiles with unique names. This is the only authority for viewport, screen, DPR, mobile mode, touch, and optional user agent. |
 | `defaults` | Shared target defaults: `locale`, `timezoneId`, `timeoutMs` (`100`–`300000`), `readyCondition`, and `browserState`. |
 | `rules` | Rule instances. Missing built-in types are injected in deterministic `tab-label-single-line`, configured rules, `page-horizontal-overflow` order. |
@@ -341,14 +342,25 @@ explicitly:
    ```
 
 Historical v1 consumers must first adopt the target/device `cases` shape described
-under [Machine consumption](#machine-consumption-json-schema-v3).
+under [Machine consumption](#machine-consumption-json-schema-v4).
+
+### Migrating result consumers from v3 to v4
+
+Configuration may remain at schema version `2` or `3`; the emitted **result** contract
+changes to version `4` when this release is used. There are no compatibility aliases:
+
+1. Require root result `"schemaVersion": 4`.
+2. Accept `local` rule results and violations in addition to built-in variants.
+3. Read each violation's `type` discriminator. Local violations provide `message`,
+   `geometry`, `locator`, and JSON-compatible `details`; built-in variants are unchanged.
+4. Built-in tab and overflow violations retain their existing fields.
 
 ### Migrating result consumers from v2 to v3
 
-Configuration stays at schema version `2`; only the emitted result contract
-changes. There are no compatibility aliases:
+Configuration stays at schema version `2` or `3`; only the emitted result contract
+changed between v2 and v3. Historical v2 consumers should first adopt v3, then v4:
 
-1. Require root result `"schemaVersion": 3`.
+1. Require root result `"schemaVersion": 3` (or `4` on this release).
 2. Rename rule/fact/finalization `labelsInspected` and summary
    `matchedElements` to `elementsInspected`.
 3. Read each violation's `type` discriminator. Tab violations retain `text`,
@@ -356,6 +368,57 @@ changes. There are no compatibility aliases:
    `overflowPx`, `geometry`, `locator`, and `computedStyle`.
 4. Accept `page-horizontal-overflow` rule results and finalizations in addition
    to `tab-label-single-line`.
+
+## Local rule plugins
+
+Projects can register trusted, self-contained TypeScript rules in `vlint.config.json`.
+Local rules run with the same scheduling, result classification, aggregation, and
+output surfaces as built-in rules.
+
+**Trust model.** Local rules are trusted code, not a browser sandbox. vlint loads only
+the configured source snapshot through its embedded Bun runtime when at least one local
+rule is present; built-in-only runs never invoke the plugin loader and require no
+external Bun, Node, or package files.
+
+**Authoring restrictions.**
+
+- One self-contained TypeScript file per rule; no relative-module or package imports.
+- Only the current plugin contract version (`contractVersion: 1`) is accepted.
+- Settings must validate against the rule's published `settingsSchema` descriptor.
+- Synchronous infinite loops or `process.exit()` can still hang or terminate vlint;
+  asynchronous loader, browser, and finalizer work is bounded by timeouts.
+
+Example version `3` declaration:
+
+```jsonc
+{
+  "schemaVersion": 3,
+  "devices": [/* ... */],
+  "rules": [
+    { "name": "tab-label-single-line", "type": "tab-label-single-line" },
+    {
+      "name": "duplicate-spacing",
+      "type": "local",
+      "path": "rules/duplicate-spacing.ts",
+      "settings": {
+        "shellSelector": "#app-shell",
+        "contentSelector": "#content"
+      }
+    }
+  ]
+}
+```
+
+Each rule file default-exports an object with `contractVersion`, `metadata`,
+`settingsSchema`, `evaluate`, and optional `finalize`. Target overrides may set
+`enabled` and a JSON `settings` overlay; effective settings validate after provider
+resolution.
+
+**Failure codes.** Configuration and load failures use stable `plugin-*` and
+`local-*` codes such as `plugin-dependency-forbidden`,
+`plugin-contract-version-mismatch`, `plugin-settings-invalid`, `plugin-load-failed`,
+`plugin-evaluator-invalid`, and `plugin-finalization-timeout`. Terminal and JSON
+output never include raw stacks, source text, or absolute paths from plugin failures.
 
 ## Browser state (authentication)
 
@@ -383,7 +446,7 @@ is passed through control/ANSI/OSC/bi-directional escape stripping and length ca
 URLs have their query values redacted and their fragments removed.
 
 `--format json` prints a versioned JSON object (see
-[Machine consumption](#machine-consumption-json-schema-v3)).
+[Machine consumption](#machine-consumption-json-schema-v4)).
 
 ### Disclosure boundary
 
@@ -416,15 +479,15 @@ CLI usage errors write to stderr and exit `1` without producing a check result. 
 
 ---
 
-## Machine consumption (JSON schema v3)
+## Machine consumption (JSON schema v4)
 
-The root result `schemaVersion` is `3`. Configuration remains schema version `2`.
+The root result `schemaVersion` is `4`. Configuration may be schema version `2` or `3`.
 Results represent target × device audit cases explicitly and retain successful
 cases when another case fails.
 
 ```jsonc
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "status": "clean | violations | incomplete",
   "tool": { "name": "vlint", "version": "0.4.0" },
   "environment": {
@@ -484,6 +547,22 @@ cases when another case fails.
           "elementsInspected": 0,
           "violations": [],
           "failure": null
+        },
+        {
+          "name": "duplicate-spacing",
+          "type": "local",
+          "status": "violations",
+          "elementsInspected": 2,
+          "violations": [
+            {
+              "type": "local",
+              "message": "duplicate horizontal spacing in content region",
+              "locator": "#content",
+              "geometry": { "x": 16, "y": 16, "width": 200, "height": 40 },
+              "details": { "shellPaddingPx": 32, "contentPaddingPx": 32 }
+            }
+          ],
+          "failure": null
         }
       ],
       "failures": []
@@ -509,9 +588,10 @@ cases when another case fails.
 
 `cases` are ordered by target declaration first and configured device second.
 Failures carry separate nullable `target`, `device`, and `rule` identities.
-Adding optional fields is v3-compatible; renaming, removing, or changing a
-field type requires another result `schemaVersion` bump. Timestamps are intentionally
-omitted so stable inputs produce stable output.
+Local violations use the generic `local` envelope with `message`, `locator`,
+`geometry`, and JSON-compatible `details`. Adding optional fields is v4-compatible;
+renaming, removing, or changing a field type requires another result `schemaVersion`
+bump. Timestamps are intentionally omitted so stable inputs produce stable output.
 
 ## Browser cache hygiene
 
@@ -602,7 +682,8 @@ For the original compiled-Playwright feasibility probe only, run
 ## Security notes
 
 - **Command Provider executes trusted arbitrary code** in the current environment. Only
-  use it with reviewed, trusted configuration. Even the Static Provider executes target
+  use it with reviewed, trusted configuration. **Local rule plugins are a second trusted
+  boundary** beside Command Provider execution. Even the Static Provider executes target
   page JavaScript, so inspect untrusted worktrees or pages in a **credential-free,
   disposable container** — never pass credentials to a check of untrusted content.
 - **Browser state is a credential.** Keep state files short-lived and owner-only.
@@ -627,3 +708,6 @@ For the original compiled-Playwright feasibility probe only, run
 - Pixel-identical results across different OSes, browser builds, fonts, or application
   data are **not** guaranteed; the same stable rendered state and rule configuration
   yield the same verdict.
+- **Local rules are trusted code.** Timeouts bound asynchronous loader, browser, and
+  finalizer work, but synchronous infinite loops or process termination can still hang
+  or terminate vlint.

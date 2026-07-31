@@ -2,7 +2,7 @@ import type { Page } from "playwright";
 import type { EffectiveAuditCase, EffectiveRuleForTarget, ResolvedCheckPlan } from "../contracts/config";
 import type { RuleEvaluationOutcome } from "../contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../contracts/failure";
-import type { RunResultV3 } from "../contracts/result";
+import type { RunResult, RunResultV4 } from "../contracts/result";
 import { loadConfig } from "../config/load";
 import { resolveAdHocTarget, resolveTargets } from "../config/merge";
 import { evaluateLocalRule } from "../plugins/evaluate";
@@ -191,7 +191,7 @@ export async function runCheckCommand(
   environment: Readonly<Record<string, string | undefined>>,
   toolVersion: string,
   signal?: AbortSignal,
-): Promise<RunResultV3> {
+): Promise<RunResultV4> {
   if (signalAborted(signal)) {
     return resultForResolutionFailure(toolVersion, {
       stage: "interrupt",

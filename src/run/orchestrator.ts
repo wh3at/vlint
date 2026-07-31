@@ -13,7 +13,7 @@ import type {
   CaseResult,
   CaseStatus,
   RuleResultStatus,
-  RunResultV3,
+  RunResult,
   RunResultV4,
   RunSummary,
 } from "../contracts/result";
@@ -174,10 +174,10 @@ function completedResult(
   cases: readonly CaseResult[],
   finalizations: readonly RuleFinalization[],
   runFailures: readonly Failure[],
-): RunResultV3 {
+): RunResultV4 {
   const summary = summarize(targetCount, cases, finalizations, runFailures);
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     status: summary.executionFailures > 0 ? "incomplete" : summary.violations > 0 ? "violations" : "clean",
     tool: { name: "vlint", version: toolVersion },
     environment: {
@@ -192,11 +192,11 @@ function completedResult(
   };
 }
 
-export function resultForResolutionFailure(toolVersion: string, failure: Failure): RunResultV3 {
+export function resultForResolutionFailure(toolVersion: string, failure: Failure): RunResultV4 {
   return completedResult(toolVersion, null, 0, [], [], [failure]);
 }
 
-export function exitCodeForResult(result: RunResultV3 | RunResultV4): 0 | 1 | 2 {
+export function exitCodeForResult(result: RunResult): 0 | 1 | 2 {
   if (result.status === "incomplete") return 2;
   return result.status === "violations" ? 1 : 0;
 }
@@ -311,7 +311,7 @@ export async function runResolvedCheck<PageHandle>(
   plan: ResolvedCheckPlan,
   dependencies: CheckDependencies<PageHandle>,
   options: CheckOptions,
-): Promise<RunResultV3> {
+): Promise<RunResultV4> {
   const cases = seededCases(plan);
   let finalizations = seededFinalizations(plan);
   const runFailures: Failure[] = [];

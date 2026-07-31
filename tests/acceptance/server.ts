@@ -80,6 +80,34 @@ const RESPONSIVE_OVERFLOW_HTML = `<!doctype html>
 </body>
 </html>`;
 
+const SPACING_VIOLATION_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>spacing violation</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #app-shell { padding: 16px; }
+  #content { padding: 16px; }
+</style>
+</head>
+<body>
+<div id="app-shell"><main id="content">duplicate spacing content</main></div>
+</body>
+</html>`;
+
+const SPACING_CLEAN_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>spacing clean</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  #app-shell { padding: 16px; }
+  #content { padding: 0; }
+</style>
+</head>
+<body>
+<div id="app-shell"><main id="content">clean spacing content</main></div>
+</body>
+</html>`;
+
 export interface AcceptanceServer {
   readonly url: string;
   readonly port: number;
@@ -106,6 +134,14 @@ export function startAcceptanceServer(): AcceptanceServer {
 
       if (pathname === "/responsive-overflow") {
         return new Response(RESPONSIVE_OVERFLOW_HTML, { headers: HTML_HEADERS });
+      }
+
+      if (pathname === "/spacing-violation") {
+        return new Response(SPACING_VIOLATION_HTML, { headers: HTML_HEADERS });
+      }
+
+      if (pathname === "/spacing-clean") {
+        return new Response(SPACING_CLEAN_HTML, { headers: HTML_HEADERS });
       }
 
       if (pathname === "/settings") {

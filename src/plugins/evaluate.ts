@@ -249,8 +249,7 @@ async function inPagePluginEvaluator(args: InPageEvaluateArgs): Promise<InPageOu
     }
     return { ok: true, elementsInspected: elementsInspected as number, violations };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, code: "plugin-evaluator-invalid", message: `plugin evaluator failed: ${message}` };
+    return { ok: false, code: "plugin-evaluator-invalid", message: "plugin evaluator failed" };
   }
 }
 

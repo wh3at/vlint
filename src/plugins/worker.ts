@@ -120,12 +120,11 @@ async function loadSnapshotModule(snapshotPath: string): Promise<BoundaryResult<
   try {
     const imported = await import(snapshotPath);
     return boundarySuccess(imported.default);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "plugin module failed to load";
+  } catch {
     return boundaryFailure({
       stage: "config",
       code: "plugin-load-failed",
-      message,
+      message: "plugin module failed to load",
       target: null,
       device: null,
       rule: null,

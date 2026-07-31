@@ -208,8 +208,7 @@ export async function finalizeLocalRule(
     try {
       return parseFinalizerOutcome(await finalize(observations), rule.name);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return finalizationFailure("plugin-finalizer-invalid", `local rule finalizer failed: ${message}`, rule.name);
+      return finalizationFailure("plugin-finalizer-invalid", "local rule finalizer failed", rule.name);
     }
   })();
 
