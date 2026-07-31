@@ -71,7 +71,6 @@ describe("check resolution", () => {
     await writeFile(
       join(directory, "vlint.config.json"),
       JSON.stringify({
-        schemaVersion: 2,
         devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
         provider: { type: "command", executable: script, args: [sentinel] },
       }),
@@ -96,7 +95,6 @@ describe("check resolution", () => {
     await writeFile(
       join(directory, "vlint.config.json"),
       JSON.stringify({
-        schemaVersion: 2,
         devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
         provider: { type: "command", executable: script, args: [sentinel] },
       }),
@@ -117,7 +115,7 @@ describe("check resolution", () => {
     const directory = await temporaryDirectory();
     await writeFile(
       join(directory, "vlint.config.json"),
-      JSON.stringify({ schemaVersion: 2, devices: [DESKTOP_DEVICE] }),
+      JSON.stringify({devices: [DESKTOP_DEVICE] }),
     );
     const result = await resolveCheckPlan(directory, null, {});
     expect(result.ok).toBe(false);
@@ -131,7 +129,6 @@ describe("check resolution", () => {
     await writeFile(
       join(directory, "vlint.config.json"),
       JSON.stringify({
-        schemaVersion: 2,
         devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
         provider: {
           type: "static",

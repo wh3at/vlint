@@ -32,7 +32,6 @@ function loadedConfig(directory: string, rules: LoadedConfig["rules"]): LoadedCo
   return {
     path: join(directory, "vlint.config.json"),
     directory,
-    schemaVersion: 3,
     devices: [
       {
         name: "desk",
@@ -110,7 +109,6 @@ describe("plugin loader", () => {
     await writeFile(
       join(directory, "vlint.config.json"),
       JSON.stringify({
-        schemaVersion: 3,
         devices: [
           {
             name: "desk",

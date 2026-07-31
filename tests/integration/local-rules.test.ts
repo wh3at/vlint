@@ -57,7 +57,6 @@ function spacingConfig(): LoadedConfig {
   return {
     path: `${fixtureRoot}/vlint.config.json`,
     directory: fixtureRoot,
-    schemaVersion: 3,
     devices: [
       {
         name: "desk",

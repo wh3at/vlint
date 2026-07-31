@@ -191,7 +191,7 @@ describe("config failure matrix maps to exit 2 with the correct code", () => {
 
   test("config-schema-invalid (empty static targets)", async () => {
     const cwd = await temporaryDirectory();
-    await writeConfig(cwd, { schemaVersion: 2, devices: [MINIMAL_DEVICE], provider: { type: "static", targets: [] } });
+    await writeConfig(cwd, {devices: [MINIMAL_DEVICE], provider: { type: "static", targets: [] } });
     const { exit, output } = await runCheck(cwd, ["check", "--format", "json"]);
     expect(exit).toBe(2);
     expect(runFailure(output)).toMatchObject({ code: "config-schema-invalid" });
@@ -209,7 +209,6 @@ describe("config failure matrix maps to exit 2 with the correct code", () => {
 describe("provider failure matrix maps to exit 2 with the correct code", () => {
   function commandConfig(executable: string, args: readonly string[]) {
     return {
-      schemaVersion: 2,
       devices: [MINIMAL_DEVICE],
       provider: { type: "command" as const, executable, args, timeoutMs: 5000 },
     };
@@ -285,7 +284,6 @@ describe("local plugin config boundary maps to exit 2 with typed failures", () =
   ): Promise<void> {
     await copyFile(join(pluginFixtureRoot, ruleFile), join(directory, ruleFile));
     await writeConfig(directory, {
-      schemaVersion: 3,
       devices: [MINIMAL_DEVICE],
       rules: [{
         name: "spacing",

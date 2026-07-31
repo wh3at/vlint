@@ -1,8 +1,7 @@
 import type {
   CommandProviderConfig,
   CommandProviderOutput,
-  ConfigV2,
-  ConfigV3,
+  Config,
   DeviceProfile,
   LocalRuleInstance,
   ParsedConfig,
@@ -318,12 +317,9 @@ function devicesAt(value: unknown, path: string): readonly DeviceProfile[] {
   return devices;
 }
 
-function ruleAt(value: unknown, path: string, schemaVersion: 2 | 3): RuleInstance {
+function ruleAt(value: unknown, path: string): RuleInstance {
   const object = objectAt(value, path);
   if (object.type === "local") {
-    if (schemaVersion < 3) {
-      issue(`${path}.type`, "local rules require config schema version 3");
-    }
     exactKeys(object, ["name", "type", "path", "settings"], path);
     const result: LocalRuleInstance = {
       name: nameAt(object.name, `${path}.name`),
@@ -393,9 +389,9 @@ function ruleAt(value: unknown, path: string, schemaVersion: 2 | 3): RuleInstanc
   issue(`${path}.type`, "unsupported rule type");
 }
 
-function rulesAt(value: unknown, path: string, schemaVersion: 2 | 3): readonly RuleInstance[] {
+function rulesAt(value: unknown, path: string): readonly RuleInstance[] {
   if (!Array.isArray(value) || value.length === 0) issue(path, "expected non-empty array");
-  const rules = value.map((item, index) => ruleAt(item, `${path}[${index}]`, schemaVersion));
+  const rules = value.map((item, index) => ruleAt(item, `${path}[${index}]`));
   const names = new Set<string>();
   const types = new Set<string>();
   for (const rule of rules) {
@@ -447,32 +443,29 @@ function failureFor(source: Source, message: string): Failure {
   };
 }
 
-function parseConfigBody(object: Record<string, unknown>, schemaVersion: 2 | 3): ParsedConfig {
-  const rules = object.rules === undefined ? undefined : rulesAt(object.rules, "config.rules", schemaVersion);
+function parseConfigBody(object: Record<string, unknown>): ParsedConfig {
+  const rules = object.rules === undefined ? undefined : rulesAt(object.rules, "config.rules");
   const completeRules = rulesWithBuiltins(rules);
   const rulesByName = new Map(completeRules.map((rule) => [rule.name, rule]));
   if (rulesByName.size !== completeRules.length) issue("config.rules", "duplicate rule name after default injection");
   const devices = devicesAt(object.devices, "config.devices");
   const config: {
-    schemaVersion: 2 | 3;
     devices: readonly DeviceProfile[];
     provider?: ProviderConfig;
     defaults?: TargetDefaults;
     rules?: readonly RuleInstance[];
-  } = { schemaVersion, devices };
+  } = { devices };
   if (object.provider !== undefined) config.provider = providerAt(object.provider, "config.provider", rulesByName);
   if (object.defaults !== undefined) config.defaults = defaultsAt(object.defaults, "config.defaults");
   if (rules !== undefined) config.rules = rules;
-  return schemaVersion === 2 ? (config as ConfigV2) : (config as ConfigV3);
+  return config as Config;
 }
 
 export function parseConfig(value: unknown): BoundaryResult<ParsedConfig> {
   try {
     const object = objectAt(value, "config");
-    exactKeys(object, ["schemaVersion", "devices", "provider", "defaults", "rules"], "config");
-    if (object.schemaVersion === 2) return boundarySuccess(parseConfigBody(object, 2));
-    if (object.schemaVersion === 3) return boundarySuccess(parseConfigBody(object, 3));
-    issue("config.schemaVersion", "expected 2 or 3");
+    exactKeys(object, ["devices", "provider", "defaults", "rules"], "config");
+    return boundarySuccess(parseConfigBody(object));
   } catch (error) {
     const message = error instanceof SchemaIssue ? error.message : "config schema validation failed";
     return boundaryFailure(failureFor("config", message));

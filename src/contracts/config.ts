@@ -104,23 +104,14 @@ export type RuleInstance =
   | PageHorizontalOverflowRuleInstance
   | LocalRuleInstance;
 
-export interface ConfigV2 {
-  readonly schemaVersion: 2;
+export interface Config {
   readonly devices: readonly DeviceProfile[];
   readonly provider?: ProviderConfig;
   readonly defaults?: TargetDefaults;
   readonly rules?: readonly RuleInstance[];
 }
 
-export interface ConfigV3 {
-  readonly schemaVersion: 3;
-  readonly devices: readonly DeviceProfile[];
-  readonly provider?: ProviderConfig;
-  readonly defaults?: TargetDefaults;
-  readonly rules?: readonly RuleInstance[];
-}
-
-export type ParsedConfig = ConfigV2 | ConfigV3;
+export type ParsedConfig = Config;
 
 export interface CommandProviderOutput {
   readonly targets: readonly Target[];
@@ -210,7 +201,6 @@ export interface EffectiveAuditCase {
 export interface LoadedConfig {
   readonly path: string;
   readonly directory: string;
-  readonly schemaVersion: 2 | 3;
   readonly devices: readonly DeviceProfile[];
   readonly provider?: ProviderConfig;
   readonly defaults: TargetDefaults;
