@@ -353,7 +353,7 @@ Example declaration with a local rule:
     {
       "name": "duplicate-spacing",
       "type": "local",
-      "path": "rules/duplicate-spacing.ts",
+      "path": ".vlint/rules/duplicate-spacing.ts",
       "settings": {
         "shellSelector": "#app-shell",
         "contentSelector": "#content"
@@ -362,6 +362,34 @@ Example declaration with a local rule:
   ]
 }
 ```
+
+The smallest useful rule can inspect one known element and report a violation. Save this
+as `.vlint/rules/minimum-size.ts` and reference that path from a local rule declaration:
+
+```ts
+export default {
+  contractVersion: 1,
+  metadata: { name: "minimum-size" },
+  settingsSchema: { type: "object", exactKeys: [] },
+  evaluate: async () => {
+    const element = document.querySelector("[data-vlint-check]");
+    if (element === null) return { elementsInspected: 0, violations: [] };
+
+    const rect = element.getBoundingClientRect();
+    return {
+      elementsInspected: 1,
+      violations: rect.width >= 44 && rect.height >= 44 ? [] : [{
+        message: "element is smaller than 44 × 44 CSS pixels",
+        locator: "[data-vlint-check]",
+        geometry: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        details: {},
+      }],
+    };
+  },
+};
+```
+
+The example assumes `[data-vlint-check]` identifies at most one rendered element.
 
 Each rule file default-exports an object with `contractVersion`, `metadata`,
 `settingsSchema`, `evaluate`, and optional `finalize`. Target overrides may set
