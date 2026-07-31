@@ -16,6 +16,7 @@ import {
   runInstallerWorkerMain,
   runOopDownloaderMain,
 } from "./browser/install";
+import { isPluginLoaderWorkerInvocation, runPluginLoaderWorkerMain } from "./plugins/worker";
 import type { BoundaryResult } from "./contracts/failure";
 import type { RunResultV3 } from "./contracts/result";
 import { parseAdHocUrl } from "./config/schema";
@@ -387,6 +388,8 @@ if (import.meta.main) {
     await runDependenciesInstallerWorkerMain();
   } else if (isInstallerWorkerInvocation(process.argv)) {
     await runInstallerWorkerMain(process.argv);
+  } else if (isPluginLoaderWorkerInvocation(process.argv)) {
+    await runPluginLoaderWorkerMain(process.argv);
   } else if (process.argv.some((argument) => isOopDownloaderInvocation(argument))) {
     runOopDownloaderMain();
   } else {

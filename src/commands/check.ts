@@ -5,6 +5,7 @@ import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } f
 import type { RunResultV3 } from "../contracts/result";
 import { loadConfig } from "../config/load";
 import { resolveAdHocTarget, resolveTargets } from "../config/merge";
+import { loadLocalPluginsForConfig } from "../plugins/load";
 import { resolveCommandProvider } from "../providers/command";
 import { resolveStaticProvider } from "../providers/static";
 import { createBrowserRunScope } from "../browser/lifecycle";
@@ -24,8 +25,10 @@ export async function resolveCheckPlan(
 ): Promise<BoundaryResult<ResolvedCheckPlan>> {
   const loaded = await loadConfig(cwd);
   if (!loaded.ok) return boundaryFailure(loaded.failure);
-  if (url !== null) return boundarySuccess(resolveAdHocTarget(loaded.value, url));
-  if (loaded.value.provider === undefined) {
+  let plan: ResolvedCheckPlan;
+  if (url !== null) {
+    plan = resolveAdHocTarget(loaded.value, url);
+  } else if (loaded.value.provider === undefined) {
     return boundaryFailure({
       stage: "config",
       code: "targets-empty",
@@ -34,20 +37,27 @@ export async function resolveCheckPlan(
       device: null,
       rule: null,
     });
+  } else {
+    const context = {
+      directory: loaded.value.directory,
+      rules: loaded.value.rules,
+      environment,
+      ...(signal === undefined ? {} : { signal }),
+    };
+    const targets =
+      loaded.value.provider.type === "static"
+        ? await resolveStaticProvider(loaded.value.provider)
+        : await resolveCommandProvider(loaded.value.provider, context);
+    if (!targets.ok) return boundaryFailure(targets.failure);
+    plan = resolveTargets(loaded.value, targets.value);
   }
-  const context = {
-    directory: loaded.value.directory,
-    rules: loaded.value.rules,
-    environment,
-    ...(signal === undefined ? {} : { signal }),
-  };
-  const targets =
-    loaded.value.provider.type === "static"
-      ? await resolveStaticProvider(loaded.value.provider)
-      : await resolveCommandProvider(loaded.value.provider, context);
-  return targets.ok
-    ? boundarySuccess(resolveTargets(loaded.value, targets.value))
-    : boundaryFailure(targets.failure);
+  const plugins = await loadLocalPluginsForConfig(
+    loaded.value,
+    plan,
+    signal === undefined ? {} : { signal },
+  );
+  if (!plugins.ok) return boundaryFailure(plugins.failure);
+  return boundarySuccess(plan);
 }
 
 function signalAborted(signal: AbortSignal | undefined): boolean {
