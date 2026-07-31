@@ -26,3 +26,6 @@ Thumbs.db
 # Editor
 .idea/
 .vscode/
+
+# Pi
+.pi-subagents/

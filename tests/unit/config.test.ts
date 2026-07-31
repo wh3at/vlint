@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "../../src/config/load";
-import { resolveAdHocTarget, resolveTargets } from "../../src/config/merge";
+import { mergeJsonSettings, resolveAdHocTarget, resolveTargets } from "../../src/config/merge";
 import { parseConfig, parseAdHocUrl } from "../../src/config/schema";
 
 const temporaryDirectories: string[] = [];
@@ -47,9 +47,9 @@ afterEach(async () => {
 });
 
 describe("configuration", () => {
-  test("loads a device-only version 2 config with deterministic presentation defaults", async () => {
+  test("loads a device-only config with deterministic presentation defaults", async () => {
     const directory = await temporaryDirectory();
-    await writeConfig(directory, { schemaVersion: 2, devices: [DESKTOP_DEVICE] });
+    await writeConfig(directory, { devices: [DESKTOP_DEVICE] });
     const loaded = await loadConfig(directory);
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
@@ -83,8 +83,7 @@ describe("configuration", () => {
   test("resolves two targets by two devices into four cases in target-major device-minor order", async () => {
     const directory = await temporaryDirectory();
     await writeConfig(directory, {
-      schemaVersion: 2,
-      devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
+devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
       provider: {
         type: "static",
         targets: [
@@ -116,8 +115,7 @@ describe("configuration", () => {
   test("editing devices to one yields exactly one case per target", async () => {
     const directory = await temporaryDirectory();
     await writeConfig(directory, {
-      schemaVersion: 2,
-      devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
       provider: {
         type: "static",
         targets: [
@@ -138,8 +136,7 @@ describe("configuration", () => {
   test("applies presentation defaults and rule overrides to every case regardless of device", async () => {
     const directory = await temporaryDirectory();
     await writeConfig(directory, {
-      schemaVersion: 2,
-      devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
+devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
       defaults: {
         locale: "fr-FR",
         timezoneId: "Europe/Paris",
@@ -197,8 +194,7 @@ describe("configuration", () => {
   test("ad hoc resolution builds cases from the URL, not the configured provider targets", async () => {
     const directory = await temporaryDirectory();
     await writeConfig(directory, {
-      schemaVersion: 2,
-      devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
+devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
       provider: {
         type: "static",
         targets: [
@@ -230,7 +226,7 @@ describe("configuration", () => {
   });
 
   test("accepts exactly 8 MiB and rejects one byte more", async () => {
-    const minimal = JSON.stringify({ schemaVersion: 2, devices: [DESKTOP_DEVICE] });
+    const minimal = JSON.stringify({devices: [DESKTOP_DEVICE] });
     const exactDirectory = await temporaryDirectory();
     await Bun.write(
       join(exactDirectory, "vlint.config.json"),
@@ -248,37 +244,35 @@ describe("configuration", () => {
   });
 
   test.each([
-    ["version 1 config", { schemaVersion: 1, devices: [DESKTOP_DEVICE] }],
-    ["version 3 config", { schemaVersion: 3, devices: [DESKTOP_DEVICE] }],
-    ["unknown field", { schemaVersion: 2, devices: [DESKTOP_DEVICE], nope: true }],
-    ["missing devices", { schemaVersion: 2 }],
-    ["empty devices", { schemaVersion: 2, devices: [] }],
-    ["devices not an array", { schemaVersion: 2, devices: "desk" }],
+    ["schemaVersion field", { schemaVersion: 1, devices: [DESKTOP_DEVICE] }],
+    ["schemaVersion field with value 4", { schemaVersion: 4, devices: [DESKTOP_DEVICE] }],
+    ["unknown field", { devices: [DESKTOP_DEVICE], nope: true }],
+    ["missing devices", {}],
+    ["empty devices", {devices: [] }],
+    ["devices not an array", {devices: "desk" }],
     [
       "duplicate device name",
-      { schemaVersion: 2, devices: [DESKTOP_DEVICE, { ...DESKTOP_DEVICE, viewport: { width: 10, height: 10 } }] },
+      {devices: [DESKTOP_DEVICE, { ...DESKTOP_DEVICE, viewport: { width: 10, height: 10 } }] },
     ],
     [
       "device missing screen",
       {
-        schemaVersion: 2,
-        devices: [
+devices: [
           { name: "d", viewport: { width: 1, height: 1 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false },
         ],
       },
     ],
-    ["device unknown field", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, extra: 1 }] }],
-    ["invalid device viewport", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, viewport: { width: 0, height: 10 } }] }],
-    ["invalid device screen", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, screen: { width: 10, height: 0 } }] }],
-    ["out-of-range device DPR", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, deviceScaleFactor: 0.01 }] }],
-    ["isMobile not boolean", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, isMobile: "yes" }] }],
-    ["hasTouch not boolean", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, hasTouch: 1 }] }],
-    ["empty userAgent", { schemaVersion: 2, devices: [{ ...DESKTOP_DEVICE, userAgent: "" }] }],
+    ["device unknown field", {devices: [{ ...DESKTOP_DEVICE, extra: 1 }] }],
+    ["invalid device viewport", {devices: [{ ...DESKTOP_DEVICE, viewport: { width: 0, height: 10 } }] }],
+    ["invalid device screen", {devices: [{ ...DESKTOP_DEVICE, screen: { width: 10, height: 0 } }] }],
+    ["out-of-range device DPR", {devices: [{ ...DESKTOP_DEVICE, deviceScaleFactor: 0.01 }] }],
+    ["isMobile not boolean", {devices: [{ ...DESKTOP_DEVICE, isMobile: "yes" }] }],
+    ["hasTouch not boolean", {devices: [{ ...DESKTOP_DEVICE, hasTouch: 1 }] }],
+    ["empty userAgent", {devices: [{ ...DESKTOP_DEVICE, userAgent: "" }] }],
     [
       "duplicate target",
       {
-        schemaVersion: 2,
-        devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
         provider: {
           type: "static",
           targets: [
@@ -288,12 +282,11 @@ describe("configuration", () => {
         },
       },
     ],
-    ["empty static targets", { schemaVersion: 2, devices: [DESKTOP_DEVICE], provider: { type: "static", targets: [] } }],
+    ["empty static targets", {devices: [DESKTOP_DEVICE], provider: { type: "static", targets: [] } }],
     [
       "unknown rule override",
       {
-        schemaVersion: 2,
-        devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
         provider: {
           type: "static",
           targets: [{ name: "x", url: "https://example.com", ruleOverrides: { missing: { enabled: false } } }],
@@ -303,32 +296,28 @@ describe("configuration", () => {
     [
       "URL userinfo",
       {
-        schemaVersion: 2,
-        devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
         provider: { type: "static", targets: [{ name: "x", url: "https://u:p@example.com" }] },
       },
     ],
     [
       "relative URL",
       {
-        schemaVersion: 2,
-        devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
         provider: { type: "static", targets: [{ name: "x", url: "/relative" }] },
       },
     ],
     [
       "unsupported URL",
       {
-        schemaVersion: 2,
-        devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
         provider: { type: "static", targets: [{ name: "x", url: "file:///tmp/x" }] },
       },
     ],
     [
       "target viewport no longer accepted",
       {
-        schemaVersion: 2,
-        devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
         provider: {
           type: "static",
           targets: [{ name: "x", url: "https://example.com", viewport: { width: 800, height: 600 } }],
@@ -338,8 +327,7 @@ describe("configuration", () => {
     [
       "defaults viewport no longer accepted",
       {
-        schemaVersion: 2,
-        devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
         defaults: { viewport: { width: 800, height: 600 } },
         provider: { type: "static", targets: [{ name: "x", url: "https://example.com" }] },
       },
@@ -350,7 +338,7 @@ describe("configuration", () => {
   });
 
   test("accepts an optional provider and omits it from the loaded config", () => {
-    const parsed = parseConfig({ schemaVersion: 2, devices: [DESKTOP_DEVICE] });
+    const parsed = parseConfig({devices: [DESKTOP_DEVICE] });
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(parsed.value.provider).toBeUndefined();
@@ -359,8 +347,7 @@ describe("configuration", () => {
 
   test("enforces name, URL, and selector byte boundaries", () => {
     const base = {
-      schemaVersion: 2,
-      devices: [{ ...DESKTOP_DEVICE, name: "d".repeat(1024) }],
+devices: [{ ...DESKTOP_DEVICE, name: "d".repeat(1024) }],
       rules: [{ name: "r", type: "tab-label-single-line", labelSelector: "x".repeat(64 * 1024) }],
       provider: { type: "static", targets: [{ name: "n".repeat(1024), url: "https://example.com" }] },
     };
@@ -382,8 +369,7 @@ describe("configuration", () => {
   test("injects missing built-ins in tab-then-configured-then-overflow order", async () => {
     const directory = await temporaryDirectory();
     await writeConfig(directory, {
-      schemaVersion: 2,
-      devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
       rules: [{ name: "wide-page", type: "page-horizontal-overflow", tolerancePx: 4 }],
     });
     const loaded = await loadConfig(directory);
@@ -411,8 +397,7 @@ describe("configuration", () => {
   test("applies overflow project and target enablement precedence", async () => {
     const directory = await temporaryDirectory();
     await writeConfig(directory, {
-      schemaVersion: 2,
-      devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
       rules: [{ name: "overflow", type: "page-horizontal-overflow", enabled: false }],
       provider: {
         type: "static",
@@ -436,8 +421,7 @@ describe("configuration", () => {
   test("preserves an explicit false target override for an enabled overflow rule", async () => {
     const directory = await temporaryDirectory();
     await writeConfig(directory, {
-      schemaVersion: 2,
-      devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
       rules: [{ name: "overflow", type: "page-horizontal-overflow" }],
       provider: {
         type: "static",
@@ -464,14 +448,13 @@ describe("configuration", () => {
     ["excessive tolerance", [{ name: "overflow", type: "page-horizontal-overflow", tolerancePx: 101 }]],
     ["non-finite tolerance", [{ name: "overflow", type: "page-horizontal-overflow", tolerancePx: Number.POSITIVE_INFINITY }]],
   ])("rejects %s", (_name, rules) => {
-    expect(parseConfig({ schemaVersion: 2, devices: [DESKTOP_DEVICE], rules }).ok).toBe(false);
+    expect(parseConfig({devices: [DESKTOP_DEVICE], rules }).ok).toBe(false);
   });
 
   test("accepts multiple named tab rules", () => {
     expect(
       parseConfig({
-        schemaVersion: 2,
-        devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
         rules: [
           { name: "primary-tabs", type: "tab-label-single-line" },
           { name: "secondary-tabs", type: "tab-label-single-line" },
@@ -483,8 +466,7 @@ describe("configuration", () => {
   test.each([0, 1, 100])("accepts overflow tolerance %p", (tolerancePx) => {
     expect(
       parseConfig({
-        schemaVersion: 2,
-        devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
         rules: [{ name: "overflow", type: "page-horizontal-overflow", tolerancePx }],
       }).ok,
     ).toBe(true);
@@ -492,8 +474,7 @@ describe("configuration", () => {
 
   test("validates target overrides against the referenced rule type", () => {
     const base = {
-      schemaVersion: 2,
-      devices: [DESKTOP_DEVICE],
+devices: [DESKTOP_DEVICE],
       rules: [{ name: "overflow", type: "page-horizontal-overflow" }],
     };
     expect(
@@ -509,5 +490,170 @@ describe("configuration", () => {
         },
       }).ok,
     ).toBe(false);
+  });
+
+  test("accepts a config with one local declaration and injects built-ins", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      devices: [DESKTOP_DEVICE],
+      rules: [
+        {
+          name: "spacing",
+          type: "local",
+          path: "rules/spacing.ts",
+          settings: { tolerancePx: 4 },
+        },
+      ],
+    });
+    const loaded = await loadConfig(directory);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.value.rules.map((rule) => `${rule.name}:${rule.type}`)).toEqual([
+      "tab-label-single-line:tab-label-single-line",
+      "spacing:local",
+      "page-horizontal-overflow:page-horizontal-overflow",
+    ]);
+    const local = loaded.value.rules.find((rule) => rule.type === "local");
+    expect(local).toMatchObject({
+      name: "spacing",
+      path: "rules/spacing.ts",
+      settings: { tolerancePx: 4 },
+      enabled: true,
+    });
+  });
+
+  test.each([
+    [
+      "duplicate local name",
+      {
+        devices: [DESKTOP_DEVICE],
+        rules: [
+          { name: "dup", type: "local", path: "rules/a.ts" },
+          { name: "dup", type: "local", path: "rules/b.ts" },
+        ],
+      },
+    ],
+    [
+      "missing local path",
+      {devices: [DESKTOP_DEVICE], rules: [{ name: "spacing", type: "local" }] },
+    ],
+    [
+      "unknown local field",
+      {
+        devices: [DESKTOP_DEVICE],
+        rules: [{ name: "spacing", type: "local", path: "rules/spacing.ts", extra: true }],
+      },
+    ],
+    [
+      "non-json settings",
+      {
+        devices: [DESKTOP_DEVICE],
+        rules: [{ name: "spacing", type: "local", path: "rules/spacing.ts", settings: "bad" }],
+      },
+    ],
+    [
+      "absolute local path",
+      {
+        devices: [DESKTOP_DEVICE],
+        rules: [{ name: "spacing", type: "local", path: "/etc/passwd" }],
+      },
+    ],
+    [
+      "escaping local path",
+      {
+        devices: [DESKTOP_DEVICE],
+        rules: [{ name: "spacing", type: "local", path: "../outside.ts" }],
+      },
+    ],
+  ])("rejects invalid local config: %s", (_name, value) => {
+    const parsed = parseConfig(value);
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.failure.code).toBe("config-schema-invalid");
+  });
+
+  test("accepts structural local target overrides with enabled and settings overlay", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      devices: [DESKTOP_DEVICE],
+      rules: [
+        {
+          name: "spacing",
+          type: "local",
+          path: "rules/spacing.ts",
+          settings: { shell: { gap: 8 }, enabledPairs: ["desktop"] },
+        },
+      ],
+      provider: {
+        type: "static",
+        targets: [
+          {
+            name: "settings",
+            url: "https://example.com/settings",
+            ruleOverrides: {
+              spacing: {
+                enabled: false,
+                settings: { shell: { gap: 4 }, extra: true },
+              },
+            },
+          },
+        ],
+      },
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok || loaded.value.provider?.type !== "static") throw new Error("expected loaded static config");
+    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    const local = plan.cases[0]?.rules.find((rule) => rule.type === "local");
+    expect(local).toMatchObject({
+      name: "spacing",
+      enabled: false,
+      settings: { shell: { gap: 4 }, enabledPairs: ["desktop"], extra: true },
+    });
+  });
+
+  test("rejects prototype keys in settings and never mutates Object.prototype", () => {
+    const pollutedBefore = (Object.prototype as { polluted?: boolean }).polluted;
+    const settings = Object.create(null) as Record<string, unknown>;
+    settings.__proto__ = { polluted: true };
+    expect(
+      parseConfig({
+        devices: [DESKTOP_DEVICE],
+        rules: [
+          {
+            name: "spacing",
+            type: "local",
+            path: "rules/spacing.ts",
+            settings,
+          },
+        ],
+      }).ok,
+    ).toBe(false);
+    expect((Object.prototype as { polluted?: boolean }).polluted).toBe(pollutedBefore);
+    expect(
+      parseConfig({
+        devices: [DESKTOP_DEVICE],
+        rules: [
+          {
+            name: "spacing",
+            type: "local",
+            path: "rules/spacing.ts",
+            settings: { nested: { constructor: { polluted: true } } },
+          },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
+  test("mergeJsonSettings uses prototype-safe recursive object merge", () => {
+    const merged = mergeJsonSettings(
+      { shell: { gap: 8, mode: "strict" }, tags: ["a"] },
+      { shell: { gap: 4 }, tags: ["b"], added: 1 },
+    );
+    expect(merged).toEqual({
+      shell: { gap: 4, mode: "strict" },
+      tags: ["b"],
+      added: 1,
+    });
+    expect(Object.getPrototypeOf(merged)).toBeNull();
   });
 });

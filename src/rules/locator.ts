@@ -12,6 +12,8 @@
  * than a synthetic descriptor set.
  */
 
+import type { Page } from "playwright";
+
 /** A single step in the positional ancestor path. */
 export interface PathStep {
   /** Lowercased element tag name (no namespace). */
@@ -124,6 +126,20 @@ export function composeLocators(desc: ElementDescriptor): readonly string[] {
  * when none is unique. `count` is the document-query seam: unit tests supply a
  * synthetic counter; the rule evaluator supplies a real `querySelectorAll`.
  */
+export async function verifyUniqueLocator(page: Page, locator: string): Promise<boolean> {
+  try {
+    return await page.evaluate((selector) => {
+      try {
+        return document.querySelectorAll(selector).length === 1;
+      } catch {
+        return false;
+      }
+    }, locator);
+  } catch {
+    return false;
+  }
+}
+
 export function chooseUniqueLocator(
   desc: ElementDescriptor,
   count: CountMatches,

@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "bun:test";
 import vlintPackage from "../../package.json";
-import type { RunResultV3 } from "../../src/contracts/result";
+import type { RunResult } from "../../src/contracts/result";
+import { loadPluginContract } from "../../src/plugins/load";
 
 /**
  * Compiled-binary CLI contract smoke test. Consumes the already-built
@@ -109,7 +110,7 @@ describe.skipIf(!binaryPresent)(
       expect(result.stdout.endsWith("\n")).toBe(true);
       // Exactly one newline-terminated JSON line.
       expect(result.stdout.split("\n")).toHaveLength(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.status).toBe("incomplete");
       expect(parsed.tool).toEqual({ name: "vlint", version: vlintPackage.version });
       expect(parsed.failures[0]).toMatchObject({ stage: "config", code: "config-not-found" });
@@ -160,5 +161,23 @@ describe.skipIf(!binaryPresent)(
       expect(credential.stderr).not.toContain("secret");
       expect(credential.stderr).not.toContain("fragment");
     }, 30_000);
+  },
+);
+
+describe.skipIf(!binaryPresent)(
+  "compiled vlint binary plugin loader (dist/vlint-linux-x64 absent: build:linux-x64 dependency)",
+  () => {
+    test("loads a valid local rule through the production worker path", async () => {
+      const directory = await temporaryDirectory();
+      const source = await readFile(join(import.meta.dir, "../fixtures/plugins/valid-rule.ts"));
+      await writeFile(join(directory, "valid-rule.ts"), source);
+      const loaded = await loadPluginContract({
+        configDirectory: directory,
+        relativePath: "valid-rule.ts",
+        ruleName: "spacing-check",
+        executablePath: binary,
+      });
+      expect(loaded.ok, loaded.ok ? "" : loaded.failure.message).toBe(true);
+    }, 120_000);
   },
 );

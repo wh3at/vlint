@@ -1,4 +1,5 @@
-import type { RunResultV3 } from "../contracts/result";
+import type { RunResult } from "../contracts/result";
+import { publishResult } from "./publish";
 
 const BIDI_CONTROLS: Record<number, true> = {
   0x061c: true,
@@ -81,15 +82,16 @@ function failureLine(failure: {
   return line;
 }
 
-export function renderTerminal(result: RunResultV3): string {
+export function renderTerminal(result: RunResult): string {
+  const published = publishResult(result);
   const lines = [
-    `vlint ${escapeTerminal(result.tool.version)}: ${result.status}`,
-    `targets resolved=${result.summary.targets.resolved}`,
-    `cases resolved=${result.summary.cases.resolved} complete=${result.summary.cases.complete} partial=${result.summary.cases.partial} failed=${result.summary.cases.failed} not-executed=${result.summary.cases.notExecuted}`,
-    `rules clean=${result.summary.ruleEvaluations.clean} violations=${result.summary.ruleEvaluations.violations} failed=${result.summary.ruleEvaluations.failed} disabled=${result.summary.ruleEvaluations.disabled} not-executed=${result.summary.ruleEvaluations.notExecuted}`,
-    `elements=${result.summary.elementsInspected} violations=${result.summary.violations} failures=${result.summary.executionFailures}`,
+    `vlint ${escapeTerminal(published.tool.version)}: ${published.status}`,
+    `targets resolved=${published.summary.targets.resolved}`,
+    `cases resolved=${published.summary.cases.resolved} complete=${published.summary.cases.complete} partial=${published.summary.cases.partial} failed=${published.summary.cases.failed} not-executed=${published.summary.cases.notExecuted}`,
+    `rules clean=${published.summary.ruleEvaluations.clean} violations=${published.summary.ruleEvaluations.violations} failed=${published.summary.ruleEvaluations.failed} disabled=${published.summary.ruleEvaluations.disabled} not-executed=${published.summary.ruleEvaluations.notExecuted}`,
+    `elements=${published.summary.elementsInspected} violations=${published.summary.violations} failures=${published.summary.executionFailures}`,
   ];
-  for (const caseResult of result.cases) {
+  for (const caseResult of published.cases) {
     lines.push(
       `case target=${escapeTerminal(caseResult.target.name)} device=${escapeTerminal(caseResult.device.name)}: ${caseResult.status} ${redactUrlForTerminal(caseResult.target.url)} viewport=${caseResult.device.viewport.width}x${caseResult.device.viewport.height}@${caseResult.device.deviceScaleFactor}`,
     );
@@ -104,9 +106,13 @@ export function renderTerminal(result: RunResultV3): string {
           lines.push(
             `    violation lines=${violation.lineCount} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height} text=${escapeTerminal(violation.text)}`,
           );
-        } else {
+        } else if (violation.type === "page-horizontal-overflow") {
           lines.push(
             `    violation overflow=${violation.overflowPx}px locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height} css=${escapeTerminal(JSON.stringify(violation.computedStyle))}`,
+          );
+        } else {
+          lines.push(
+            `    violation message=${escapeTerminal(violation.message)} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height}`,
           );
         }
       }
@@ -115,13 +121,13 @@ export function renderTerminal(result: RunResultV3): string {
       lines.push(`  ${failureLine(failure)}`);
     }
   }
-  for (const finalization of result.ruleFinalizations) {
+  for (const finalization of published.ruleFinalizations) {
     lines.push(
       `finalize ${escapeTerminal(finalization.name)}: ${finalization.status} elements=${finalization.elementsInspected}`,
     );
     if (finalization.failure !== null) lines.push(`  ${failureLine(finalization.failure)}`);
   }
-  for (const failure of result.failures) {
+  for (const failure of published.failures) {
     lines.push(failureLine(failure));
   }
   return `${lines.join("\n")}\n`;

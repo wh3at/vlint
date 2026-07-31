@@ -71,7 +71,6 @@ describe("check resolution", () => {
     await writeFile(
       join(directory, "vlint.config.json"),
       JSON.stringify({
-        schemaVersion: 2,
         devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
         provider: { type: "command", executable: script, args: [sentinel] },
       }),
@@ -81,8 +80,8 @@ describe("check resolution", () => {
     if (!result.ok) throw new Error(result.failure.message);
     // Provider call count must be 0: the sentinel is created only if the provider runs.
     expect(existsSync(sentinel)).toBe(false);
-    expect(result.value.cases.map((c) => `${c.name}/${c.deviceName}`)).toEqual(["adhoc/desk", "adhoc/phone"]);
-    expect(result.value.targets.map((target) => target.name)).toEqual(["adhoc"]);
+    expect(result.value.plan.cases.map((c) => `${c.name}/${c.deviceName}`)).toEqual(["adhoc/desk", "adhoc/phone"]);
+    expect(result.value.plan.targets.map((target) => target.name)).toEqual(["adhoc"]);
   });
 
   test("resolves provider targets across all devices when no URL is given (sentinel proves invocation)", async () => {
@@ -96,7 +95,6 @@ describe("check resolution", () => {
     await writeFile(
       join(directory, "vlint.config.json"),
       JSON.stringify({
-        schemaVersion: 2,
         devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
         provider: { type: "command", executable: script, args: [sentinel] },
       }),
@@ -105,7 +103,7 @@ describe("check resolution", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(result.failure.message);
     expect(existsSync(sentinel)).toBe(true);
-    expect(result.value.cases.map((c) => `${c.name}/${c.deviceName}`)).toEqual([
+    expect(result.value.plan.cases.map((c) => `${c.name}/${c.deviceName}`)).toEqual([
       "second/desk",
       "second/phone",
       "first/desk",
@@ -117,7 +115,7 @@ describe("check resolution", () => {
     const directory = await temporaryDirectory();
     await writeFile(
       join(directory, "vlint.config.json"),
-      JSON.stringify({ schemaVersion: 2, devices: [DESKTOP_DEVICE] }),
+      JSON.stringify({devices: [DESKTOP_DEVICE] }),
     );
     const result = await resolveCheckPlan(directory, null, {});
     expect(result.ok).toBe(false);
@@ -131,7 +129,6 @@ describe("check resolution", () => {
     await writeFile(
       join(directory, "vlint.config.json"),
       JSON.stringify({
-        schemaVersion: 2,
         devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
         provider: {
           type: "static",
@@ -145,7 +142,7 @@ describe("check resolution", () => {
     const result = await resolveCheckPlan(directory, null, {});
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(result.failure.message);
-    expect(result.value.cases.map((c) => `${c.name}/${c.deviceName}`)).toEqual([
+    expect(result.value.plan.cases.map((c) => `${c.name}/${c.deviceName}`)).toEqual([
       "second/desk",
       "second/phone",
       "first/desk",

@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, test } from "bun:test";
 import vlintPackage from "../../package.json";
-import type { RunResultV3 } from "../../src/contracts/result";
-import { isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
+import type { RunResult } from "../../src/contracts/result";
+import { isLocalViolation, isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
 import { startFixtureServer } from "../fixtures/app/server";
 import { startAcceptanceServer, type AcceptanceServer } from "./server";
 import type { FixtureServer } from "../fixtures/app/server";
@@ -22,6 +22,7 @@ import type { FixtureServer } from "../fixtures/app/server";
  */
 
 const binary = join(import.meta.dir, "../../dist/vlint-linux-x64");
+const pluginFixtureRoot = join(import.meta.dir, "../fixtures/plugins");
 const binaryPresent = existsSync(binary);
 const CAT = "/bin/cat";
 /** Per-test ceiling for browser-launching checks (launch + navigate + evaluate + close). */
@@ -99,7 +100,7 @@ async function readConfigFile(directory: string): Promise<Record<string, unknown
   return JSON.parse(content) as Record<string, unknown>;
 }
 
-function firstFailure(result: RunResultV3): RunResultV3["failures"][number] | undefined {
+function firstFailure(result: RunResult): RunResult["failures"][number] | undefined {
   return result.failures[0]
     ?? result.cases.find((item) => item.failures.length > 0)?.failures[0]
     ?? result.cases.flatMap((item) => item.rules).find((item) => item.failure !== null)?.failure
@@ -148,7 +149,6 @@ describe.skipIf(!binaryPresent)(
     test("clean Static run completes with exit 0 and valid JSON schema", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: { type: "static", targets: [{ name: "clean", url: `${acceptance.url}/clean` }] },
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
@@ -157,8 +157,7 @@ describe.skipIf(!binaryPresent)(
       expect(result.stdout.endsWith("\n")).toBe(true);
       expect(result.stdout.split("\n")).toHaveLength(2);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
-      expect(parsed.schemaVersion).toBe(3);
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.status).toBe("clean");
       expect(parsed.tool).toEqual({ name: "vlint", version: vlintPackage.version });
       expect(parsed.environment).toMatchObject({ platform: "linux", arch: "x64" });
@@ -180,14 +179,13 @@ describe.skipIf(!binaryPresent)(
       const cwd = await tempDir();
       const targetUrl = `${acceptance.url}/settings`;
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: { type: "static", targets: [{ name: "settings", url: targetUrl }] },
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(1);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.status).toBe("violations");
       expect(parsed.summary.violations).toBe(1);
       expect(parsed.summary.elementsInspected).toBe(1);
@@ -220,7 +218,6 @@ describe.skipIf(!binaryPresent)(
     test("mixed violation and navigation failure exits 2 incomplete, collects all cases", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: {
           type: "static",
           targets: [
@@ -234,7 +231,7 @@ describe.skipIf(!binaryPresent)(
       expect(result.exitCode, result.stderr).toBe(2);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.status).toBe("incomplete");
 
       // Collect-all: prior violations survive alongside the failing target.
@@ -282,7 +279,6 @@ describe.skipIf(!binaryPresent)(
         origins: [],
       }));
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: {
           type: "static",
           targets: [{ name: "secure", url: `${acceptance.url}/secure`, browserState: statePath }],
@@ -292,7 +288,7 @@ describe.skipIf(!binaryPresent)(
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.status).toBe("clean");
       expect(parsed.summary.elementsInspected).toBe(2);
       expect(parsed.cases[0]!.status).toBe("complete");
@@ -304,7 +300,6 @@ describe.skipIf(!binaryPresent)(
       const statePath = join(cwd, "bad-state.json");
       await writeFile(statePath, JSON.stringify({ cookies: "not-an-array", origins: 42 }));
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: {
           type: "static",
           targets: [{ name: "secure", url: `${acceptance.url}/secure`, browserState: statePath }],
@@ -313,7 +308,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(firstFailure(parsed)).toMatchObject({ stage: "authentication", code: "state-invalid", target: "secure" });
       expect(parsed.cases[0]!.status).toBe("failed");
     }, CHECK_TIMEOUT);
@@ -323,31 +318,28 @@ describe.skipIf(!binaryPresent)(
     test("navigation HTTP failure classifies navigation-http-status (exit 2)", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: { type: "static", targets: [{ name: "http500", url: `${fixture.url}/status?code=500` }] },
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(firstFailure(parsed)).toMatchObject({ stage: "navigation", code: "navigation-http-status", target: "http500" });
     }, CHECK_TIMEOUT);
 
     test("web-font load failure classifies font-load-failed (exit 2)", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: { type: "static", targets: [{ name: "font", url: `${fixture.url}/font-error.html` }] },
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(firstFailure(parsed)).toMatchObject({ stage: "web-font", code: "font-load-failed", target: "font" });
     }, CHECK_TIMEOUT);
 
     test("invalid ready selector classifies ready-invalid-selector (exit 2)", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: {
           type: "static",
           targets: [{
@@ -359,7 +351,7 @@ describe.skipIf(!binaryPresent)(
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(firstFailure(parsed)).toMatchObject({ stage: "ready-condition", code: "ready-invalid-selector", target: "ready" });
     }, CHECK_TIMEOUT);
 
@@ -369,7 +361,6 @@ describe.skipIf(!binaryPresent)(
       const cwd = await tempDir();
       // Deliberately failing provider: cat of a non-existent path exits nonzero.
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: { type: "command", executable: CAT, args: [join(cwd, "missing.json")] },
         devices: [{ ...TEST_DEVICE, viewport: { width: 800, height: 600 }, screen: { width: 800, height: 600 } }],
         rules: [{ name: "custom-tabs", type: "tab-label-single-line" }],
@@ -379,7 +370,7 @@ describe.skipIf(!binaryPresent)(
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.status).toBe("clean");
       expect(firstFailure(parsed)).toBeUndefined();
       // Ad hoc target name and exact URL.
@@ -399,7 +390,6 @@ describe.skipIf(!binaryPresent)(
 
       const staticCwd = await tempDir();
       await writeConfig(staticCwd, {
-        schemaVersion: 2,
         provider: { type: "static", targets: [{ name: "cmd-parity", url: targetUrl }] },
       });
       const staticResult = await execBinary(["check", "--format", "json"], staticCwd);
@@ -408,14 +398,13 @@ describe.skipIf(!binaryPresent)(
       const targetsFile = join(cmdCwd, "targets.json");
       await writeFile(targetsFile, JSON.stringify({ targets: [{ name: "cmd-parity", url: targetUrl }] }));
       await writeConfig(cmdCwd, {
-        schemaVersion: 2,
         provider: { type: "command", executable: CAT, args: [targetsFile] },
       });
       const cmdResult = await execBinary(["check", "--format", "json"], cmdCwd);
 
       expect(cmdResult.exitCode).toBe(staticResult.exitCode);
-      const cmdParsed = JSON.parse(cmdResult.stdout) as RunResultV3;
-      const staticParsed = JSON.parse(staticResult.stdout) as RunResultV3;
+      const cmdParsed = JSON.parse(cmdResult.stdout) as RunResult;
+      const staticParsed = JSON.parse(staticResult.stdout) as RunResult;
       expect(cmdParsed.status).toBe(staticParsed.status);
       expect(cmdParsed.summary.violations).toBe(staticParsed.summary.violations);
       expect(cmdParsed.summary.elementsInspected).toBe(staticParsed.summary.elementsInspected);
@@ -426,12 +415,11 @@ describe.skipIf(!binaryPresent)(
     test("Command Provider nonzero exit classifies provider-exit-nonzero (exit 2)", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: { type: "command", executable: CAT, args: [join(cwd, "nonexistent")] },
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(firstFailure(parsed)).toMatchObject({ stage: "provider", code: "provider-exit-nonzero" });
     }, CHECK_TIMEOUT);
 
@@ -440,12 +428,11 @@ describe.skipIf(!binaryPresent)(
       const badFile = join(cwd, "bad.json");
       await writeFile(badFile, "definitely not json");
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: { type: "command", executable: CAT, args: [badFile] },
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(firstFailure(parsed)).toMatchObject({ stage: "provider", code: "provider-output-invalid" });
     }, CHECK_TIMEOUT);
 
@@ -458,7 +445,6 @@ describe.skipIf(!binaryPresent)(
       const controlName = "t\u0001ab\u202e";
       const secretUrl = `${acceptance.url}/clean?token=${secret}#section`;
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: { type: "static", targets: [{ name: controlName, url: secretUrl }] },
       });
 
@@ -483,7 +469,7 @@ describe.skipIf(!binaryPresent)(
 
       const jsonResult = await execBinary(["check", "--format", "json"], cwd);
       expect(jsonResult.exitCode, jsonResult.stderr).toBe(0);
-      const parsed = JSON.parse(jsonResult.stdout) as RunResultV3;
+      const parsed = JSON.parse(jsonResult.stdout) as RunResult;
       // JSON preserves the exact configured URL (secret + fragment intact).
       expect(parsed.cases[0]!.target.url).toBe(secretUrl);
       // JSON preserves the exact target name with raw control/bidi code points.
@@ -495,7 +481,6 @@ describe.skipIf(!binaryPresent)(
     test("repeated identical check produces byte-identical JSON", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: { type: "static", targets: [{ name: "det", url: `${acceptance.url}/settings` }] },
       });
       const first = await execBinary(["check", "--format", "json"], cwd);
@@ -510,11 +495,9 @@ describe.skipIf(!binaryPresent)(
       const cwdA = await tempDir();
       const cwdB = await tempDir();
       await writeConfig(cwdA, {
-        schemaVersion: 2,
         provider: { type: "static", targets: [{ name: "conc-a", url: `${acceptance.url}/clean` }] },
       });
       await writeConfig(cwdB, {
-        schemaVersion: 2,
         provider: { type: "static", targets: [{ name: "conc-b", url: `${acceptance.url}/clean` }] },
       });
       const [a, b] = await Promise.all([
@@ -525,8 +508,8 @@ describe.skipIf(!binaryPresent)(
       expect(b.exitCode, b.stderr).toBe(0);
       expect(a.stderr).toBe("");
       expect(b.stderr).toBe("");
-      const pa = JSON.parse(a.stdout) as RunResultV3;
-      const pb = JSON.parse(b.stdout) as RunResultV3;
+      const pa = JSON.parse(a.stdout) as RunResult;
+      const pb = JSON.parse(b.stdout) as RunResult;
       expect(pa.status).toBe("clean");
       expect(pb.status).toBe("clean");
       expect(pa.cases[0]!.target.name).toBe("conc-a");
@@ -538,7 +521,6 @@ describe.skipIf(!binaryPresent)(
     test("agent fix-and-rerun: wrapped page exit 1, corrected page exit 0", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         provider: { type: "static", targets: [{ name: "fix", url: `${acceptance.url}/settings` }] },
       });
 
@@ -546,7 +528,7 @@ describe.skipIf(!binaryPresent)(
       acceptance.setSettingsWrapped(true);
       const before = await execBinary(["check", "--format", "json"], cwd);
       expect(before.exitCode, before.stderr).toBe(1);
-      const beforeParsed = JSON.parse(before.stdout) as RunResultV3;
+      const beforeParsed = JSON.parse(before.stdout) as RunResult;
       expect(beforeParsed.status).toBe("violations");
       expect(beforeParsed.summary.violations).toBe(1);
 
@@ -554,14 +536,14 @@ describe.skipIf(!binaryPresent)(
       acceptance.setSettingsWrapped(false);
       const after = await execBinary(["check", "--format", "json"], cwd);
       expect(after.exitCode, after.stderr).toBe(0);
-      const afterParsed = JSON.parse(after.stdout) as RunResultV3;
+      const afterParsed = JSON.parse(after.stdout) as RunResult;
       expect(afterParsed.status).toBe("clean");
       expect(afterParsed.summary.violations).toBe(0);
     }, CHECK_TIMEOUT);
 
     // ============================================================= Multi-device
     // AE1-AE8 and mobile-only regression: compiled binary proof for the
-    // version 2 multi-device contract. These tests exercise the real init
+    // standard multi-device contract. These tests exercise the real init
     // command, the standard two-device config, cross-product ordering,
     // collect-all failure isolation, and the desktop-clean/mobile-violation
     // regression that motivated the feature.
@@ -576,7 +558,6 @@ describe.skipIf(!binaryPresent)(
       expect(result.stderr).toBe("");
 
       const config = await readConfigFile(cwd);
-      expect(config.schemaVersion).toBe(2);
       // Device-only: no provider or url key at all.
       expect(config).not.toHaveProperty("provider");
 
@@ -618,7 +599,6 @@ describe.skipIf(!binaryPresent)(
     test("AE2 init refuses to overwrite an existing config and preserves bytes", async () => {
       const cwd = await tempDir();
       const original = JSON.stringify({
-        schemaVersion: 2,
         devices: [MACBOOK_DEVICE],
         rules: [{ name: "custom", type: "tab-label-single-line" }],
       });
@@ -645,8 +625,7 @@ describe.skipIf(!binaryPresent)(
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
-      expect(parsed.schemaVersion).toBe(3);
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.status).toBe("clean");
       expect(parsed.summary.cases).toMatchObject({ resolved: 2, complete: 2, failed: 0, notExecuted: 0 });
       expect(parsed.summary.targets.resolved).toBe(1);
@@ -674,7 +653,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.status).toBe("incomplete");
       expect(parsed.summary.cases).toMatchObject({ resolved: 0, complete: 0, failed: 0, notExecuted: 0 });
       expect(firstFailure(parsed)).toMatchObject({ stage: "config", code: "targets-empty" });
@@ -685,7 +664,6 @@ describe.skipIf(!binaryPresent)(
     test("AE5 two targets and two devices produce four ordered cases with device-specific viewports", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         devices: STANDARD_DEVICES,
         provider: {
           type: "static",
@@ -698,7 +676,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(0);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.summary.targets.resolved).toBe(2);
       expect(parsed.summary.cases).toMatchObject({ resolved: 4, complete: 4, failed: 0, notExecuted: 0 });
       expect(parsed.cases).toHaveLength(4);
@@ -727,7 +705,6 @@ describe.skipIf(!binaryPresent)(
     test("AE6 navigation failure on one target still completes remaining target×device cases", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         devices: STANDARD_DEVICES,
         provider: {
           type: "static",
@@ -741,7 +718,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.status).toBe("incomplete");
       expect(parsed.summary.cases).toMatchObject({ resolved: 6, complete: 4, failed: 2, notExecuted: 0 });
 
@@ -779,7 +756,6 @@ describe.skipIf(!binaryPresent)(
     test("AE7 editing devices to one produces exactly one case per target", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         devices: [IPHONE_DEVICE],
         provider: {
           type: "static",
@@ -791,7 +767,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(0);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.summary.targets.resolved).toBe(1);
       expect(parsed.summary.cases.resolved).toBe(1);
       expect(parsed.cases).toHaveLength(1);
@@ -807,13 +783,13 @@ describe.skipIf(!binaryPresent)(
       // With --url: still requires a config (R8, no implicit fallback).
       const withUrl = await execBinary(["check", "--url", `${acceptance.url}/clean`, "--format", "json"], cwd);
       expect(withUrl.exitCode, withUrl.stderr).toBe(2);
-      const withUrlParsed = JSON.parse(withUrl.stdout) as RunResultV3;
+      const withUrlParsed = JSON.parse(withUrl.stdout) as RunResult;
       expect(firstFailure(withUrlParsed)).toMatchObject({ stage: "config", code: "config-not-found" });
 
       // Without --url: same config-not-found (no browser launched in either path).
       const noUrl = await execBinary(["check", "--format", "json"], cwd);
       expect(noUrl.exitCode, noUrl.stderr).toBe(2);
-      const noUrlParsed = JSON.parse(noUrl.stdout) as RunResultV3;
+      const noUrlParsed = JSON.parse(noUrl.stdout) as RunResult;
       expect(firstFailure(noUrlParsed)).toMatchObject({ stage: "config", code: "config-not-found" });
     });
 
@@ -822,7 +798,6 @@ describe.skipIf(!binaryPresent)(
     test("mobile-only regression: MacBook clean, iPhone detects wrapped label that desktop misses", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         devices: STANDARD_DEVICES,
         provider: {
           type: "static",
@@ -832,7 +807,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(1);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.status).toBe("violations");
       expect(parsed.cases).toHaveLength(2);
 
@@ -859,7 +834,6 @@ describe.skipIf(!binaryPresent)(
     test("compiled CLI reports responsive page overflow only on the iPhone case", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
-        schemaVersion: 2,
         devices: STANDARD_DEVICES,
         provider: {
           type: "static",
@@ -869,8 +843,7 @@ describe.skipIf(!binaryPresent)(
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(1);
 
-      const parsed = JSON.parse(result.stdout) as RunResultV3;
-      expect(parsed.schemaVersion).toBe(3);
+      const parsed = JSON.parse(result.stdout) as RunResult;
       const desktopRule = parsed.cases[0]?.rules.find((rule) => rule.type === "page-horizontal-overflow");
       const mobileRule = parsed.cases[1]?.rules.find((rule) => rule.type === "page-horizontal-overflow");
       expect(desktopRule).toMatchObject({ status: "clean", elementsInspected: 0, violations: [] });
@@ -910,6 +883,125 @@ describe.skipIf(!binaryPresent)(
       expect(result.stdout).not.toContain('"matchedElements"');
       expect(result.stdout).not.toContain('"text"');
       expect(result.stdout).not.toContain('"html"');
+    }, CHECK_TIMEOUT);
+
+    // ============================================================= Local rules (U5)
+
+    async function writeLocalSpacingConfig(
+      directory: string,
+      targetUrl: string,
+      page: "spacing-violation" | "spacing-clean" = "spacing-violation",
+    ): Promise<void> {
+      const ruleFile = "duplicate-spacing-rule.ts";
+      await copyFile(join(pluginFixtureRoot, ruleFile), join(directory, ruleFile));
+      await writeConfig(directory, {
+        devices: [TEST_DEVICE],
+        rules: [{
+          name: "duplicate-spacing",
+          type: "local",
+          path: ruleFile,
+          settings: {
+            shellSelector: "#app-shell",
+            contentSelector: "#content",
+          },
+        }],
+        provider: {
+          type: "static",
+          targets: [{
+            name: "layout",
+            url: `${targetUrl}/${page}`,
+            ruleOverrides: {
+              "tab-label-single-line": { enabled: false },
+              "page-horizontal-overflow": { enabled: false },
+            },
+          }],
+        },
+      });
+    }
+
+    test("local rule violation exposes actionable terminal and JSON diagnostics (AE1/AE9)", async () => {
+      const cwd = await tempDir();
+      await writeLocalSpacingConfig(cwd, acceptance.url);
+      const jsonResult = await execBinary(["check", "--format", "json"], cwd);
+      expect(jsonResult.exitCode, jsonResult.stderr).toBe(1);
+      expect(jsonResult.stderr).toBe("");
+
+      const parsed = JSON.parse(jsonResult.stdout) as RunResult;
+      const localRule = parsed.cases[0]?.rules.find((rule) => rule.type === "local");
+      const violation = localRule?.violations[0];
+      if (!violation || !isLocalViolation(violation)) throw new Error("expected local violation");
+      expect(violation.message).toContain("duplicate horizontal spacing");
+      expect(violation.locator).toBe("#content");
+      expect(violation.geometry.width).toBeGreaterThan(0);
+
+      const termResult = await execBinary(["check", "--format", "terminal"], cwd);
+      expect(termResult.exitCode, termResult.stderr).toBe(1);
+      expect(termResult.stdout).toContain("duplicate horizontal spacing");
+      expect(termResult.stdout).toContain("locator=#content");
+      expect(termResult.stdout).not.toContain("shellPaddingPx");
+    }, CHECK_TIMEOUT * 2);
+
+    test("mixed built-in and local violations aggregate in declaration order with exit 1", async () => {
+      const cwd = await tempDir();
+      const ruleFile = "duplicate-spacing-rule.ts";
+      await copyFile(join(pluginFixtureRoot, ruleFile), join(cwd, ruleFile));
+      await writeConfig(cwd, {
+        devices: [TEST_DEVICE],
+        rules: [
+          { name: "tab-label-single-line", type: "tab-label-single-line" },
+          {
+            name: "duplicate-spacing",
+            type: "local",
+            path: ruleFile,
+            settings: { shellSelector: "#app-shell", contentSelector: "#content" },
+          },
+        ],
+        provider: {
+          type: "static",
+          targets: [
+            { name: "tabs", url: `${acceptance.url}/settings` },
+            { name: "spacing", url: `${acceptance.url}/spacing-violation` },
+          ],
+        },
+      });
+      const result = await execBinary(["check", "--format", "json"], cwd);
+      expect(result.exitCode, result.stderr).toBe(1);
+      const parsed = JSON.parse(result.stdout) as RunResult;
+      expect(parsed.summary.violations).toBeGreaterThanOrEqual(2);
+      for (const auditCase of parsed.cases) {
+        const ruleNames = auditCase.rules.map((rule) => rule.name);
+        expect(ruleNames.indexOf("tab-label-single-line")).toBeLessThan(ruleNames.indexOf("duplicate-spacing"));
+      }
+    }, CHECK_TIMEOUT);
+
+    test("local execution failure plus observed violation preserves evidence and exits 2", async () => {
+      const cwd = await tempDir();
+      const ruleFile = "eval-throwing-rule.ts";
+      await copyFile(join(pluginFixtureRoot, ruleFile), join(cwd, ruleFile));
+      await writeConfig(cwd, {
+        devices: [TEST_DEVICE],
+        rules: [
+          { name: "tab-label-single-line", type: "tab-label-single-line" },
+          {
+            name: "throwing-local",
+            type: "local",
+            path: ruleFile,
+            settings: {},
+          },
+        ],
+        provider: {
+          type: "static",
+          targets: [{ name: "mixed", url: `${acceptance.url}/settings` }],
+        },
+      });
+      const result = await execBinary(["check", "--format", "json"], cwd);
+      expect(result.exitCode, result.stderr).toBe(2);
+      const parsed = JSON.parse(result.stdout) as RunResult;
+      expect(parsed.status).toBe("incomplete");
+      expect(parsed.summary.violations).toBeGreaterThanOrEqual(1);
+      const localRule = parsed.cases[0]?.rules.find((rule) => rule.name === "throwing-local");
+      expect(localRule?.failure?.code).toBe("plugin-evaluator-invalid");
+      expect(result.stdout).not.toContain("throw new Error");
     }, CHECK_TIMEOUT);
   },
 );

@@ -28,13 +28,13 @@ afterEach(async () => {
 });
 
 describe("vlint init: standard config generation", () => {
-  test("builds a two-device, no-provider, standard-rules version 2 config (AE1)", () => {
+  test("builds a two-device, no-provider, standard-rules config (AE1)", () => {
     const result = buildStandardConfig();
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const config = result.value;
 
-    expect(config.schemaVersion).toBe(2);
+    expect(config).not.toHaveProperty("schemaVersion");
     expect(config.provider).toBeUndefined();
     expect(config.devices).toHaveLength(2);
     expect(config.rules).toEqual([
@@ -194,7 +194,7 @@ describe("vlint init: non-destructive file generation", () => {
   test("refuses to overwrite an existing regular file (AE2)", async () => {
     const dir = await temporaryDirectory();
     const path = join(dir, CONFIG_NAME);
-    const prior = '{"schemaVersion":2,"devices":[]}';
+    const prior = '{"devices":[]}';
     await writeFile(path, prior);
 
     const outcome = await runInitCommand(dir);

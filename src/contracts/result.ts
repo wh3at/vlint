@@ -1,5 +1,6 @@
 import type { RuleFinalization, Violation } from "./evaluation";
 import type { Failure } from "./failure";
+import type { RuleType } from "./config";
 
 export type RunStatus = "clean" | "violations" | "incomplete";
 export type CaseStatus = "complete" | "partial" | "failed" | "not-executed";
@@ -7,7 +8,7 @@ export type RuleResultStatus = "clean" | "violations" | "failed" | "disabled" | 
 
 export interface RuleResult {
   readonly name: string;
-  readonly type: "tab-label-single-line" | "page-horizontal-overflow";
+  readonly type: RuleType;
   readonly status: RuleResultStatus;
   readonly elementsInspected: number;
   readonly violations: readonly Violation[];
@@ -78,8 +79,7 @@ export interface RunSummary {
   readonly executionFailures: number;
 }
 
-export interface RunResultV3 {
-  readonly schemaVersion: 3;
+export interface RunResult {
   readonly status: RunStatus;
   readonly tool: { readonly name: "vlint"; readonly version: string };
   readonly environment: {

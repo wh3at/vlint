@@ -14,8 +14,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await server.close().catch(() => undefined);
   await browser.close().catch(() => undefined);
+  await server.close().catch(() => undefined);
 });
 
 async function withPage<T>(url: string, fn: (page: Page) => Promise<T>): Promise<T> {

@@ -13,7 +13,7 @@ import type {
   CaseResult,
   CaseStatus,
   RuleResultStatus,
-  RunResultV3,
+  RunResult,
   RunSummary,
 } from "../contracts/result";
 
@@ -35,6 +35,13 @@ export interface CheckDependencies<PageHandle> {
     rule: EffectiveRuleForTarget,
     signal?: AbortSignal,
   ): Promise<RuleEvaluationOutcome>;
+  finalize?(
+    rule: EffectiveRuleForTarget,
+    ruleIndex: number,
+    plan: ResolvedCheckPlan,
+    cases: readonly MutableCaseResult[],
+    signal?: AbortSignal,
+  ): Promise<RuleFinalization>;
 }
 
 export interface CheckOptions {
@@ -44,7 +51,7 @@ export interface CheckOptions {
 
 interface MutableRuleResult {
   name: string;
-  type: "tab-label-single-line" | "page-horizontal-overflow";
+  type: EffectiveRuleForTarget["type"];
   status: RuleResultStatus;
   elementsInspected: number;
   violations: readonly Violation[];
@@ -166,10 +173,9 @@ function completedResult(
   cases: readonly CaseResult[],
   finalizations: readonly RuleFinalization[],
   runFailures: readonly Failure[],
-): RunResultV3 {
+): RunResult {
   const summary = summarize(targetCount, cases, finalizations, runFailures);
   return {
-    schemaVersion: 3,
     status: summary.executionFailures > 0 ? "incomplete" : summary.violations > 0 ? "violations" : "clean",
     tool: { name: "vlint", version: toolVersion },
     environment: {
@@ -184,25 +190,27 @@ function completedResult(
   };
 }
 
-export function resultForResolutionFailure(toolVersion: string, failure: Failure): RunResultV3 {
+export function resultForResolutionFailure(toolVersion: string, failure: Failure): RunResult {
   return completedResult(toolVersion, null, 0, [], [], [failure]);
 }
 
-export function exitCodeForResult(result: RunResultV3): 0 | 1 | 2 {
+export function exitCodeForResult(result: RunResult): 0 | 1 | 2 {
   if (result.status === "incomplete") return 2;
   return result.status === "violations" ? 1 : 0;
 }
 
 /**
- * Resolves run-wide finalizations in declaration order. Only tab-label rules
- * apply the zero-label regression policy; overflow rules may legitimately inspect
- * zero elements. The first failing finalization stops the cascade, and later rules
- * stay not-executed.
+ * Resolves run-wide finalizations in declaration order. Tab-label rules apply the
+ * zero-label regression policy; local rules delegate to the check-owned adapter;
+ * overflow rules may legitimately inspect zero elements. The first failing
+ * finalization stops the cascade, and later rules stay not-executed.
  */
-function resolveFinalizations(
+async function resolveFinalizations<PageHandle>(
   plan: ResolvedCheckPlan,
   cases: readonly MutableCaseResult[],
-): RuleFinalization[] {
+  dependencies: CheckDependencies<PageHandle>,
+  signal?: AbortSignal,
+): Promise<RuleFinalization[]> {
   const resolvedFinalizations: RuleFinalization[] = [];
   for (let ruleIndex = 0; ruleIndex < plan.rules.length; ruleIndex += 1) {
     const rule = plan.rules[ruleIndex];
@@ -215,6 +223,37 @@ function resolveFinalizations(
       (count, caseResult) => count + (caseResult.rules[ruleIndex]?.elementsInspected ?? 0),
       0,
     );
+    if (rule.type === "local") {
+      if (dependencies.finalize === undefined) {
+        resolvedFinalizations.push({
+          name: rule.name,
+          status: "failed",
+          elementsInspected,
+          failure: {
+            stage: "rule-evaluation",
+            code: "plugin-load-failed",
+            message: "local rule finalizer is not loaded",
+            target: null,
+            device: null,
+            rule: rule.name,
+          },
+        });
+      } else {
+        resolvedFinalizations.push(await dependencies.finalize(rule, ruleIndex, plan, cases, signal));
+      }
+      if (resolvedFinalizations[resolvedFinalizations.length - 1]?.status === "failed") {
+        for (const later of plan.rules.slice(ruleIndex + 1)) {
+          resolvedFinalizations.push({
+            name: later.name,
+            status: "not-executed",
+            elementsInspected: 0,
+            failure: null,
+          });
+        }
+        break;
+      }
+      continue;
+    }
     if (
       rule.type === "tab-label-single-line" &&
       enabledPairCount > 0 &&
@@ -270,7 +309,7 @@ export async function runResolvedCheck<PageHandle>(
   plan: ResolvedCheckPlan,
   dependencies: CheckDependencies<PageHandle>,
   options: CheckOptions,
-): Promise<RunResultV3> {
+): Promise<RunResult> {
   const cases = seededCases(plan);
   let finalizations = seededFinalizations(plan);
   const runFailures: Failure[] = [];
@@ -446,7 +485,7 @@ export async function runResolvedCheck<PageHandle>(
   // Global finalization runs only on a fully observed run, so a failing or
   // interrupted case cannot trigger a false zero-label verdict.
   if (cases.every((caseResult) => caseResult.status === "complete")) {
-    finalizations = resolveFinalizations(plan, cases);
+    finalizations = await resolveFinalizations(plan, cases, dependencies, options.signal);
   }
 
   try {

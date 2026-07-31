@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { RunResultV3 } from "../../src/contracts/result";
-import { isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
+import type { RunResult } from "../../src/contracts/result";
+import { isLocalViolation, isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
 import { renderJson } from "../../src/output/json";
 import { escapeTerminal, redactUrlForTerminal, renderTerminal } from "../../src/output/terminal";
 
-const result: RunResultV3 = {
-  schemaVersion: 3,
+const result: RunResult = {
   status: "violations",
   tool: { name: "vlint", version: "0.1.0" },
   environment: {
@@ -65,7 +64,7 @@ describe("output", () => {
     const second = renderJson(result);
     expect(first).toBe(second);
     expect(first.endsWith("\n")).toBe(true);
-    const parsed = JSON.parse(first) as RunResultV3;
+    const parsed = JSON.parse(first) as RunResult;
     expect(parsed.cases[0]?.target.url).toBe(result.cases[0]?.target.url);
     expect(
       parsed.cases[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
@@ -100,7 +99,7 @@ describe("output", () => {
   });
 
   test("renders overflow diagnostics with the fixed computed-style evidence", () => {
-    const overflowResult: RunResultV3 = {
+    const overflowResult: RunResult = {
       ...result,
       cases: [{
         ...result.cases[0]!,
@@ -156,7 +155,7 @@ describe("output", () => {
       device: "macbook",
       rule: "tabs",
     };
-    const failed: RunResultV3 = {
+    const failed: RunResult = {
       ...result,
       cases: [{
         ...result.cases[0]!,
@@ -175,5 +174,124 @@ describe("output", () => {
     expect(output).toContain("rule-evaluation/zero-labels-global");
     expect(output).toContain("selector failed");
     expect(output).toContain("no labels");
+  });
+
+  test("renders local violations without interpreting project details", () => {
+    const localResult: RunResult = {
+      ...result,
+      cases: [{
+        ...result.cases[0]!,
+        rules: [{
+          name: "duplicate-spacing",
+          type: "local",
+          status: "violations",
+          elementsInspected: 2,
+          violations: [{
+            type: "local",
+            message: "duplicate horizontal spacing in content region",
+            locator: "#content",
+            geometry: { x: 16, y: 16, width: 200, height: 40 },
+            details: { shellPaddingPx: 32, contentPaddingPx: 32, secret: "S3CR3T" },
+          }],
+          failure: null,
+        }],
+      }],
+      ruleFinalizations: [{ name: "duplicate-spacing", status: "passed", elementsInspected: 2, failure: null }],
+    };
+
+    const terminal = renderTerminal(localResult);
+    const json = JSON.parse(renderJson(localResult)) as RunResult;
+    const violation = json.cases[0]?.rules[0]?.violations[0];
+    if (!violation || !isLocalViolation(violation)) throw new Error("expected local violation");
+
+    expect(terminal).toContain("message=duplicate horizontal spacing in content region");
+    expect(terminal).toContain("locator=#content");
+    expect(terminal).toContain("box=16,16,200,40");
+    expect(terminal).not.toContain("S3CR3T");
+    expect(terminal).not.toContain("shellPaddingPx");
+    expect(violation.message).toBe("duplicate horizontal spacing in content region");
+    expect(violation.details).toEqual({ shellPaddingPx: 32, contentPaddingPx: 32, secret: "S3CR3T" });
+  });
+
+  test("escapes plugin failure messages with controls and does not leak paths in JSON", () => {
+    const secretPath = "/home/secret/project/rule.ts";
+    const pluginFailure = {
+      stage: "config" as const,
+      code: "plugin-dependency-forbidden" as const,
+      message: `forbidden import in ${secretPath}\u001b[31mstack`,
+      target: null,
+      device: null,
+      rule: "spacing",
+    };
+    const failed: RunResult = {
+      ...result,
+      status: "incomplete",
+      summary: { ...result.summary, executionFailures: 1 },
+      failures: [pluginFailure],
+    };
+
+    const terminal = renderTerminal(failed);
+    const json = renderJson(failed);
+    expect(terminal).toContain("config/plugin-dependency-forbidden");
+    expect(terminal).toContain("\\u{1b}");
+    expect(terminal).not.toContain("\u001b");
+    expect(json).not.toContain(secretPath);
+    expect(json).toContain("plugin-dependency-forbidden");
+  });
+
+  test("preserves mixed built-in and local violations in declaration order", () => {
+    const mixed: RunResult = {
+      ...result,
+      summary: {
+        ...result.summary,
+        ruleEvaluations: { clean: 0, violations: 2, failed: 0, disabled: 0, notExecuted: 0 },
+        violations: 2,
+        elementsInspected: 3,
+      },
+      cases: [{
+        ...result.cases[0]!,
+        rules: [
+          {
+            name: "tabs",
+            type: "tab-label-single-line",
+            status: "violations",
+            elementsInspected: 1,
+            violations: [{
+              type: "tab-label-single-line",
+              text: "wrapped",
+              lineCount: 2,
+              geometry: { x: 0, y: 0, width: 10, height: 10 },
+              locator: "#tab",
+            }],
+            failure: null,
+          },
+          {
+            name: "duplicate-spacing",
+            type: "local",
+            status: "violations",
+            elementsInspected: 2,
+            violations: [{
+              type: "local",
+              message: "duplicate horizontal spacing",
+              locator: "#content",
+              geometry: { x: 1, y: 2, width: 3, height: 4 },
+              details: null,
+            }],
+            failure: null,
+          },
+        ],
+      }],
+      ruleFinalizations: [
+        { name: "tabs", status: "passed", elementsInspected: 1, failure: null },
+        { name: "duplicate-spacing", status: "passed", elementsInspected: 2, failure: null },
+      ],
+    };
+
+    const output = renderTerminal(mixed);
+    const tabIndex = output.indexOf("rule tabs:");
+    const localIndex = output.indexOf("rule duplicate-spacing:");
+    expect(tabIndex).toBeGreaterThanOrEqual(0);
+    expect(localIndex).toBeGreaterThan(tabIndex);
+    expect(output).toContain("violations=2");
   });
 });

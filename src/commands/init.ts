@@ -1,7 +1,7 @@
 import { open, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import { devices as playwrightDevices } from "playwright";
-import type { ConfigV2, DeviceProfile, Viewport } from "../contracts/config";
+import type { Config, DeviceProfile, Viewport } from "../contracts/config";
 import {
   boundaryFailure,
   boundarySuccess,
@@ -100,12 +100,12 @@ function refineIphone(descriptor: unknown): IphoneDescriptor | null {
 }
 
 /**
- * Build the standard version 2 config: the two standard devices and rules, with
+ * Build the standard config: the two standard devices and rules, with
  * no provider and no URL. The iPhone profile is normalized from the Playwright
  * registry into concrete values at generation time; the Chromium-incompatible
  * `defaultBrowserType` is deliberately dropped.
  */
-export function buildStandardConfig(source: DeviceSource = playwrightDevices): BoundaryResult<ConfigV2> {
+export function buildStandardConfig(source: DeviceSource = playwrightDevices): BoundaryResult<Config> {
   const raw = source[IPHONE_KEY];
   if (raw === undefined) {
     return boundaryFailure({
@@ -138,7 +138,6 @@ export function buildStandardConfig(source: DeviceSource = playwrightDevices): B
     userAgent: iphone.userAgent,
   };
   return boundarySuccess({
-    schemaVersion: 2,
     devices: [MACBOOK_PROFILE, iphoneProfile],
     rules: STANDARD_RULES,
   });

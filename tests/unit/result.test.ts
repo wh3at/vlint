@@ -6,9 +6,14 @@ import type {
   EffectiveTarget,
   ResolvedCheckPlan,
 } from "../../src/contracts/config";
-import { isTabLabelSingleLineViolation, type RuleEvaluationOutcome } from "../../src/contracts/evaluation";
+import {
+  isTabLabelSingleLineViolation,
+  type LocalRuleFinalizationInput,
+  type RuleEvaluationOutcome,
+  type RuleFinalization,
+} from "../../src/contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type Failure } from "../../src/contracts/failure";
-import type { RunResultV3 } from "../../src/contracts/result";
+import type { RunResult } from "../../src/contracts/result";
 import {
   exitCodeForResult,
   type CheckDependencies,
@@ -81,8 +86,16 @@ function plan(targetNames: readonly string[], rules: readonly EffectiveRule[], d
   };
 }
 
+function localRule(name: string, path = "rules/local.ts"): EffectiveRule {
+  return { name, type: "local", enabled: true, path, settings: {} };
+}
+
 interface DependencyOptions {
   readonly evaluate?: (page: string, rule: EffectiveRuleForTarget) => RuleEvaluationOutcome;
+  readonly finalize?: (
+    rule: EffectiveRuleForTarget,
+    observations: LocalRuleFinalizationInput,
+  ) => Promise<RuleFinalization>;
   readonly openFailure?: Readonly<Record<string, Failure>>;
   readonly launchFailure?: Failure;
   readonly closeFailure?: Failure;
@@ -118,10 +131,20 @@ function dependencies(options: DependencyOptions = {}): CheckDependencies<string
     async evaluate(page, item) {
       return options.evaluate?.(page, item) ?? cleanOutcome;
     },
+    ...(options.finalize === undefined
+      ? {}
+      : {
+          finalize: async (rule, ruleIndex, resolved, cases) => {
+            const { buildLocalRuleObservations } = await import("../../src/plugins/finalize");
+            if (rule.type !== "local") throw new Error("expected local rule");
+            const observations = buildLocalRuleObservations(rule, resolved, cases, ruleIndex);
+            return options.finalize!(rule, observations);
+          },
+        }),
   };
 }
 
-function firstFailure(result: RunResultV3): Failure | undefined {
+function firstFailure(result: RunResult): Failure | undefined {
   return (
     result.failures[0] ??
     result.cases.flatMap((c) => c.failures)[0] ??
@@ -447,5 +470,258 @@ describe("orchestrator result model", () => {
     expect(result.status).toBe("clean");
     expect(result.cases.map((item) => item.status)).toEqual(["complete"]);
     expect(result.summary.cases).toMatchObject({ resolved: 1, complete: 1 });
+  });
+});
+
+describe("local rule finalization", () => {
+  test("passes a local finalizer after every case completes", async () => {
+    const result = await runResolvedCheck(
+      plan(["a", "b"], [localRule("spacing")]),
+      dependencies({
+        finalize: async () => ({ name: "spacing", status: "passed", elementsInspected: 2, failure: null }),
+      }),
+      { toolVersion: "0.1.0" },
+    );
+    expect(result.status).toBe("clean");
+    expect(result.ruleFinalizations).toEqual([
+      { name: "spacing", status: "passed", elementsInspected: 2, failure: null },
+    ]);
+  });
+
+  test("supplies target, device, status, inspected count, violations, and failure to the finalizer", async () => {
+    let captured: LocalRuleFinalizationInput | undefined;
+    const result = await runResolvedCheck(
+      plan(["a"], [localRule("spacing")]),
+      dependencies({
+        evaluate: () => ({
+          facts: {
+            elementsInspected: 3,
+            violations: [
+              {
+                type: "local",
+                message: "dup spacing",
+                locator: "#content",
+                geometry: { x: 0, y: 0, width: 10, height: 10 },
+                details: { gap: 8 },
+              },
+            ],
+          },
+          failure: null,
+        }),
+        finalize: async (rule, observations) => {
+          captured = observations;
+          return { name: rule.name, status: "passed", elementsInspected: 3, failure: null };
+        },
+      }),
+      { toolVersion: "0.1.0" },
+    );
+    expect(result.status).toBe("violations");
+    expect(captured).toMatchObject({
+      rule: { name: "spacing" },
+      cases: [
+        {
+          target: { name: "a" },
+          device: { name: "desktop" },
+          status: "violations",
+          elementsInspected: 3,
+          violations: [{ message: "dup spacing", locator: "#content" }],
+          failure: null,
+        },
+      ],
+    });
+  });
+
+  test("records a returned finalizer failure and leaves later finalizers not-executed", async () => {
+    const result = await runResolvedCheck(
+      plan(["a"], [localRule("first"), localRule("second")]),
+      dependencies({
+        finalize: async (rule) =>
+          rule.name === "first"
+            ? {
+                name: rule.name,
+                status: "failed",
+                elementsInspected: 1,
+                failure: {
+                  stage: "rule-evaluation",
+                  code: "plugin-finalizer-invalid",
+                  message: "aggregate contract failed",
+                  target: null,
+                  device: null,
+                  rule: rule.name,
+                },
+              }
+            : { name: rule.name, status: "passed", elementsInspected: 1, failure: null },
+      }),
+      { toolVersion: "0.1.0" },
+    );
+    expect(result.status).toBe("incomplete");
+    expect(result.ruleFinalizations.map((item) => item.status)).toEqual(["failed", "not-executed"]);
+  });
+
+  test("skips every run finalizer when any case is not complete", async () => {
+    const result = await runResolvedCheck(
+      plan(["a", "b"], [localRule("spacing")]),
+      dependencies({
+        openFailure: { b: navigationFailure },
+        finalize: async () => {
+          throw new Error("finalizer should not run");
+        },
+      }),
+      { toolVersion: "0.1.0" },
+    );
+    expect(result.ruleFinalizations.every((item) => item.status === "not-executed")).toBe(true);
+  });
+
+  test("keeps built-in zero-label finalization before and after local rules", async () => {
+    const result = await runResolvedCheck(
+      plan(["a"], [rule("tabs"), localRule("spacing"), rule("tabs-later")]),
+      dependencies({
+        evaluate: () => ({ facts: { elementsInspected: 0, violations: [] }, failure: null }),
+        finalize: async (rule) => ({ name: rule.name, status: "passed", elementsInspected: 0, failure: null }),
+      }),
+      { toolVersion: "0.1.0" },
+    );
+    expect(result.ruleFinalizations.map((item) => [item.name, item.status])).toEqual([
+      ["tabs", "failed"],
+      ["spacing", "not-executed"],
+      ["tabs-later", "not-executed"],
+    ]);
+  });
+
+  test("coexists with observed violations and forces incomplete exit", async () => {
+    const result = await runResolvedCheck(
+      plan(["a"], [localRule("spacing")]),
+      dependencies({
+        evaluate: () => ({
+          facts: {
+            elementsInspected: 1,
+            violations: [
+              {
+                type: "local",
+                message: "spacing issue",
+                locator: "#x",
+                geometry: { x: 0, y: 0, width: 1, height: 1 },
+                details: null,
+              },
+            ],
+          },
+          failure: null,
+        }),
+        finalize: async (rule) => ({
+          name: rule.name,
+          status: "failed",
+          elementsInspected: 1,
+          failure: {
+            stage: "rule-evaluation",
+            code: "plugin-finalizer-invalid",
+            message: "aggregate failed",
+            target: null,
+            device: null,
+            rule: rule.name,
+          },
+        }),
+      }),
+      { toolVersion: "0.1.0" },
+    );
+    expect(result.status).toBe("incomplete");
+    expect(result.summary.violations).toBe(1);
+    expect(exitCodeForResult(result)).toBe(2);
+  });
+});
+
+describe("result contracts", () => {
+  test("local lifecycle failure codes produce incomplete results", () => {
+    const pluginFailure: Failure = {
+      stage: "config",
+      code: "plugin-contract-version-mismatch",
+      message: "plugin contract version is not supported",
+      target: null,
+      device: null,
+      rule: "spacing",
+    };
+    const result: RunResult = {
+      status: "incomplete",
+      tool: { name: "vlint", version: "0.4.1" },
+      environment: {
+        platform: "linux",
+        arch: "x64",
+        browser: { name: "chromium", version: null },
+      },
+      summary: {
+        targets: { resolved: 0 },
+        cases: { resolved: 0, complete: 0, partial: 0, failed: 0, notExecuted: 0 },
+        ruleEvaluations: { clean: 0, violations: 0, failed: 0, disabled: 0, notExecuted: 0 },
+        ruleFinalizations: { passed: 0, failed: 0, notExecuted: 0 },
+        violations: 0,
+        elementsInspected: 0,
+        executionFailures: 1,
+      },
+      cases: [],
+      ruleFinalizations: [],
+      failures: [pluginFailure],
+    };
+    expect(exitCodeForResult(result)).toBe(2);
+    expect(result.failures[0]?.code).toBe("plugin-contract-version-mismatch");
+  });
+
+  test("accepts local rule results and violations", () => {
+    const result: RunResult = {
+      status: "violations",
+      tool: { name: "vlint", version: "0.4.1" },
+      environment: {
+        platform: "linux",
+        arch: "x64",
+        browser: { name: "chromium", version: "149.0.0.0" },
+      },
+      summary: {
+        targets: { resolved: 1 },
+        cases: { resolved: 1, complete: 1, partial: 0, failed: 0, notExecuted: 0 },
+        ruleEvaluations: { clean: 0, violations: 1, failed: 0, disabled: 0, notExecuted: 0 },
+        ruleFinalizations: { passed: 1, failed: 0, notExecuted: 0 },
+        violations: 1,
+        elementsInspected: 1,
+        executionFailures: 0,
+      },
+      cases: [
+        {
+          target: { name: "settings", url: "https://example.com/settings" },
+          device: {
+            name: "desk",
+            viewport: { width: 1280, height: 720 },
+            screen: { width: 1280, height: 720 },
+            deviceScaleFactor: 1,
+            isMobile: false,
+            hasTouch: false,
+            userAgent: null,
+          },
+          locale: "en-US",
+          timezoneId: "UTC",
+          status: "complete",
+          rules: [
+            {
+              name: "spacing",
+              type: "local",
+              status: "violations",
+              elementsInspected: 1,
+              violations: [
+                {
+                  type: "local",
+                  message: "duplicate horizontal spacing",
+                  locator: "#content",
+                  geometry: { x: 0, y: 0, width: 100, height: 20 },
+                  details: { shellGap: 16, contentGap: 8 },
+                },
+              ],
+              failure: null,
+            },
+          ],
+          failures: [],
+        },
+      ],
+      ruleFinalizations: [{ name: "spacing", status: "passed", elementsInspected: 1, failure: null }],
+      failures: [],
+    };
+    expect(result.cases[0]?.rules[0]?.type).toBe("local");
+    expect(result.cases[0]?.rules[0]?.violations[0]?.type).toBe("local");
   });
 });

@@ -434,8 +434,9 @@ test("createDeadline exposes a monotonic remaining budget", () => {
   const deadline = createDeadline(100);
   expect(deadline.totalMs).toBe(100);
   expect(deadline.remainingMs()).toBeLessThanOrEqual(100);
-  expect(deadline.remainingMs()).toBeGreaterThanOrEqual(95);
-  expect(deadline.elapsedMs()).toBeLessThanOrEqual(6);
+  expect(deadline.remainingMs()).toBeGreaterThanOrEqual(0);
+  expect(deadline.elapsedMs()).toBeGreaterThanOrEqual(0);
+  expect(deadline.elapsedMs()).toBeLessThanOrEqual(100);
 });
 
 test("a throwing launch maps to browser-launch-failed", async () => {

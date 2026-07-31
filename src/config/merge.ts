@@ -2,6 +2,7 @@ import { isAbsolute, resolve } from "node:path";
 import type {
   DeviceProfile,
   EffectiveAuditCase,
+  EffectiveLocalRule,
   EffectiveRule,
   EffectiveRuleForTarget,
   EffectiveTarget,
@@ -12,12 +13,15 @@ import type {
   Target,
   TargetDefaults,
 } from "../contracts/config";
+import type { JsonSettings, JsonValue } from "../contracts/plugins";
 
 const BUILTIN_DEFAULTS = {
   locale: "en-US",
   timezoneId: "UTC",
   timeoutMs: 30_000,
 } as const;
+
+const DANGEROUS_JSON_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 export const BUILTIN_TAB_RULE: RuleInstance = {
   name: "tab-label-single-line",
@@ -36,6 +40,48 @@ export function rulesWithBuiltins(rules: readonly RuleInstance[] | undefined): r
     ...configured,
     ...(configured.some((rule) => rule.type === "page-horizontal-overflow") ? [] : [BUILTIN_OVERFLOW_RULE]),
   ];
+}
+
+function emptySettings(): JsonSettings {
+  return Object.create(null) as JsonSettings;
+}
+
+function cloneJsonValue(value: JsonValue): JsonValue {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((item) => cloneJsonValue(item));
+  const cloned: Record<string, JsonValue> = Object.create(null);
+  for (const [key, item] of Object.entries(value)) {
+    if (DANGEROUS_JSON_KEYS.has(key)) continue;
+    cloned[key] = cloneJsonValue(item);
+  }
+  return cloned;
+}
+
+/** Prototype-safe recursive settings merge (KTD6). */
+export function mergeJsonSettings(base: JsonSettings, overlay: JsonSettings): JsonSettings {
+  const merged: Record<string, JsonValue> = Object.create(null);
+  for (const [key, value] of Object.entries(base)) {
+    if (DANGEROUS_JSON_KEYS.has(key)) continue;
+    merged[key] = cloneJsonValue(value);
+  }
+  for (const [key, value] of Object.entries(overlay)) {
+    if (DANGEROUS_JSON_KEYS.has(key)) continue;
+    const existing = merged[key];
+    if (
+      existing !== undefined &&
+      typeof existing === "object" &&
+      existing !== null &&
+      !Array.isArray(existing) &&
+      typeof value === "object" &&
+      value !== null &&
+      !Array.isArray(value)
+    ) {
+      merged[key] = mergeJsonSettings(existing as JsonSettings, value as JsonSettings);
+      continue;
+    }
+    merged[key] = cloneJsonValue(value);
+  }
+  return merged;
 }
 
 export function normalizeRules(rules: readonly RuleInstance[] | undefined): readonly EffectiveRule[] {
@@ -60,8 +106,32 @@ export function normalizeRules(rules: readonly RuleInstance[] | undefined): read
           enabled: rule.enabled ?? true,
           tolerancePx: rule.tolerancePx ?? 1,
         };
+      case "local":
+        return {
+          name: rule.name,
+          type: rule.type,
+          enabled: true,
+          path: rule.path,
+          settings: rule.settings ?? emptySettings(),
+        };
     }
   });
+}
+
+function effectiveLocalRuleForTarget(
+  rule: EffectiveLocalRule,
+  target: Target,
+): EffectiveLocalRule {
+  const override = target.ruleOverrides?.[rule.name];
+  if (override === undefined) return rule;
+  return {
+    ...rule,
+    enabled: override.enabled ?? rule.enabled,
+    settings:
+      override.settings === undefined
+        ? rule.settings
+        : mergeJsonSettings(rule.settings, override.settings),
+  };
 }
 
 function effectiveRulesForTarget(
@@ -80,6 +150,8 @@ function effectiveRulesForTarget(
         };
       case "page-horizontal-overflow":
         return { ...rule, enabled: override?.enabled ?? rule.enabled };
+      case "local":
+        return effectiveLocalRuleForTarget(rule, target);
     }
   });
 }

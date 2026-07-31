@@ -8,7 +8,7 @@ import type {
 } from "../../src/contracts/config";
 import { isTabLabelSingleLineViolation, type RuleEvaluationOutcome } from "../../src/contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../../src/contracts/failure";
-import type { RunResultV3 } from "../../src/contracts/result";
+import type { RunResult } from "../../src/contracts/result";
 import {
   exitCodeForResult,
   runResolvedCheck,
@@ -113,6 +113,10 @@ function failureOutcome(stage: Failure["stage"], code: Failure["code"]): RuleEva
 
 interface DepOptions {
   readonly evaluate?: (page: string, rule: EffectiveRuleForTarget) => RuleEvaluationOutcome;
+  readonly finalize?: (
+    rule: EffectiveRuleForTarget,
+    observations: import("../../src/contracts/evaluation").LocalRuleFinalizationInput,
+  ) => Promise<import("../../src/contracts/evaluation").RuleFinalization>;
   readonly openFailure?: Readonly<Record<string, Failure>>;
   readonly targetCloseFailure?: Readonly<Record<string, Failure>>;
   readonly launchFailure?: Failure;
@@ -146,17 +150,26 @@ function dependencies(options: DepOptions = {}): CheckDependencies<string> {
     async evaluate(page, item) {
       return options.evaluate?.(page, item) ?? cleanOutcome;
     },
+    ...(options.finalize === undefined
+      ? {}
+      : {
+          finalize: async (rule, ruleIndex, resolved, cases) => {
+            const { buildLocalRuleObservations } = await import("../../src/plugins/finalize");
+            if (rule.type !== "local") throw new Error("expected local rule");
+            return options.finalize!(rule, buildLocalRuleObservations(rule, resolved, cases, ruleIndex));
+          },
+        }),
   };
 }
 
 async function run(
   resolved: ResolvedCheckPlan,
   options: DepOptions = {},
-): Promise<RunResultV3> {
+): Promise<RunResult> {
   return runResolvedCheck(resolved, dependencies(options), { toolVersion: "0.1.0" });
 }
 
-function allFailures(result: RunResultV3): readonly Failure[] {
+function allFailures(result: RunResult): readonly Failure[] {
   return [
     ...result.failures,
     ...result.cases.flatMap((item) => item.failures),
@@ -166,7 +179,7 @@ function allFailures(result: RunResultV3): readonly Failure[] {
 }
 
 /** The summary must always reconcile with the underlying facts and status. */
-function reconcile(result: RunResultV3, resolved: ResolvedCheckPlan): void {
+function reconcile(result: RunResult, resolved: ResolvedCheckPlan): void {
   expect(result.summary.targets.resolved).toBe(resolved.targets.length);
 
   const cases = result.summary.cases;
@@ -548,6 +561,72 @@ function concurrencyHarness(options: HarnessOptions = {}) {
     release: (name: string) => signalsFor(name).evaluateGate.resolve(),
   };
 }
+
+describe("local rule finalization transitions", () => {
+  function localRule(name: string): EffectiveRule {
+    return { name, type: "local", enabled: true, path: "rules/local.ts", settings: {} };
+  }
+
+  function dependenciesWithFinalize(
+    finalize: (
+      rule: EffectiveRuleForTarget,
+      observations: import("../../src/contracts/evaluation").LocalRuleFinalizationInput,
+    ) => Promise<import("../../src/contracts/evaluation").RuleFinalization>,
+  ): CheckDependencies<string> {
+    const base = dependencies();
+    return {
+      ...base,
+      finalize: async (rule, ruleIndex, resolved, cases) => {
+        const { buildLocalRuleObservations } = await import("../../src/plugins/finalize");
+        if (rule.type !== "local") throw new Error("expected local rule");
+        return finalize(rule, buildLocalRuleObservations(rule, resolved, cases, ruleIndex));
+      },
+    };
+  }
+
+  test("first local finalizer failure cascades to later finalizers", async () => {
+    const resolved = plan(["a"], [localRule("first"), localRule("second")]);
+    const result = await runResolvedCheck(
+      resolved,
+      dependenciesWithFinalize(async (rule) =>
+        rule.name === "first"
+          ? {
+              name: rule.name,
+              status: "failed",
+              elementsInspected: 1,
+              failure: {
+                stage: "rule-evaluation",
+                code: "plugin-finalizer-invalid",
+                message: "aggregate failed",
+                target: null,
+                device: null,
+                rule: rule.name,
+              },
+            }
+          : { name: rule.name, status: "passed", elementsInspected: 1, failure: null },
+      ),
+      { toolVersion: "0.1.0" },
+    );
+    reconcile(result, resolved);
+    expect(result.ruleFinalizations.map((item) => item.status)).toEqual(["failed", "not-executed"]);
+  });
+
+  test("partial runs keep every finalizer not-executed", async () => {
+    const resolved = plan(["a", "b"], [localRule("spacing")]);
+    const result = await runResolvedCheck(
+      resolved,
+      dependencies({
+        openFailure: { b: navFailure },
+        finalize: async () => {
+          throw new Error("should not finalize");
+        },
+      }),
+      { toolVersion: "0.1.0" },
+    );
+    reconcile(result, resolved);
+    expect(result.ruleFinalizations.every((item) => item.status === "not-executed")).toBe(true);
+  });
+});
 
 describe("bounded collect-all orchestration", () => {
   test("active cases never exceed two across four cases", async () => {
