@@ -8,7 +8,7 @@ import type {
 } from "../../src/contracts/config";
 import { isTabLabelSingleLineViolation, type RuleEvaluationOutcome } from "../../src/contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../../src/contracts/failure";
-import type { RunResultV4 } from "../../src/contracts/result";
+import type { RunResult } from "../../src/contracts/result";
 import {
   exitCodeForResult,
   runResolvedCheck,
@@ -165,11 +165,11 @@ function dependencies(options: DepOptions = {}): CheckDependencies<string> {
 async function run(
   resolved: ResolvedCheckPlan,
   options: DepOptions = {},
-): Promise<RunResultV4> {
+): Promise<RunResult> {
   return runResolvedCheck(resolved, dependencies(options), { toolVersion: "0.1.0" });
 }
 
-function allFailures(result: RunResultV4): readonly Failure[] {
+function allFailures(result: RunResult): readonly Failure[] {
   return [
     ...result.failures,
     ...result.cases.flatMap((item) => item.failures),
@@ -179,7 +179,7 @@ function allFailures(result: RunResultV4): readonly Failure[] {
 }
 
 /** The summary must always reconcile with the underlying facts and status. */
-function reconcile(result: RunResultV4, resolved: ResolvedCheckPlan): void {
+function reconcile(result: RunResult, resolved: ResolvedCheckPlan): void {
   expect(result.summary.targets.resolved).toBe(resolved.targets.length);
 
   const cases = result.summary.cases;

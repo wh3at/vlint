@@ -79,8 +79,7 @@ export interface RunSummary {
   readonly executionFailures: number;
 }
 
-interface RunResultBase<TSchemaVersion extends 3 | 4> {
-  readonly schemaVersion: TSchemaVersion;
+export interface RunResult {
   readonly status: RunStatus;
   readonly tool: { readonly name: "vlint"; readonly version: string };
   readonly environment: {
@@ -93,15 +92,4 @@ interface RunResultBase<TSchemaVersion extends 3 | 4> {
   readonly ruleFinalizations: readonly RuleFinalization[];
   /** Ordered run-wide failures: config, provider, browser launch, browser-wide cleanup, interrupt. */
   readonly failures: readonly Failure[];
-}
-
-export interface RunResultV3 extends RunResultBase<3> {}
-
-/** Result schema v4 adds local rule and violation variants (KTD8). */
-export interface RunResultV4 extends RunResultBase<4> {}
-
-export type RunResult = RunResultV3 | RunResultV4;
-
-export function isRunResultV4(result: RunResult): result is RunResultV4 {
-  return result.schemaVersion === 4;
 }

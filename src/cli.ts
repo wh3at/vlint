@@ -18,7 +18,7 @@ import {
 } from "./browser/install";
 import { isPluginLoaderWorkerInvocation, runPluginLoaderWorkerMain } from "./plugins/worker";
 import type { BoundaryResult } from "./contracts/failure";
-import type { RunResult, RunResultV4 } from "./contracts/result";
+import type { RunResult } from "./contracts/result";
 import { parseAdHocUrl } from "./config/schema";
 import { renderJson } from "./output/json";
 import { escapeTerminal, redactUrlForTerminal, renderTerminal } from "./output/terminal";
@@ -48,7 +48,7 @@ export interface BrowserInstallResult {
 
 export interface CliRuntime {
   readonly version: string;
-  check(url: string | null, signal?: AbortSignal): Promise<RunResultV4>;
+  check(url: string | null, signal?: AbortSignal): Promise<RunResult>;
   install(force: boolean, withDeps: boolean, signal?: AbortSignal): Promise<BoundaryResult<BrowserInstallResult>>;
   status(format: "terminal" | "json", signal?: AbortSignal): Promise<BoundaryResult<BrowserStatusOutput>>;
   init(signal?: AbortSignal): Promise<BoundaryResult<InitResult>>;

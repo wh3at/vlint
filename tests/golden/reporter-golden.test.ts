@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { RunResult, RunResultV4 } from "../../src/contracts/result";
+import type { RunResult } from "../../src/contracts/result";
 import { isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
 import { renderJson } from "../../src/output/json";
 import { renderTerminal } from "../../src/output/terminal";
@@ -48,8 +48,7 @@ const IPHONE = {
   userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
 } as const;
 
-const violations: RunResultV4 = {
-  schemaVersion: 4,
+const violations: RunResult = {
   status: "violations",
   tool: { name: "vlint", version: "0.1.0" },
   environment: {
@@ -191,8 +190,7 @@ const violations: RunResultV4 = {
   failures: [],
 };
 
-const incomplete: RunResultV4 = {
-  schemaVersion: 4,
+const incomplete: RunResult = {
   status: "incomplete",
   tool: { name: "vlint", version: "0.1.0" },
   environment: {
@@ -327,8 +325,7 @@ describe("reporter golden output", () => {
     const rendered = renderJson(violations);
     expect(rendered.endsWith("\n")).toBe(true);
     expect(rendered.split("\n")).toHaveLength(2);
-    const parsed = JSON.parse(rendered) as RunResultV4;
-    expect(parsed.schemaVersion).toBe(4);
+    const parsed = JSON.parse(rendered) as RunResult;
     expect(parsed.cases[0]?.target.url).toBe(violations.cases[0]?.target.url);
     expect(
       parsed.cases[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
@@ -394,7 +391,7 @@ describe("reporter golden output", () => {
   });
 
   test("exit mapping is clean 0, violations 1, incomplete 2", () => {
-    const cleanResult: RunResultV4 = { ...violations, status: "clean", summary: { ...violations.summary, violations: 0 } };
+    const cleanResult: RunResult = { ...violations, status: "clean", summary: { ...violations.summary, violations: 0 } };
     expect(cleanResult.status === "incomplete" ? 2 : cleanResult.status === "violations" ? 1 : 0).toBe(0);
     expect(violations.status === "incomplete" ? 2 : violations.status === "violations" ? 1 : 0).toBe(1);
     expect(incomplete.status === "incomplete" ? 2 : incomplete.status === "violations" ? 1 : 0).toBe(2);

@@ -1,14 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import type { RunResultV4 } from "../../src/contracts/result";
+import type { RunResult } from "../../src/contracts/result";
 import type { BoundaryResult } from "../../src/contracts/failure";
 import { boundaryFailure, boundarySuccess } from "../../src/contracts/failure";
 import type { InitResult } from "../../src/commands/init";
 import type { SetupResult } from "../../src/commands/setup";
 import { runCli, type CliIo, type CliRuntime } from "../../src/cli";
 
-function result(status: RunResultV4["status"]): RunResultV4 {
+function result(status: RunResult["status"]): RunResult {
   return {
-    schemaVersion: 4,
     status,
     tool: { name: "vlint", version: "0.1.0" },
     environment: { platform: "linux", arch: "x64", browser: { name: "chromium", version: null } },
@@ -31,7 +30,7 @@ function result(status: RunResultV4["status"]): RunResultV4 {
 }
 
 function harness(options: {
-  checkResult?: RunResultV4;
+  checkResult?: RunResult;
   initResult?: BoundaryResult<InitResult>;
   setupResult?: BoundaryResult<SetupResult>;
 } = {}) {

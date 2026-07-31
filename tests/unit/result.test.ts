@@ -13,8 +13,7 @@ import {
   type RuleFinalization,
 } from "../../src/contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type Failure } from "../../src/contracts/failure";
-import type { RunResultV4 } from "../../src/contracts/result";
-import { isRunResultV4 } from "../../src/contracts/result";
+import type { RunResult } from "../../src/contracts/result";
 import {
   exitCodeForResult,
   type CheckDependencies,
@@ -145,7 +144,7 @@ function dependencies(options: DependencyOptions = {}): CheckDependencies<string
   };
 }
 
-function firstFailure(result: RunResultV4): Failure | undefined {
+function firstFailure(result: RunResult): Failure | undefined {
   return (
     result.failures[0] ??
     result.cases.flatMap((c) => c.failures)[0] ??
@@ -630,8 +629,8 @@ describe("local rule finalization", () => {
   });
 });
 
-describe("result schema v4 contracts", () => {
-  test("local lifecycle failure codes produce incomplete v4 results", () => {
+describe("result contracts", () => {
+  test("local lifecycle failure codes produce incomplete results", () => {
     const pluginFailure: Failure = {
       stage: "config",
       code: "plugin-contract-version-mismatch",
@@ -640,8 +639,7 @@ describe("result schema v4 contracts", () => {
       device: null,
       rule: "spacing",
     };
-    const result: RunResultV4 = {
-      schemaVersion: 4,
+    const result: RunResult = {
       status: "incomplete",
       tool: { name: "vlint", version: "0.4.1" },
       environment: {
@@ -662,14 +660,12 @@ describe("result schema v4 contracts", () => {
       ruleFinalizations: [],
       failures: [pluginFailure],
     };
-    expect(isRunResultV4(result)).toBe(true);
     expect(exitCodeForResult(result)).toBe(2);
     expect(result.failures[0]?.code).toBe("plugin-contract-version-mismatch");
   });
 
-  test("accepts local rule results and violations in the v4 contract", () => {
-    const result: RunResultV4 = {
-      schemaVersion: 4,
+  test("accepts local rule results and violations", () => {
+    const result: RunResult = {
       status: "violations",
       tool: { name: "vlint", version: "0.4.1" },
       environment: {

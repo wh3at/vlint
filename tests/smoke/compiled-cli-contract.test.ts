@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, test } from "bun:test";
 import vlintPackage from "../../package.json";
-import type { RunResultV4 } from "../../src/contracts/result";
+import type { RunResult } from "../../src/contracts/result";
 import { loadPluginContract } from "../../src/plugins/load";
 
 /**
@@ -110,8 +110,7 @@ describe.skipIf(!binaryPresent)(
       expect(result.stdout.endsWith("\n")).toBe(true);
       // Exactly one newline-terminated JSON line.
       expect(result.stdout.split("\n")).toHaveLength(2);
-      const parsed = JSON.parse(result.stdout) as RunResultV4;
-      expect(parsed.schemaVersion).toBe(4);
+      const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.status).toBe("incomplete");
       expect(parsed.tool).toEqual({ name: "vlint", version: vlintPackage.version });
       expect(parsed.failures[0]).toMatchObject({ stage: "config", code: "config-not-found" });

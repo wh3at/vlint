@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { RunResultV4 } from "../../src/contracts/result";
+import type { RunResult } from "../../src/contracts/result";
 import { boundarySuccess } from "../../src/contracts/failure";
 import { runCli, type BrowserInstallResult, type CliIo, type CliRuntime } from "../../src/cli";
 import { runCheckCommand } from "../../src/commands/check";
@@ -104,15 +104,15 @@ async function runCheck(
   return { exit, output: harness.output() };
 }
 
-function jsonResult(output: Captured): RunResultV4 {
+function jsonResult(output: Captured): RunResult {
   expect(output.stdout).toHaveLength(1);
   expect(output.stderr).toEqual([]);
   const line = output.stdout[0]!;
   expect(line.endsWith("\n")).toBe(true);
-  return JSON.parse(line) as RunResultV4;
+  return JSON.parse(line) as RunResult;
 }
 
-function runFailure(output: Captured): RunResultV4["failures"][number] | undefined {
+function runFailure(output: Captured): RunResult["failures"][number] | undefined {
   return jsonResult(output).failures[0];
 }
 

@@ -1,11 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { RunResultV4 } from "../../src/contracts/result";
+import type { RunResult } from "../../src/contracts/result";
 import { isLocalViolation, isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
 import { renderJson } from "../../src/output/json";
 import { escapeTerminal, redactUrlForTerminal, renderTerminal } from "../../src/output/terminal";
 
-const result: RunResultV4 = {
-  schemaVersion: 4,
+const result: RunResult = {
   status: "violations",
   tool: { name: "vlint", version: "0.1.0" },
   environment: {
@@ -65,7 +64,7 @@ describe("output", () => {
     const second = renderJson(result);
     expect(first).toBe(second);
     expect(first.endsWith("\n")).toBe(true);
-    const parsed = JSON.parse(first) as RunResultV4;
+    const parsed = JSON.parse(first) as RunResult;
     expect(parsed.cases[0]?.target.url).toBe(result.cases[0]?.target.url);
     expect(
       parsed.cases[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
@@ -100,7 +99,7 @@ describe("output", () => {
   });
 
   test("renders overflow diagnostics with the fixed computed-style evidence", () => {
-    const overflowResult: RunResultV4 = {
+    const overflowResult: RunResult = {
       ...result,
       cases: [{
         ...result.cases[0]!,
@@ -156,7 +155,7 @@ describe("output", () => {
       device: "macbook",
       rule: "tabs",
     };
-    const failed: RunResultV4 = {
+    const failed: RunResult = {
       ...result,
       cases: [{
         ...result.cases[0]!,
@@ -178,7 +177,7 @@ describe("output", () => {
   });
 
   test("renders local violations without interpreting project details", () => {
-    const localResult: RunResultV4 = {
+    const localResult: RunResult = {
       ...result,
       cases: [{
         ...result.cases[0]!,
@@ -201,7 +200,7 @@ describe("output", () => {
     };
 
     const terminal = renderTerminal(localResult);
-    const json = JSON.parse(renderJson(localResult)) as RunResultV4;
+    const json = JSON.parse(renderJson(localResult)) as RunResult;
     const violation = json.cases[0]?.rules[0]?.violations[0];
     if (!violation || !isLocalViolation(violation)) throw new Error("expected local violation");
 
@@ -224,7 +223,7 @@ describe("output", () => {
       device: null,
       rule: "spacing",
     };
-    const failed: RunResultV4 = {
+    const failed: RunResult = {
       ...result,
       status: "incomplete",
       summary: { ...result.summary, executionFailures: 1 },
@@ -241,7 +240,7 @@ describe("output", () => {
   });
 
   test("preserves mixed built-in and local violations in declaration order", () => {
-    const mixed: RunResultV4 = {
+    const mixed: RunResult = {
       ...result,
       summary: {
         ...result.summary,

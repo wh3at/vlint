@@ -14,7 +14,6 @@ import type {
   CaseStatus,
   RuleResultStatus,
   RunResult,
-  RunResultV4,
   RunSummary,
 } from "../contracts/result";
 
@@ -174,10 +173,9 @@ function completedResult(
   cases: readonly CaseResult[],
   finalizations: readonly RuleFinalization[],
   runFailures: readonly Failure[],
-): RunResultV4 {
+): RunResult {
   const summary = summarize(targetCount, cases, finalizations, runFailures);
   return {
-    schemaVersion: 4,
     status: summary.executionFailures > 0 ? "incomplete" : summary.violations > 0 ? "violations" : "clean",
     tool: { name: "vlint", version: toolVersion },
     environment: {
@@ -192,7 +190,7 @@ function completedResult(
   };
 }
 
-export function resultForResolutionFailure(toolVersion: string, failure: Failure): RunResultV4 {
+export function resultForResolutionFailure(toolVersion: string, failure: Failure): RunResult {
   return completedResult(toolVersion, null, 0, [], [], [failure]);
 }
 
@@ -311,7 +309,7 @@ export async function runResolvedCheck<PageHandle>(
   plan: ResolvedCheckPlan,
   dependencies: CheckDependencies<PageHandle>,
   options: CheckOptions,
-): Promise<RunResultV4> {
+): Promise<RunResult> {
   const cases = seededCases(plan);
   let finalizations = seededFinalizations(plan);
   const runFailures: Failure[] = [];
