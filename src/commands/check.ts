@@ -1,11 +1,13 @@
 import type { Page } from "playwright";
-import type { EffectiveRuleForTarget, ResolvedCheckPlan } from "../contracts/config";
+import type { EffectiveAuditCase, EffectiveRuleForTarget, ResolvedCheckPlan } from "../contracts/config";
 import type { RuleEvaluationOutcome } from "../contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../contracts/failure";
 import type { RunResultV3 } from "../contracts/result";
 import { loadConfig } from "../config/load";
 import { resolveAdHocTarget, resolveTargets } from "../config/merge";
+import { evaluateLocalRule } from "../plugins/evaluate";
 import { loadLocalPluginsForConfig } from "../plugins/load";
+import type { PluginRuntimeRegistry } from "../plugins/types";
 import { resolveCommandProvider } from "../providers/command";
 import { resolveStaticProvider } from "../providers/static";
 import { createBrowserRunScope } from "../browser/lifecycle";
@@ -17,12 +19,17 @@ import {
   type CheckDependencies,
 } from "../run/orchestrator";
 
+export interface ResolvedCheckBundle {
+  readonly plan: ResolvedCheckPlan;
+  readonly pluginRegistry: PluginRuntimeRegistry | null;
+}
+
 export async function resolveCheckPlan(
   cwd: string,
   url: string | null,
   environment: Readonly<Record<string, string | undefined>>,
   signal?: AbortSignal,
-): Promise<BoundaryResult<ResolvedCheckPlan>> {
+): Promise<BoundaryResult<ResolvedCheckBundle>> {
   const loaded = await loadConfig(cwd);
   if (!loaded.ok) return boundaryFailure(loaded.failure);
   let plan: ResolvedCheckPlan;
@@ -57,7 +64,7 @@ export async function resolveCheckPlan(
     signal === undefined ? {} : { signal },
   );
   if (!plugins.ok) return boundaryFailure(plugins.failure);
-  return boundarySuccess(plan);
+  return boundarySuccess({ plan, pluginRegistry: plugins.value });
 }
 
 function signalAborted(signal: AbortSignal | undefined): boolean {
@@ -79,26 +86,47 @@ function interruptedOutcome(rule: EffectiveRuleForTarget): RuleEvaluationOutcome
 async function evaluateWithCancellation(
   page: Page,
   rule: EffectiveRuleForTarget,
+  auditCase: EffectiveAuditCase | undefined,
+  pluginRegistry: PluginRuntimeRegistry | null,
   signal?: AbortSignal,
 ): Promise<RuleEvaluationOutcome> {
   if (signal?.aborted === true) return interruptedOutcome(rule);
+  let evaluation: Promise<RuleEvaluationOutcome>;
   if (rule.type === "local") {
-    return {
-      facts: { elementsInspected: 0, violations: [] },
-      failure: {
-        stage: "rule-evaluation",
-        code: "plugin-load-failed",
-        message: "local rule plugin is not loaded",
-        target: null,
-        device: null,
-        rule: rule.name,
-      },
-    };
+    if (auditCase === undefined) {
+      return {
+        facts: { elementsInspected: 0, violations: [] },
+        failure: {
+          stage: "rule-evaluation",
+          code: "plugin-load-failed",
+          message: "local rule evaluation context is unavailable",
+          target: null,
+          device: null,
+          rule: rule.name,
+        },
+      };
+    }
+    const contract = pluginRegistry?.get(rule.name);
+    if (contract === undefined) {
+      return {
+        facts: { elementsInspected: 0, violations: [] },
+        failure: {
+          stage: "rule-evaluation",
+          code: "plugin-load-failed",
+          message: "local rule plugin is not loaded",
+          target: auditCase.name,
+          device: auditCase.deviceName,
+          rule: rule.name,
+        },
+      };
+    }
+    evaluation = evaluateLocalRule(page, rule, contract, auditCase, auditCase.name, signal);
+  } else {
+    evaluation =
+      rule.type === "tab-label-single-line"
+        ? Promise.resolve(evaluateTabLabelSingleLine(page, rule, auditCase?.name ?? null))
+        : Promise.resolve(evaluatePageHorizontalOverflow(page, rule, auditCase?.name ?? null));
   }
-  const evaluation =
-    rule.type === "tab-label-single-line"
-      ? evaluateTabLabelSingleLine(page, rule)
-      : evaluatePageHorizontalOverflow(page, rule);
   if (signal === undefined) return evaluation;
   let abortListener: (() => void) | null = null;
   const interruption = new Promise<RuleEvaluationOutcome>((resolveInterruption) => {
@@ -112,7 +140,8 @@ async function evaluateWithCancellation(
   }
 }
 
-function productionDependencies(): CheckDependencies<Page> {
+function productionDependencies(pluginRegistry: PluginRuntimeRegistry | null): CheckDependencies<Page> {
+  const auditCaseByPage = new WeakMap<Page, EffectiveAuditCase>();
   return {
     async launch(signal) {
       const created = await createBrowserRunScope(signal === undefined ? {} : { signal });
@@ -120,11 +149,16 @@ function productionDependencies(): CheckDependencies<Page> {
       const scope = created.value;
       return boundarySuccess({
         browserVersion: scope.browserVersion,
-        openCase: (auditCase, caseSignal) => scope.acquireCase(auditCase, caseSignal),
+        openCase: async (auditCase, caseSignal) => {
+          const opened = await scope.acquireCase(auditCase, caseSignal);
+          if (opened.ok) auditCaseByPage.set(opened.value.page, auditCase);
+          return opened;
+        },
         close: () => scope.close(),
       });
     },
-    evaluate: evaluateWithCancellation,
+    evaluate: (page, rule, signal) =>
+      evaluateWithCancellation(page, rule, auditCaseByPage.get(page), pluginRegistry, signal),
   };
 }
 
@@ -157,7 +191,7 @@ export async function runCheckCommand(
       rule: null,
     });
   }
-  return runResolvedCheck(resolved.value, productionDependencies(), {
+  return runResolvedCheck(resolved.value.plan, productionDependencies(resolved.value.pluginRegistry), {
     toolVersion,
     ...(signal === undefined ? {} : { signal }),
   });

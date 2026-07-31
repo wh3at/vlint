@@ -242,7 +242,7 @@ const AsyncFunctionCtor = Object.getPrototypeOf(async function asyncFunctionCtor
   ...args: string[]
 ) => (...args: unknown[]) => Promise<unknown>;
 
-function transpileCallbackSource(source: string): string {
+export function transpilePluginCallbackSource(source: string): string {
   const transpiler = new Bun.Transpiler({ loader: "ts" });
   const wrapped = `const __vlint_callback = ${source};`;
   const transformed = transpiler.transformSync(wrapped);
@@ -254,13 +254,13 @@ function transpileCallbackSource(source: string): string {
 }
 
 function reconstructEvaluate(source: string): PluginEvaluateFn {
-  const js = transpileCallbackSource(source);
+  const js = transpilePluginCallbackSource(source);
   const fn = new AsyncFunctionCtor("context", `return (${js})(context);`);
   return fn as PluginEvaluateFn;
 }
 
 function reconstructFinalize(source: string): PluginFinalizeFn {
-  const js = transpileCallbackSource(source);
+  const js = transpilePluginCallbackSource(source);
   const fn = new AsyncFunctionCtor("observations", `return (${js})(observations);`);
   return fn as PluginFinalizeFn;
 }
