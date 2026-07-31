@@ -12,15 +12,13 @@ export const PLUGIN_LOADER_STDERR_LIMIT = 64 * 1024;
 export const PLUGIN_LOADER_TIMEOUT_MS = 30_000;
 export const PLUGIN_LOADER_CLEANUP_GRACE_MS = 500;
 
-export type PluginEvaluateFn = (context: unknown) => Promise<unknown>;
 export type PluginFinalizeFn = (observations: unknown) => Promise<unknown>;
 
 export interface LoadedPluginContract {
   readonly descriptor: PluginContractDescriptor;
-  readonly evaluate: PluginEvaluateFn;
+  /** Transpiled evaluator callback source reused for every browser case. */
+  readonly evaluateJs: string;
   readonly finalize: PluginFinalizeFn | null;
-  readonly canonicalPath: string;
-  readonly snapshotBytes: Uint8Array;
 }
 
 export interface PluginRuntimeRegistry {

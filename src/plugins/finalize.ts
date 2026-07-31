@@ -7,7 +7,6 @@ import type {
 } from "../contracts/evaluation";
 import type { Failure, FailureCode } from "../contracts/failure";
 import type { CaseResult, RuleResultStatus } from "../contracts/result";
-import { transpilePluginCallbackSource } from "./load";
 import type { LoadedPluginContract } from "./types";
 
 export const MAX_FINALIZATION_OBSERVATIONS = 256;
@@ -27,12 +26,16 @@ interface MutableCaseResult {
   }[];
 }
 
+const RULE_STATUS_TO_OBSERVATION: Record<RuleResultStatus, LocalRuleCaseObservation["status"]> = {
+  clean: "clean",
+  violations: "violations",
+  failed: "failed",
+  disabled: "disabled",
+  "not-executed": "not-executed",
+};
+
 function mapRuleStatus(status: RuleResultStatus): LocalRuleCaseObservation["status"] {
-  if (status === "clean") return "clean";
-  if (status === "violations") return "violations";
-  if (status === "failed") return "failed";
-  if (status === "disabled") return "disabled";
-  return "not-executed";
+  return RULE_STATUS_TO_OBSERVATION[status];
 }
 
 function observationBytes(observations: LocalRuleFinalizationInput): number {
@@ -156,15 +159,16 @@ export async function finalizeLocalRule(
   signal?: AbortSignal,
   options: { readonly timeoutMs?: number } = {},
 ): Promise<RuleFinalization> {
-  const timeoutMs = options.timeoutMs ?? PLUGIN_FINALIZATION_TIMEOUT_MS;
   const elementsInspected = sumElementsInspected(plan, cases, ruleIndex);
+  if (contract.finalize === null) {
+    return { name: rule.name, status: "passed", elementsInspected, failure: null };
+  }
+
+  const timeoutMs = options.timeoutMs ?? PLUGIN_FINALIZATION_TIMEOUT_MS;
   const observations = buildLocalRuleObservations(rule, plan, cases, ruleIndex);
   const boundsFailure = validateObservationBounds(observations, rule.name);
   if (boundsFailure !== null) {
     return { name: rule.name, status: "failed", elementsInspected, failure: boundsFailure };
-  }
-  if (contract.finalize === null) {
-    return { name: rule.name, status: "passed", elementsInspected, failure: null };
   }
 
   if (signal?.aborted === true) {
@@ -183,27 +187,7 @@ export async function finalizeLocalRule(
     };
   }
 
-  let finalizeJs: string;
-  try {
-    finalizeJs = transpilePluginCallbackSource(contract.descriptor.finalizeSource ?? "");
-  } catch {
-    return {
-      name: rule.name,
-      status: "failed",
-      elementsInspected,
-      failure: finalizationFailure(
-        "plugin-finalizer-invalid",
-        "local rule finalizer could not be prepared for execution",
-        rule.name,
-      ),
-    };
-  }
-
-  const AsyncFunctionCtor = Object.getPrototypeOf(async function pluginFinalize() {}).constructor as new (
-    ...args: string[]
-  ) => (observations: LocalRuleFinalizationInput) => Promise<unknown>;
-  const finalize = new AsyncFunctionCtor("observations", `return (${finalizeJs})(observations);`);
-
+  const finalize = contract.finalize;
   const invocation = (async () => {
     try {
       return parseFinalizerOutcome(await finalize(observations), rule.name);
@@ -228,8 +212,9 @@ export async function finalizeLocalRule(
             });
           signal.addEventListener("abort", abortListener, { once: true });
         });
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<Failure>((resolveTimeout) => {
-    setTimeout(
+    timeoutId = setTimeout(
       () =>
         resolveTimeout(
           finalizationFailure(
@@ -258,5 +243,6 @@ export async function finalizeLocalRule(
     };
   } finally {
     if (abortListener !== null && signal !== undefined) signal.removeEventListener("abort", abortListener);
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
   }
 }

@@ -24,7 +24,6 @@ import {
   PLUGIN_LOADER_TIMEOUT_MS,
   PLUGIN_LOADER_WORKER_TOKEN,
   type LoadedPluginContract,
-  type PluginEvaluateFn,
   type PluginFinalizeFn,
   type PluginLoadOptions,
   type PluginRuntimeRegistry,
@@ -112,12 +111,11 @@ async function terminateProcessGroup(child: Bun.Subprocess): Promise<boolean> {
   return ok && reaped;
 }
 
-function collectRuntimeDependencies(source: string): readonly string[] {
+function collectRuntimeDependencies(source: string, file: ts.SourceFile): readonly string[] {
   const transpiler = new Bun.Transpiler({ loader: "ts" });
   const scan = transpiler.scan(source);
   const dependencies = new Set<string>();
   for (const item of scan.imports) dependencies.add(item.path);
-  const file = ts.createSourceFile("plugin.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "require") {
       const argument = node.arguments[0];
@@ -132,8 +130,7 @@ function collectRuntimeDependencies(source: string): readonly string[] {
   return [...dependencies];
 }
 
-function isTypeOnlyImport(source: string, specifier: string): boolean {
-  const file = ts.createSourceFile("plugin.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+function isTypeOnlyImport(file: ts.SourceFile, specifier: string): boolean {
   for (const statement of file.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
     if (statement.moduleSpecifier.text !== specifier) continue;
@@ -222,15 +219,17 @@ async function readVerifiedSnapshot(
 }
 
 function scanForbiddenDependencies(source: string): BoundaryResult<void> {
+  let file: ts.SourceFile;
   let dependencies: readonly string[];
   try {
-    dependencies = collectRuntimeDependencies(source);
+    file = ts.createSourceFile("plugin.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    dependencies = collectRuntimeDependencies(source, file);
   } catch {
     return boundaryFailure(pluginFailure("plugin-transpile-failed", "plugin source could not be scanned"));
   }
   for (const dependency of dependencies) {
     if (dependency.startsWith("node:")) continue;
-    if (isTypeOnlyImport(source, dependency)) continue;
+    if (isTypeOnlyImport(file, dependency)) continue;
     return boundaryFailure(
       pluginFailure("plugin-dependency-forbidden", `plugin source must not import ${dependency}`),
     );
@@ -251,12 +250,6 @@ export function transpilePluginCallbackSource(source: string): string {
     throw new Error("plugin callback could not be transpiled");
   }
   return match[1].trim();
-}
-
-function reconstructEvaluate(source: string): PluginEvaluateFn {
-  const js = transpilePluginCallbackSource(source);
-  const fn = new AsyncFunctionCtor("context", `return (${js})(context);`);
-  return fn as PluginEvaluateFn;
 }
 
 function reconstructFinalize(source: string): PluginFinalizeFn {
@@ -391,10 +384,10 @@ export async function loadPluginContract(
     if (!descriptor.ok) {
       return boundaryFailure({ ...descriptor.failure, rule: options.ruleName });
     }
-    let evaluate: PluginEvaluateFn;
+    let evaluateJs: string;
     let finalize: PluginFinalizeFn | null = null;
     try {
-      evaluate = reconstructEvaluate(descriptor.value.evaluateSource);
+      evaluateJs = transpilePluginCallbackSource(descriptor.value.evaluateSource);
       if (descriptor.value.finalizeSource !== undefined) {
         finalize = reconstructFinalize(descriptor.value.finalizeSource);
       }
@@ -405,10 +398,8 @@ export async function loadPluginContract(
     }
     return boundarySuccess({
       descriptor: descriptor.value,
-      evaluate,
+      evaluateJs,
       finalize,
-      canonicalPath: snapshot.value.canonicalPath,
-      snapshotBytes: snapshot.value.bytes,
     });
   } finally {
     await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);

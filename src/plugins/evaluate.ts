@@ -8,7 +8,6 @@ import type {
 import type { Failure, FailureCode } from "../contracts/failure";
 import type { JsonValue } from "../contracts/plugins";
 import { verifyUniqueLocator } from "../rules/locator";
-import { transpilePluginCallbackSource } from "./load";
 import type { LoadedPluginContract } from "./types";
 
 export const MAX_LOCAL_VIOLATIONS_PER_CASE = 100;
@@ -312,21 +311,7 @@ export async function evaluateLocalRule(
 ): Promise<RuleEvaluationOutcome<LocalViolation>> {
   if (signal?.aborted === true) return interruptedOutcome(rule, auditCase, targetName);
 
-  let evaluateJs: string;
-  try {
-    evaluateJs = transpilePluginCallbackSource(contract.descriptor.evaluateSource);
-  } catch {
-    return {
-      facts: { elementsInspected: 0, violations: [] },
-      failure: evaluationFailure(
-        "plugin-evaluator-invalid",
-        "plugin evaluator could not be prepared for browser execution",
-        rule.name,
-        targetName,
-      ),
-    };
-  }
-
+  const evaluateJs = contract.evaluateJs;
   const context = buildContextForRule(rule, auditCase);
   const evaluationPromise = (async () => {
     const result = await (page.evaluate as (fn: unknown, arg: unknown) => Promise<unknown>)(
@@ -344,8 +329,9 @@ export async function evaluateLocalRule(
           abortListener = () => resolveInterruption(interruptedOutcome(rule, auditCase, targetName));
           signal.addEventListener("abort", abortListener, { once: true });
         });
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeoutOutcome = new Promise<RuleEvaluationOutcome<LocalViolation>>((resolveTimeout) => {
-    setTimeout(
+    timeoutId = setTimeout(
       () =>
         resolveTimeout({
           facts: { elementsInspected: 0, violations: [] },
@@ -391,5 +377,6 @@ export async function evaluateLocalRule(
     };
   } finally {
     if (abortListener !== null && signal !== undefined) signal.removeEventListener("abort", abortListener);
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
   }
 }

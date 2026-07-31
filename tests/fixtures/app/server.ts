@@ -49,10 +49,7 @@ export function startFixtureServer(options: { readonly port?: number } = {}): Fi
       }
 
       if (pathname === "/hang") {
-        const { promise, resolve } = Promise.withResolvers<void>();
-        request.signal.addEventListener("abort", resolve, { once: true });
-        await promise;
-        return new Response();
+        return new Response(new ReadableStream());
       }
 
       if (pathname === "/slow") {
