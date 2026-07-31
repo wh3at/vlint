@@ -6,6 +6,7 @@ import type { RunResultV3 } from "../contracts/result";
 import { loadConfig } from "../config/load";
 import { resolveAdHocTarget, resolveTargets } from "../config/merge";
 import { evaluateLocalRule } from "../plugins/evaluate";
+import { finalizeLocalRule } from "../plugins/finalize";
 import { loadLocalPluginsForConfig } from "../plugins/load";
 import type { PluginRuntimeRegistry } from "../plugins/types";
 import { resolveCommandProvider } from "../providers/command";
@@ -159,6 +160,28 @@ function productionDependencies(pluginRegistry: PluginRuntimeRegistry | null): C
     },
     evaluate: (page, rule, signal) =>
       evaluateWithCancellation(page, rule, auditCaseByPage.get(page), pluginRegistry, signal),
+    finalize: async (rule, ruleIndex, plan, cases, signal) => {
+      if (rule.type !== "local") {
+        throw new Error("finalize adapter invoked for a non-local rule");
+      }
+      const contract = pluginRegistry?.get(rule.name);
+      if (contract === undefined) {
+        return {
+          name: rule.name,
+          status: "failed",
+          elementsInspected: 0,
+          failure: {
+            stage: "rule-evaluation",
+            code: "plugin-load-failed",
+            message: "local rule plugin is not loaded",
+            target: null,
+            device: null,
+            rule: rule.name,
+          },
+        };
+      }
+      return finalizeLocalRule(rule, contract, plan, cases, ruleIndex, signal);
+    },
   };
 }
 

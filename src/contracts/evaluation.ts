@@ -1,4 +1,4 @@
-import type { JsonValue } from "./plugins";
+import type { JsonSettings, JsonValue } from "./plugins";
 import type { Failure } from "./failure";
 
 export interface Geometry {
@@ -81,4 +81,33 @@ export interface RuleFinalization {
   readonly status: RuleFinalizationStatus;
   readonly elementsInspected: number;
   readonly failure: Failure | null;
+}
+
+/** Per-case summary supplied to a local rule finalizer (KTD3, U4). */
+export type LocalRuleCaseObservationStatus =
+  | "clean"
+  | "violations"
+  | "failed"
+  | "disabled"
+  | "not-executed";
+
+export interface LocalRuleCaseObservation {
+  readonly target: { readonly name: string; readonly url: string };
+  readonly device: { readonly name: string };
+  readonly caseStatus: "complete" | "partial" | "failed" | "not-executed";
+  readonly status: LocalRuleCaseObservationStatus;
+  readonly elementsInspected: number;
+  readonly violations: readonly {
+    readonly message: string;
+    readonly locator: string;
+    readonly geometry: Geometry;
+    readonly details?: JsonValue;
+  }[];
+  readonly failure: { readonly code: string; readonly message: string } | null;
+}
+
+export interface LocalRuleFinalizationInput {
+  readonly rule: { readonly name: string };
+  readonly settings: JsonSettings;
+  readonly cases: readonly LocalRuleCaseObservation[];
 }

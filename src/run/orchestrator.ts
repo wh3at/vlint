@@ -36,6 +36,13 @@ export interface CheckDependencies<PageHandle> {
     rule: EffectiveRuleForTarget,
     signal?: AbortSignal,
   ): Promise<RuleEvaluationOutcome>;
+  finalize?(
+    rule: EffectiveRuleForTarget,
+    ruleIndex: number,
+    plan: ResolvedCheckPlan,
+    cases: readonly MutableCaseResult[],
+    signal?: AbortSignal,
+  ): Promise<RuleFinalization>;
 }
 
 export interface CheckOptions {
@@ -195,15 +202,17 @@ export function exitCodeForResult(result: RunResultV3 | RunResultV4): 0 | 1 | 2 
 }
 
 /**
- * Resolves run-wide finalizations in declaration order. Only tab-label rules
- * apply the zero-label regression policy; overflow rules may legitimately inspect
- * zero elements. The first failing finalization stops the cascade, and later rules
- * stay not-executed.
+ * Resolves run-wide finalizations in declaration order. Tab-label rules apply the
+ * zero-label regression policy; local rules delegate to the check-owned adapter;
+ * overflow rules may legitimately inspect zero elements. The first failing
+ * finalization stops the cascade, and later rules stay not-executed.
  */
-function resolveFinalizations(
+async function resolveFinalizations<PageHandle>(
   plan: ResolvedCheckPlan,
   cases: readonly MutableCaseResult[],
-): RuleFinalization[] {
+  dependencies: CheckDependencies<PageHandle>,
+  signal?: AbortSignal,
+): Promise<RuleFinalization[]> {
   const resolvedFinalizations: RuleFinalization[] = [];
   for (let ruleIndex = 0; ruleIndex < plan.rules.length; ruleIndex += 1) {
     const rule = plan.rules[ruleIndex];
@@ -216,6 +225,37 @@ function resolveFinalizations(
       (count, caseResult) => count + (caseResult.rules[ruleIndex]?.elementsInspected ?? 0),
       0,
     );
+    if (rule.type === "local") {
+      if (dependencies.finalize === undefined) {
+        resolvedFinalizations.push({
+          name: rule.name,
+          status: "failed",
+          elementsInspected,
+          failure: {
+            stage: "rule-evaluation",
+            code: "plugin-load-failed",
+            message: "local rule finalizer is not loaded",
+            target: null,
+            device: null,
+            rule: rule.name,
+          },
+        });
+      } else {
+        resolvedFinalizations.push(await dependencies.finalize(rule, ruleIndex, plan, cases, signal));
+      }
+      if (resolvedFinalizations[resolvedFinalizations.length - 1]?.status === "failed") {
+        for (const later of plan.rules.slice(ruleIndex + 1)) {
+          resolvedFinalizations.push({
+            name: later.name,
+            status: "not-executed",
+            elementsInspected: 0,
+            failure: null,
+          });
+        }
+        break;
+      }
+      continue;
+    }
     if (
       rule.type === "tab-label-single-line" &&
       enabledPairCount > 0 &&
@@ -447,7 +487,7 @@ export async function runResolvedCheck<PageHandle>(
   // Global finalization runs only on a fully observed run, so a failing or
   // interrupted case cannot trigger a false zero-label verdict.
   if (cases.every((caseResult) => caseResult.status === "complete")) {
-    finalizations = resolveFinalizations(plan, cases);
+    finalizations = await resolveFinalizations(plan, cases, dependencies, options.signal);
   }
 
   try {
