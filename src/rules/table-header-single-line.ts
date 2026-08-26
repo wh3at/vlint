@@ -29,7 +29,21 @@ function roundFinite(value: number): number {
   return Number.isFinite(value) ? Math.round(value * 1000) / 1000 : 0;
 }
 
-/** Cluster text-rectangle tops against fixed anchors (KTD3). */
+/** Cluster text rectangles against fixed visual-line anchors (KTD3). */
+function sharesVisualLine(
+  rect: TableHeaderTextRect,
+  anchor: TableHeaderTextRect,
+  tolerancePx: number,
+): boolean {
+  const topDistance = Math.abs(rect.top - anchor.top);
+  const overlap =
+    Math.min(rect.top + rect.height, anchor.top + anchor.height) -
+    Math.max(rect.top, anchor.top);
+  return (
+    topDistance <= tolerancePx ||
+    overlap >= Math.min(rect.height, anchor.height) / 2
+  );
+}
 export function clusterTableHeaderLineTops(
   input: readonly TableHeaderTextRect[],
   tolerancePx: number,
@@ -41,18 +55,14 @@ export function clusterTableHeaderLineTops(
       (a, b) =>
         a.rect.top - b.rect.top || a.rect.x - b.rect.x || a.index - b.index,
     );
-  const anchors: number[] = [];
+  const anchors: TableHeaderTextRect[] = [];
   for (const { rect } of ordered) {
-    let nearestDistance = Infinity;
-    for (const anchor of anchors) {
-      const distance = Math.abs(rect.top - anchor);
-      if (distance <= tolerancePx && distance < nearestDistance) {
-        nearestDistance = distance;
-      }
-    }
-    if (nearestDistance === Infinity) anchors.push(rect.top);
+    const matchesAnchor = anchors.some((anchor) =>
+      sharesVisualLine(rect, anchor, tolerancePx),
+    );
+    if (!matchesAnchor) anchors.push(rect);
   }
-  return anchors.map(roundFinite);
+  return anchors.map((anchor) => roundFinite(anchor.top));
 }
 
 interface InPageConfig {
@@ -219,6 +229,8 @@ function tableHeaderExtractor(config: InPageConfig): InPageResult {
     const range = document.createRange();
     while (walker.nextNode()) {
       const node = walker.currentNode as Text;
+      const parent = node.parentElement;
+      if (parent === null || !isRendered(parent)) continue;
       const value = node.nodeValue ?? "";
       const leading = value.length - value.replace(/^\s+/, "").length;
       const trailing = value.length - value.replace(/\s+$/, "").length;

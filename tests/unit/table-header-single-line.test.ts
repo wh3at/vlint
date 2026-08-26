@@ -16,11 +16,42 @@ describe("clusterTableHeaderLineTops", () => {
     ]);
   });
 
-  test("uses fixed anchors so tolerance chains are non-transitive", () => {
-    expect(clusterTableHeaderLineTops([rect(0, 0), rect(10, 0.75), rect(20, 1.5)], 1)).toEqual([
-      0,
-      1.5,
-    ]);
+  test("clusters vertically overlapping fragments such as superscripts as one line", () => {
+    expect(
+      clusterTableHeaderLineTops(
+        [
+          { x: 0, top: 10, width: 40, height: 19 },
+          { x: 40, top: 4, width: 8, height: 13 },
+        ],
+        1,
+      ),
+    ).toEqual([4]);
+  });
+
+  test("uses fixed anchors so overlap chains are non-transitive", () => {
+    expect(
+      clusterTableHeaderLineTops(
+        [
+          { x: 0, top: 0, width: 20, height: 10 },
+          { x: 20, top: 5, width: 20, height: 10 },
+          { x: 40, top: 10, width: 20, height: 10 },
+        ],
+        1,
+      ),
+    ).toEqual([0, 10]);
+  });
+
+  test("uses fixed anchors so top-tolerance chains are non-transitive", () => {
+    expect(
+      clusterTableHeaderLineTops(
+        [
+          { x: 0, top: 0, width: 20, height: 1 },
+          { x: 20, top: 0.75, width: 20, height: 1 },
+          { x: 40, top: 1.5, width: 20, height: 1 },
+        ],
+        1,
+      ),
+    ).toEqual([0, 1.5]);
   });
 
   test("keeps the tolerance boundary in one cluster", () => {

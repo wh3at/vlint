@@ -110,6 +110,27 @@ describe("table-header-single-line semantic measurement", () => {
     expect(outcome.facts.violations).toHaveLength(0);
   });
 
+  test("ignores hidden descendant text when counting lines", async () => {
+    const outcome = await measure(
+      `<div role="columnheader" style="position:relative;width:200px">
+        Visible header
+        <span style="position:absolute;top:40px;left:0;visibility:hidden">hidden hint</span>
+      </div>`,
+    );
+    expect(outcome.failure).toBeNull();
+    expect(outcome.facts.elementsInspected).toBe(1);
+    expect(outcome.facts.violations).toHaveLength(0);
+  });
+
+  test("treats superscript fragments as part of the header's visual line", async () => {
+    const outcome = await measure(
+      `<div role="columnheader" style="width:300px">Price<sup>*</sup></div>`,
+    );
+    expect(outcome.failure).toBeNull();
+    expect(outcome.facts.elementsInspected).toBe(1);
+    expect(outcome.facts.violations).toHaveLength(0);
+  });
+
   test("diagnoses generated content and continues to a measurable violation", async () => {
     const outcome = await measure(`
       <style>.generated::after { content: "★"; }</style>
