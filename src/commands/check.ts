@@ -14,6 +14,7 @@ import { resolveStaticProvider } from "../providers/static";
 import { createBrowserRunScope } from "../browser/lifecycle";
 import { evaluatePageHorizontalOverflow } from "../rules/page-horizontal-overflow";
 import { evaluateTabLabelSingleLine } from "../rules/tab-label-single-line";
+import { evaluateTableHeaderSingleLine } from "../rules/table-header-single-line";
 import {
   resultForResolutionFailure,
   runResolvedCheck,
@@ -122,11 +123,18 @@ async function evaluateWithCancellation(
       };
     }
     evaluation = evaluateLocalRule(page, rule, contract, auditCase, auditCase.name, signal);
+  } else if (rule.type === "table-header-single-line") {
+    evaluation = Promise.resolve(
+      evaluateTableHeaderSingleLine(page, rule, auditCase?.name ?? null),
+    );
+  } else if (rule.type === "page-horizontal-overflow") {
+    evaluation = Promise.resolve(
+      evaluatePageHorizontalOverflow(page, rule, auditCase?.name ?? null),
+    );
   } else {
-    evaluation =
-      rule.type === "tab-label-single-line"
-        ? Promise.resolve(evaluateTabLabelSingleLine(page, rule, auditCase?.name ?? null))
-        : Promise.resolve(evaluatePageHorizontalOverflow(page, rule, auditCase?.name ?? null));
+    evaluation = Promise.resolve(
+      evaluateTabLabelSingleLine(page, rule, auditCase?.name ?? null),
+    );
   }
   if (signal === undefined) return evaluation;
   let abortListener: (() => void) | null = null;

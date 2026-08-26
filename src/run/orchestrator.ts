@@ -3,7 +3,12 @@ import type {
   EffectiveRuleForTarget,
   ResolvedCheckPlan,
 } from "../contracts/config";
-import type { RuleEvaluationOutcome, RuleFinalization, Violation } from "../contracts/evaluation";
+import type {
+  RuleEvaluationOutcome,
+  RuleFinalization,
+  TableHeaderCandidateDiagnostic,
+  Violation,
+} from "../contracts/evaluation";
 import {
   boundaryFailure,
   type BoundaryResult,
@@ -55,6 +60,7 @@ interface MutableRuleResult {
   status: RuleResultStatus;
   elementsInspected: number;
   violations: readonly Violation[];
+  candidateDiagnostics?: readonly TableHeaderCandidateDiagnostic[];
   failure: Failure | null;
 }
 
@@ -254,16 +260,17 @@ async function resolveFinalizations<PageHandle>(
       }
       continue;
     }
-    if (
-      rule.type === "tab-label-single-line" &&
-      enabledPairCount > 0 &&
-      elementsInspected === 0 &&
-      !rule.allowZeroLabels
-    ) {
+    const zeroCoverage =
+      rule.type === "tab-label-single-line" && !rule.allowZeroLabels
+        ? { code: "zero-labels-global" as const, noun: "labels" }
+        : rule.type === "table-header-single-line" && !rule.allowZeroHeaders
+          ? { code: "zero-headers-global" as const, noun: "headers" }
+          : null;
+    if (enabledPairCount > 0 && elementsInspected === 0 && zeroCoverage !== null) {
       const finalizationFailure: Failure = {
         stage: "rule-evaluation",
-        code: "zero-labels-global",
-        message: `rule ${rule.name} inspected zero labels across the run`,
+        code: zeroCoverage.code,
+        message: `rule ${rule.name} inspected zero ${zeroCoverage.noun} across the run`,
         target: null,
         device: null,
         rule: rule.name,
@@ -271,7 +278,7 @@ async function resolveFinalizations<PageHandle>(
       resolvedFinalizations.push({
         name: rule.name,
         status: "failed",
-        elementsInspected: elementsInspected,
+        elementsInspected,
         failure: finalizationFailure,
       });
       for (const later of plan.rules.slice(ruleIndex + 1)) {
@@ -401,6 +408,9 @@ export async function runResolvedCheck<PageHandle>(
         }
         ruleResult.elementsInspected = outcome.facts.elementsInspected;
         ruleResult.violations = outcome.facts.violations;
+        if (outcome.facts.candidateDiagnostics !== undefined) {
+          ruleResult.candidateDiagnostics = outcome.facts.candidateDiagnostics;
+        }
         if (outcome.failure !== null) {
           if (outcome.failure.code === "signal-interrupt") {
             recordInterrupt();

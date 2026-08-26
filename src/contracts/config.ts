@@ -30,6 +30,8 @@ export interface RuleOverride {
   readonly enabled?: boolean;
   readonly excludeSelectors?: readonly string[];
   readonly minimumLabels?: number;
+  /** Per-target header minimum for table-header rules (KTD6). */
+  readonly minimumHeaders?: number;
   /** JSON settings overlay for local rules (KTD6). */
   readonly settings?: JsonSettings;
 }
@@ -69,7 +71,10 @@ export interface CommandProviderConfig {
 
 export type ProviderConfig = StaticProviderConfig | CommandProviderConfig;
 
-export type BuiltinRuleType = "tab-label-single-line" | "page-horizontal-overflow";
+export type BuiltinRuleType =
+  | "tab-label-single-line"
+  | "page-horizontal-overflow"
+  | "table-header-single-line";
 
 export type RuleType = BuiltinRuleType | "local";
 
@@ -92,6 +97,19 @@ export interface PageHorizontalOverflowRuleInstance extends RuleInstanceBase {
   readonly tolerancePx?: number;
 }
 
+/**
+ * Semantic table column-header instance. Selector strings are validated as
+ * CSS at evaluation time, not schema time.
+ */
+export interface TableHeaderSingleLineRuleInstance extends RuleInstanceBase {
+  readonly type: "table-header-single-line";
+  readonly additionalCandidateSelectors?: readonly string[];
+  readonly excludeSelectors?: readonly string[];
+  readonly lineTopTolerancePx?: number;
+  readonly minimumHeaders?: number;
+  readonly allowZeroHeaders?: boolean;
+}
+
 export interface LocalRuleInstance extends RuleInstanceBase {
   readonly type: "local";
   /** Project-relative path to a self-contained TypeScript rule file (R1, R2). */
@@ -102,6 +120,7 @@ export interface LocalRuleInstance extends RuleInstanceBase {
 export type RuleInstance =
   | TabLabelSingleLineRuleInstance
   | PageHorizontalOverflowRuleInstance
+  | TableHeaderSingleLineRuleInstance
   | LocalRuleInstance;
 
 export interface Config {
@@ -131,6 +150,16 @@ export interface EffectiveTabLabelSingleLineRule extends EffectiveRuleBase {
   readonly allowZeroLabels: boolean;
 }
 
+/** Normalized table-header rule. Zero-header coverage stays instance-scoped. */
+export interface EffectiveTableHeaderSingleLineRule extends EffectiveRuleBase {
+  readonly type: "table-header-single-line";
+  readonly additionalCandidateSelectors: readonly string[];
+  readonly excludeSelectors: readonly string[];
+  readonly lineTopTolerancePx: number;
+  readonly minimumHeaders: number;
+  readonly allowZeroHeaders: boolean;
+}
+
 export interface EffectivePageHorizontalOverflowRule extends EffectiveRuleBase {
   readonly type: "page-horizontal-overflow";
   readonly tolerancePx: number;
@@ -145,6 +174,7 @@ export interface EffectiveLocalRule extends EffectiveRuleBase {
 export type EffectiveRule =
   | EffectiveTabLabelSingleLineRule
   | EffectivePageHorizontalOverflowRule
+  | EffectiveTableHeaderSingleLineRule
   | EffectiveLocalRule;
 
 export type EffectiveRuleForTarget = EffectiveRule;

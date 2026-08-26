@@ -33,12 +33,18 @@ export const BUILTIN_OVERFLOW_RULE: RuleInstance = {
   type: "page-horizontal-overflow",
 };
 
+export const BUILTIN_TABLE_RULE: RuleInstance = {
+  name: "table-header-single-line",
+  type: "table-header-single-line",
+};
+
 export function rulesWithBuiltins(rules: readonly RuleInstance[] | undefined): readonly RuleInstance[] {
   const configured = rules ?? [];
   return [
     ...(configured.some((rule) => rule.type === "tab-label-single-line") ? [] : [BUILTIN_TAB_RULE]),
     ...configured,
     ...(configured.some((rule) => rule.type === "page-horizontal-overflow") ? [] : [BUILTIN_OVERFLOW_RULE]),
+    ...(configured.some((rule) => rule.type === "table-header-single-line") ? [] : [BUILTIN_TABLE_RULE]),
   ];
 }
 
@@ -106,6 +112,17 @@ export function normalizeRules(rules: readonly RuleInstance[] | undefined): read
           enabled: rule.enabled ?? true,
           tolerancePx: rule.tolerancePx ?? 1,
         };
+      case "table-header-single-line":
+        return {
+          name: rule.name,
+          type: rule.type,
+          enabled: true,
+          additionalCandidateSelectors: rule.additionalCandidateSelectors ?? [],
+          excludeSelectors: rule.excludeSelectors ?? [],
+          lineTopTolerancePx: rule.lineTopTolerancePx ?? 1,
+          minimumHeaders: rule.minimumHeaders ?? 0,
+          allowZeroHeaders: rule.allowZeroHeaders ?? true,
+        };
       case "local":
         return {
           name: rule.name,
@@ -150,6 +167,13 @@ function effectiveRulesForTarget(
         };
       case "page-horizontal-overflow":
         return { ...rule, enabled: override?.enabled ?? rule.enabled };
+      case "table-header-single-line":
+        return {
+          ...rule,
+          enabled: override?.enabled ?? rule.enabled,
+          excludeSelectors: [...rule.excludeSelectors, ...(override?.excludeSelectors ?? [])],
+          minimumHeaders: override?.minimumHeaders ?? rule.minimumHeaders,
+        };
       case "local":
         return effectiveLocalRuleForTarget(rule, target);
     }

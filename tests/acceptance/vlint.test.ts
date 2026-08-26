@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, test } from "bun:test";
 import vlintPackage from "../../package.json";
 import type { RunResult } from "../../src/contracts/result";
-import { isLocalViolation, isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
+import {
+  isLocalViolation,
+  isTabLabelSingleLineViolation,
+  isTableHeaderSingleLineViolation,
+} from "../../src/contracts/evaluation";
 import { startFixtureServer } from "../fixtures/app/server";
 import { startAcceptanceServer, type AcceptanceServer } from "./server";
 import type { FixtureServer } from "../fixtures/app/server";
@@ -591,6 +595,7 @@ describe.skipIf(!binaryPresent)(
       expect(rules).toEqual([
         { name: "tab-label-single-line", type: "tab-label-single-line" },
         { name: "page-horizontal-overflow", type: "page-horizontal-overflow" },
+        { name: "table-header-single-line", type: "table-header-single-line" },
       ]);
     });
 
@@ -829,6 +834,48 @@ describe.skipIf(!binaryPresent)(
       const mobileViolation = iphone.rules[0]!.violations[0]!;
       if (!isTabLabelSingleLineViolation(mobileViolation)) throw new Error("expected tab-label violation");
       expect(mobileViolation.lineCount).toBeGreaterThanOrEqual(2);
+    }, CHECK_TIMEOUT);
+
+    test("table header wraps only on iPhone and publishes the same evidence", async () => {
+      const cwd = await tempDir();
+      await writeConfig(cwd, {
+        devices: STANDARD_DEVICES,
+        rules: [{
+          name: "tab-label-single-line",
+          type: "tab-label-single-line",
+          allowZeroLabels: true,
+        }],
+        provider: {
+          type: "static",
+          targets: [{ name: "responsive-table", url: `${fixture.url}/table-headers.html` }],
+        },
+      });
+      const jsonResult = await execBinary(["check", "--format", "json"], cwd);
+      expect(jsonResult.exitCode, jsonResult.stderr).toBe(1);
+      const parsed = JSON.parse(jsonResult.stdout) as RunResult;
+      const desktop = parsed.cases[0]?.rules.find((rule) => rule.type === "table-header-single-line");
+      const iphone = parsed.cases[1]?.rules.find((rule) => rule.type === "table-header-single-line");
+      expect(desktop).toMatchObject({ status: "clean", elementsInspected: 2, violations: [] });
+      expect(iphone?.status).toBe("violations");
+      expect(iphone?.elementsInspected).toBe(2);
+      const violation = iphone?.violations[0];
+      if (violation === undefined || !isTableHeaderSingleLineViolation(violation)) {
+        throw new Error("expected table-header violation");
+      }
+      expect(violation).toMatchObject({
+        candidateSource: "native",
+        text: "Review score",
+        lineCount: 2,
+        lineTopTolerancePx: 1,
+        locator: "#responsive-header",
+      });
+      expect(violation.lineTops).toHaveLength(2);
+
+      const terminalResult = await execBinary(["check", "--format", "terminal"], cwd);
+      expect(terminalResult.exitCode, terminalResult.stderr).toBe(1);
+      expect(terminalResult.stdout).toContain(
+        `lines=${violation.lineCount} tops=${violation.lineTops.join(",")} tolerance=${violation.lineTopTolerancePx}px source=${violation.candidateSource} locator=${violation.locator}`,
+      );
     }, CHECK_TIMEOUT);
 
     test("compiled CLI reports responsive page overflow only on the iPhone case", async () => {

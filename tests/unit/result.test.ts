@@ -38,6 +38,19 @@ function rule(name: string, allowZeroLabels = false): EffectiveRule {
   };
 }
 
+function tableRule(name: string, allowZeroHeaders = true): EffectiveRule {
+  return {
+    name,
+    type: "table-header-single-line",
+    enabled: true,
+    additionalCandidateSelectors: [],
+    excludeSelectors: [],
+    lineTopTolerancePx: 1,
+    minimumHeaders: 0,
+    allowZeroHeaders,
+  };
+}
+
 function target(name: string, rules: readonly EffectiveRule[], disabled: readonly string[] = []): EffectiveTarget {
   const targetRules: EffectiveRuleForTarget[] = rules.map((item) => ({
     ...item,
@@ -723,5 +736,69 @@ describe("result contracts", () => {
     };
     expect(result.cases[0]?.rules[0]?.type).toBe("local");
     expect(result.cases[0]?.rules[0]?.violations[0]?.type).toBe("local");
+  });
+
+  test("preserves result and summary behavior when candidate diagnostics are absent or present", async () => {
+    const evaluateWithDiagnostics = {
+      facts: {
+        elementsInspected: 1,
+        violations: [],
+        candidateDiagnostics: [
+          { kind: "excluded" as const, locator: "#wrapped", excludeSelector: ".intentional-wrap" },
+          { kind: "generated-content-unmeasured" as const, locator: "#generated" },
+        ],
+      },
+      failure: null,
+    };
+    const withDiagnostics = await runResolvedCheck(
+      plan(["a"], [rule("tables")]),
+      dependencies({ evaluate: () => evaluateWithDiagnostics }),
+      { toolVersion: "0.1.0" },
+    );
+    const withoutDiagnostics = await runResolvedCheck(
+      plan(["a"], [rule("tables")]),
+      dependencies(),
+      { toolVersion: "0.1.0" },
+    );
+    expect(withDiagnostics.summary).toEqual(withoutDiagnostics.summary);
+    expect(withDiagnostics.status).toBe(withoutDiagnostics.status);
+    expect(withDiagnostics.cases[0]?.rules[0]?.candidateDiagnostics).toEqual(
+      evaluateWithDiagnostics.facts.candidateDiagnostics,
+    );
+  });
+
+  test("fails strict global zero-header coverage and passes the default policy", async () => {
+    const evaluateEmpty = () => ({
+      facts: { elementsInspected: 0, violations: [] },
+      failure: null,
+    });
+    const strict = await runResolvedCheck(
+      plan(["a"], [tableRule("strict-tables", false)]),
+      dependencies({ evaluate: evaluateEmpty }),
+      { toolVersion: "0.1.0" },
+    );
+    expect(strict.status).toBe("incomplete");
+    expect(strict.ruleFinalizations[0]).toMatchObject({
+      status: "failed",
+      failure: { code: "zero-headers-global", rule: "strict-tables" },
+    });
+
+    const defaultPolicy = await runResolvedCheck(
+      plan(["a"], [tableRule("tables")]),
+      dependencies({ evaluate: evaluateEmpty }),
+      { toolVersion: "0.1.0" },
+    );
+    expect(defaultPolicy.status).toBe("clean");
+    expect(defaultPolicy.ruleFinalizations[0]).toMatchObject({ status: "passed" });
+  });
+
+  test("does not count disabled table pairs toward strict global coverage", async () => {
+    const result = await runResolvedCheck(
+      plan(["a"], [tableRule("tables", false)], { a: ["tables"] }),
+      dependencies(),
+      { toolVersion: "0.1.0" },
+    );
+    expect(result.status).toBe("clean");
+    expect(result.ruleFinalizations[0]).toMatchObject({ status: "passed", elementsInspected: 0 });
   });
 });

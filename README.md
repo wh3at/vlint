@@ -153,7 +153,8 @@ and iPhone 17 profiles.
   "defaults": { "locale": "en-US", "timezoneId": "UTC", "timeoutMs": 30000 },
   "rules": [
     { "name": "tab-label-single-line", "type": "tab-label-single-line" },
-    { "name": "page-horizontal-overflow", "type": "page-horizontal-overflow" }
+    { "name": "page-horizontal-overflow", "type": "page-horizontal-overflow" },
+    { "name": "table-header-single-line", "type": "table-header-single-line" }
   ],
   "provider": {
     "type": "static",
@@ -171,8 +172,64 @@ and iPhone 17 profiles.
 
 - **`tab-label-single-line`** — each rendered tab label must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `labelSelector`, `minimumLabels`, `allowZeroLabels`.
 - **`page-horizontal-overflow`** — detects unintended root-page horizontal scroll attributed to light-DOM elements. Field: `tolerancePx` (`0`–`100`, default `1`).
+- **`table-header-single-line`** — each rendered semantic column header must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `lineTopTolerancePx`, `minimumHeaders`, `allowZeroHeaders`.
 - **`static`** provider — inline `targets` (`name`, `url`, defaults, optional `ruleOverrides`).
 - **`command`** provider — runs a trusted executable without a shell, reads `{"targets":[...]}` from stdout (`executable`, `args`, `timeoutMs`).
+
+### Table header single-line rule
+
+The rule is enabled by default. If no `table-header-single-line` instance is declared,
+vlint injects one named `table-header-single-line` with `lineTopTolerancePx: 1`,
+`minimumHeaders: 0`, and `allowZeroHeaders: true`. Declaring one or more named
+instances suppresses that injected default.
+
+It discovers rendered native column headers from `th[scope="col"]`,
+`th[scope="colgroup"]`, and `thead th`, plus explicit ARIA
+`[role="columnheader"]` elements. Native `th[scope="row"]`,
+`th[scope="rowgroup"]`, and `[role="rowheader"]` elements are not candidates.
+Additional selectors extend discovery; overlapping selectors inspect an element only once.
+
+```jsonc
+{
+  "name": "tables",
+  "type": "table-header-single-line",
+  "additionalCandidateSelectors": ["[data-column-heading]"],
+  "excludeSelectors": [".allow-header-wrap"],
+  "lineTopTolerancePx": 1,
+  "minimumHeaders": 1,
+  "allowZeroHeaders": false
+}
+```
+
+Use `excludeSelectors` as the intentional-wrap opt-out. Exclusions apply to the
+header candidate itself, and JSON `candidateDiagnostics` records the first matching
+selector. A header with significant rendered `::before` or `::after` content is
+reported as `generated-content-unmeasured` and is not counted as inspected; other
+headers in the case are still evaluated.
+
+`minimumHeaders` is enforced for each target-device case. `allowZeroHeaders: false`
+is a separate run-wide coverage check: it makes a completed run incomplete when every
+enabled case inspected zero headers. The default `true` keeps table-free projects
+clean. A target can replace its minimum, add exclusions, or disable the named rule:
+
+```jsonc
+{
+  "name": "legacy-report",
+  "url": "http://localhost:3000/report",
+  "ruleOverrides": {
+    "tables": {
+      "enabled": false,
+      "excludeSelectors": [".legacy-wrap"],
+      "minimumHeaders": 0
+    }
+  }
+}
+```
+
+Line counts come from rendered DOM text geometry in each active viewport, not from
+the computed `white-space` value or decorative element boxes. The same header can be
+clean on a desktop profile and violate on an iPhone-width profile; the violation
+reports its source, locator, box, text, line count, measured line tops, and tolerance.
 
 ## Local rule plugins
 
@@ -287,7 +344,10 @@ against. Violations live under each case, keyed by rule:
 ```
 
 `cases` are ordered by target then device. Local violations use the `local` envelope
-of `message`, `locator`, `geometry`, and `details`.
+of `message`, `locator`, `geometry`, and `details`. Table-header violations include
+`candidateSource`, `text`, `lineCount`, `lineTops`, `lineTopTolerancePx`, `geometry`,
+and `locator`; optional `candidateDiagnostics` on that rule result records excluded
+or generated-content-unmeasured candidates without representing them as violations.
 
 ---
 

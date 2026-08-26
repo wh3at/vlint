@@ -43,6 +43,10 @@ const STANDARD_RULES = [
     name: "page-horizontal-overflow",
     type: "page-horizontal-overflow",
   },
+  {
+    name: "table-header-single-line",
+    type: "table-header-single-line",
+  },
 ] as const;
 
 /**

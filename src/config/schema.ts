@@ -219,6 +219,18 @@ function ruleOverrideAt(value: unknown, path: string, rule: RuleMetadata): RuleO
     exactKeys(object, ["enabled"], path);
     return object.enabled === undefined ? {} : { enabled: booleanAt(object.enabled, `${path}.enabled`) };
   }
+  if (rule.type === "table-header-single-line") {
+    exactKeys(object, ["enabled", "excludeSelectors", "minimumHeaders"], path);
+    const result: { enabled?: boolean; excludeSelectors?: readonly string[]; minimumHeaders?: number } = {};
+    if (object.enabled !== undefined) result.enabled = booleanAt(object.enabled, `${path}.enabled`);
+    if (object.excludeSelectors !== undefined) {
+      result.excludeSelectors = stringArrayAt(object.excludeSelectors, `${path}.excludeSelectors`);
+    }
+    if (object.minimumHeaders !== undefined) {
+      result.minimumHeaders = integerAt(object.minimumHeaders, `${path}.minimumHeaders`, 0, 100_000);
+    }
+    return result;
+  }
   exactKeys(object, ["enabled", "excludeSelectors", "minimumLabels"], path);
   const result: { enabled?: boolean; excludeSelectors?: readonly string[]; minimumLabels?: number } = {};
   if (object.enabled !== undefined) result.enabled = booleanAt(object.enabled, `${path}.enabled`);
@@ -383,6 +395,44 @@ function ruleAt(value: unknown, path: string): RuleInstance {
     if (object.enabled !== undefined) result.enabled = booleanAt(object.enabled, `${path}.enabled`);
     if (object.tolerancePx !== undefined) {
       result.tolerancePx = finiteNumberAt(object.tolerancePx, `${path}.tolerancePx`, 0, 100);
+    }
+    return result;
+  }
+  if (object.type === "table-header-single-line") {
+    exactKeys(
+      object,
+      ["name", "type", "additionalCandidateSelectors", "excludeSelectors", "lineTopTolerancePx", "minimumHeaders", "allowZeroHeaders"],
+      path,
+    );
+    const result: {
+      name: string;
+      type: "table-header-single-line";
+      additionalCandidateSelectors?: readonly string[];
+      excludeSelectors?: readonly string[];
+      lineTopTolerancePx?: number;
+      minimumHeaders?: number;
+      allowZeroHeaders?: boolean;
+    } = {
+      name: nameAt(object.name, `${path}.name`),
+      type: "table-header-single-line",
+    };
+    if (object.additionalCandidateSelectors !== undefined) {
+      result.additionalCandidateSelectors = stringArrayAt(
+        object.additionalCandidateSelectors,
+        `${path}.additionalCandidateSelectors`,
+      );
+    }
+    if (object.excludeSelectors !== undefined) {
+      result.excludeSelectors = stringArrayAt(object.excludeSelectors, `${path}.excludeSelectors`);
+    }
+    if (object.lineTopTolerancePx !== undefined) {
+      result.lineTopTolerancePx = finiteNumberAt(object.lineTopTolerancePx, `${path}.lineTopTolerancePx`, 0, 100);
+    }
+    if (object.minimumHeaders !== undefined) {
+      result.minimumHeaders = integerAt(object.minimumHeaders, `${path}.minimumHeaders`, 0, 100_000);
+    }
+    if (object.allowZeroHeaders !== undefined) {
+      result.allowZeroHeaders = booleanAt(object.allowZeroHeaders, `${path}.allowZeroHeaders`);
     }
     return result;
   }
