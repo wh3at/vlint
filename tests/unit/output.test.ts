@@ -294,4 +294,44 @@ describe("output", () => {
     expect(localIndex).toBeGreaterThan(tabIndex);
     expect(output).toContain("violations=2");
   });
+
+  test("renders complete table-header evidence and retains candidate diagnostics in JSON", () => {
+    const tableResult: RunResult = {
+      ...result,
+      cases: [{
+        ...result.cases[0]!,
+        rules: [{
+          name: "tables",
+          type: "table-header-single-line",
+          status: "violations",
+          elementsInspected: 1,
+          violations: [{
+            type: "table-header-single-line",
+            candidateSource: "native",
+            text: "Review\nscore",
+            lineCount: 2,
+            lineTops: [10.125, 30.5],
+            lineTopTolerancePx: 1,
+            geometry: { x: 1, y: 2, width: 80, height: 40 },
+            locator: "#review\nscore",
+          }],
+          candidateDiagnostics: [{
+            kind: "excluded",
+            locator: "#intentional",
+            excludeSelector: ".allow-wrap",
+          }],
+          failure: null,
+        }],
+      }],
+      ruleFinalizations: [{ name: "tables", status: "passed", elementsInspected: 1, failure: null }],
+    };
+
+    expect(renderTerminal(tableResult)).toContain(
+      "violation lines=2 tops=10.125,30.5 tolerance=1px source=native locator=#review\\nscore box=1,2,80,40 text=Review\\nscore",
+    );
+    const parsed = JSON.parse(renderJson(tableResult)) as RunResult;
+    expect(parsed.cases[0]?.rules[0]?.candidateDiagnostics).toEqual([
+      { kind: "excluded", locator: "#intentional", excludeSelector: ".allow-wrap" },
+    ]);
+  });
 });

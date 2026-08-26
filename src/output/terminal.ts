@@ -112,7 +112,7 @@ export function renderTerminal(result: RunResult): string {
           );
         } else if (violation.type === "table-header-single-line") {
           lines.push(
-            `    violation lines=${violation.lineCount} source=${violation.candidateSource} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height} text=${escapeTerminal(violation.text)}`,
+            `    violation lines=${violation.lineCount} tops=${violation.lineTops.join(",")} tolerance=${violation.lineTopTolerancePx}px source=${violation.candidateSource} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height} text=${escapeTerminal(violation.text)}`,
           );
         } else {
           lines.push(
