@@ -131,6 +131,15 @@ describe("table-header-single-line semantic measurement", () => {
     expect(outcome.facts.violations).toHaveLength(0);
   });
 
+  test("treats raised and lowered fragments as one header line", async () => {
+    const outcome = await measure(
+      `<div role="columnheader" style="width:300px">H<sup>2</sup>O<sub>2</sub></div>`,
+    );
+    expect(outcome.failure).toBeNull();
+    expect(outcome.facts.elementsInspected).toBe(1);
+    expect(outcome.facts.violations).toHaveLength(0);
+  });
+
   test("diagnoses generated content and continues to a measurable violation", async () => {
     const outcome = await measure(`
       <style>.generated::after { content: "★"; }</style>

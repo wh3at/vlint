@@ -29,7 +29,7 @@ function roundFinite(value: number): number {
   return Number.isFinite(value) ? Math.round(value * 1000) / 1000 : 0;
 }
 
-/** Cluster text rectangles against fixed visual-line anchors (KTD3). */
+/** Two rectangles share a visual line when their tops are near or they overlap. */
 function sharesVisualLine(
   rect: TableHeaderTextRect,
   anchor: TableHeaderTextRect,
@@ -44,6 +44,21 @@ function sharesVisualLine(
     overlap >= Math.min(rect.height, anchor.height) / 2
   );
 }
+
+/** One visual line: its reported top plus the rectangle membership is tested against. */
+interface HeaderLine {
+  readonly top: number;
+  anchor: TableHeaderTextRect;
+}
+
+/**
+ * Cluster text rectangles into visual lines (KTD3). Each line reports the top of
+ * its topmost rectangle; membership is tested against one anchor per line, which
+ * upgrades to a strictly taller joining member. That upgrade retains the base-text
+ * carrier when a raised fragment (superscript) seeds the line, so later lowered
+ * siblings compare against the baseline instead of seeding a second line — while
+ * equal-height chains still cannot merge two real lines transitively.
+ */
 export function clusterTableHeaderLineTops(
   input: readonly TableHeaderTextRect[],
   tolerancePx: number,
@@ -55,14 +70,18 @@ export function clusterTableHeaderLineTops(
       (a, b) =>
         a.rect.top - b.rect.top || a.rect.x - b.rect.x || a.index - b.index,
     );
-  const anchors: TableHeaderTextRect[] = [];
+  const lines: HeaderLine[] = [];
   for (const { rect } of ordered) {
-    const matchesAnchor = anchors.some((anchor) =>
-      sharesVisualLine(rect, anchor, tolerancePx),
+    const line = lines.find((candidate) =>
+      sharesVisualLine(rect, candidate.anchor, tolerancePx),
     );
-    if (!matchesAnchor) anchors.push(rect);
+    if (line === undefined) {
+      lines.push({ top: rect.top, anchor: rect });
+    } else if (rect.height > line.anchor.height) {
+      line.anchor = rect;
+    }
   }
-  return anchors.map((anchor) => roundFinite(anchor.top));
+  return lines.map((line) => roundFinite(line.top));
 }
 
 interface InPageConfig {

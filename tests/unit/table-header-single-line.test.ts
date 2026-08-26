@@ -28,6 +28,22 @@ describe("clusterTableHeaderLineTops", () => {
     ).toEqual([4]);
   });
 
+  test("keeps a raised-base-lowered sequence on one line", () => {
+    // H<sup>2</sup>O<sub>2</sub>: the superscript sorts first and seeds the line,
+    // the base text joins and takes over the anchor, so the subscript compares
+    // against the baseline instead of seeding a second line.
+    expect(
+      clusterTableHeaderLineTops(
+        [
+          { x: 0, top: 4, width: 8, height: 13 },
+          { x: 8, top: 10, width: 20, height: 19 },
+          { x: 28, top: 16, width: 8, height: 13 },
+        ],
+        1,
+      ),
+    ).toEqual([4]);
+  });
+
   test("uses fixed anchors so overlap chains are non-transitive", () => {
     expect(
       clusterTableHeaderLineTops(
