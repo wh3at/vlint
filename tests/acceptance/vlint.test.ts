@@ -595,6 +595,7 @@ describe.skipIf(!binaryPresent)(
       expect(rules).toEqual([
         { name: "tab-label-single-line", type: "tab-label-single-line" },
         { name: "page-horizontal-overflow", type: "page-horizontal-overflow" },
+        { name: "table-header-single-line", type: "table-header-single-line" },
       ]);
     });
 
@@ -839,6 +840,11 @@ describe.skipIf(!binaryPresent)(
       const cwd = await tempDir();
       await writeConfig(cwd, {
         devices: STANDARD_DEVICES,
+        rules: [{
+          name: "tab-label-single-line",
+          type: "tab-label-single-line",
+          allowZeroLabels: true,
+        }],
         provider: {
           type: "static",
           targets: [{ name: "responsive-table", url: `${fixture.url}/table-headers.html` }],
