@@ -40,6 +40,7 @@ describe("vlint init: standard config generation", () => {
     expect(config.rules).toEqual([
       { name: "tab-label-single-line", type: "tab-label-single-line" },
       { name: "page-horizontal-overflow", type: "page-horizontal-overflow" },
+      { name: "table-header-single-line", type: "table-header-single-line" },
     ]);
 
     const [macbook, iphone] = config.devices;

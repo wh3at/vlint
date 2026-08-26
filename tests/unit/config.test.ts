@@ -58,6 +58,7 @@ describe("configuration", () => {
     expect(loaded.value.rules.map((rule) => rule.name)).toEqual([
       "tab-label-single-line",
       "page-horizontal-overflow",
+      "table-header-single-line",
     ]);
     const plan = resolveAdHocTarget(loaded.value, "http://127.0.0.1:4173/adhoc");
     expect(plan.targets.map((target) => target.name)).toEqual(["adhoc"]);
@@ -391,6 +392,16 @@ devices: [DESKTOP_DEVICE],
         enabled: true,
         tolerancePx: 4,
       },
+      {
+        name: "table-header-single-line",
+        type: "table-header-single-line",
+        enabled: true,
+        additionalCandidateSelectors: [],
+        excludeSelectors: [],
+        lineTopTolerancePx: 1,
+        minimumHeaders: 0,
+        allowZeroHeaders: true,
+      },
     ]);
   });
 
@@ -512,6 +523,7 @@ devices: [DESKTOP_DEVICE],
       "tab-label-single-line:tab-label-single-line",
       "spacing:local",
       "page-horizontal-overflow:page-horizontal-overflow",
+      "table-header-single-line:table-header-single-line",
     ]);
     const local = loaded.value.rules.find((rule) => rule.type === "local");
     expect(local).toMatchObject({
@@ -655,5 +667,193 @@ devices: [DESKTOP_DEVICE],
       added: 1,
     });
     expect(Object.getPrototypeOf(merged)).toBeNull();
+  });
+
+  test("resolves no-rule config to tab, overflow, then table defaults with table defaults materialized", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, { devices: [DESKTOP_DEVICE] });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok) throw new Error(loaded.failure.message);
+    const table = loaded.value.rules.find((rule) => rule.type === "table-header-single-line");
+    expect(table).toEqual({
+      name: "table-header-single-line",
+      type: "table-header-single-line",
+      enabled: true,
+      additionalCandidateSelectors: [],
+      excludeSelectors: [],
+      lineTopTolerancePx: 1,
+      minimumHeaders: 0,
+      allowZeroHeaders: true,
+    });
+  });
+
+  test("materializes a complete explicit table rule and suppresses the injected default", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      devices: [DESKTOP_DEVICE],
+      rules: [
+        {
+          name: "tables",
+          type: "table-header-single-line",
+          additionalCandidateSelectors: ["[data-table-header]"],
+          excludeSelectors: [".intentional-wrap"],
+          lineTopTolerancePx: 2,
+          minimumHeaders: 1,
+          allowZeroHeaders: false,
+        },
+      ],
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok) throw new Error(loaded.failure.message);
+    expect(loaded.value.rules).toEqual([
+      expect.objectContaining({ name: "tab-label-single-line" }),
+      {
+        name: "tables",
+        type: "table-header-single-line",
+        enabled: true,
+        additionalCandidateSelectors: ["[data-table-header]"],
+        excludeSelectors: [".intentional-wrap"],
+        lineTopTolerancePx: 2,
+        minimumHeaders: 1,
+        allowZeroHeaders: false,
+      },
+      expect.objectContaining({ name: "page-horizontal-overflow" }),
+    ]);
+  });
+
+  test.each([
+    ["unknown field", { extra: true }],
+    ["negative tolerance", { lineTopTolerancePx: -0.5 }],
+    ["excessive tolerance", { lineTopTolerancePx: 101 }],
+    ["non-finite tolerance", { lineTopTolerancePx: Number.POSITIVE_INFINITY }],
+    ["negative minimum headers", { minimumHeaders: -1 }],
+    ["non-integer minimum headers", { minimumHeaders: 1.5 }],
+    ["non-boolean zero coverage", { allowZeroHeaders: "yes" }],
+    ["overflow field on table rule", { tolerancePx: 1 }],
+  ])("rejects invalid table rule: %s", (_name, fields) => {
+    const parsed = parseConfig({
+      devices: [DESKTOP_DEVICE],
+      rules: [{ name: "tables", type: "table-header-single-line", ...fields }],
+    });
+    expect(parsed.ok ? null : parsed.failure.code).toBe("config-schema-invalid");
+  });
+
+  test("permits multiple named table rules without injecting a second default", () => {
+    const parsed = parseConfig({
+      devices: [DESKTOP_DEVICE],
+      rules: [
+        { name: "primary-tables", type: "table-header-single-line" },
+        { name: "strict-tables", type: "table-header-single-line", allowZeroHeaders: false },
+      ],
+    });
+    expect(parsed.ok).toBe(true);
+  });
+
+  test("accepts selector strings at schema time and defers CSS validity to evaluation", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      devices: [DESKTOP_DEVICE],
+      rules: [
+        {
+          name: "tables",
+          type: "table-header-single-line",
+          additionalCandidateSelectors: ["th[scope="],
+          excludeSelectors: ["###not-a-selector"],
+        },
+      ],
+    });
+    const loaded = await loadConfig(directory);
+    expect(loaded.ok).toBe(true);
+  });
+
+  test("merges target exclusions after instance exclusions, replaces the target minimum, and keeps zero coverage instance-scoped", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
+      rules: [
+        {
+          name: "tables",
+          type: "table-header-single-line",
+          excludeSelectors: [".global-exclude"],
+          minimumHeaders: 1,
+          allowZeroHeaders: true,
+        },
+      ],
+      provider: {
+        type: "static",
+        targets: [
+          {
+            name: "settings",
+            url: "https://example.com/settings",
+            ruleOverrides: { tables: { excludeSelectors: [".target-exclude"], minimumHeaders: 3 } },
+          },
+          { name: "plain", url: "https://example.com/plain" },
+        ],
+      },
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok || loaded.value.provider?.type !== "static") throw new Error("expected loaded static config");
+    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    for (const c of plan.cases) {
+      if (c.name === "settings") {
+        expect(c.rules.find((rule) => rule.name === "tables")).toMatchObject({
+          enabled: true,
+          excludeSelectors: [".global-exclude", ".target-exclude"],
+          minimumHeaders: 3,
+          allowZeroHeaders: true,
+        });
+      } else {
+        expect(c.rules.find((rule) => rule.name === "tables")).toMatchObject({
+          enabled: true,
+          excludeSelectors: [".global-exclude"],
+          minimumHeaders: 1,
+          allowZeroHeaders: true,
+        });
+      }
+    }
+  });
+
+  test("applies an explicit false table target override to disable the rule per target", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      devices: [DESKTOP_DEVICE],
+      rules: [{ name: "tables", type: "table-header-single-line" }],
+      provider: {
+        type: "static",
+        targets: [
+          { name: "kept", url: "https://example.com/kept" },
+          {
+            name: "off",
+            url: "https://example.com/off",
+            ruleOverrides: { tables: { enabled: false } },
+          },
+        ],
+      },
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok || loaded.value.provider?.type !== "static") throw new Error("expected loaded static config");
+    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    expect(plan.cases[0]?.rules.find((rule) => rule.name === "tables")?.enabled).toBe(true);
+    expect(plan.cases[1]?.rules.find((rule) => rule.name === "tables")?.enabled).toBe(false);
+  });
+
+  test("validates table target overrides against the restricted key set", () => {
+    const base = {
+      devices: [DESKTOP_DEVICE],
+      rules: [{ name: "tables", type: "table-header-single-line" }],
+    };
+    expect(
+      parseConfig({
+        ...base,
+        provider: {
+          type: "static",
+          targets: [{
+            name: "bad",
+            url: "https://example.com",
+            ruleOverrides: { tables: { allowZeroHeaders: false } },
+          }],
+        },
+      }).ok,
+    ).toBe(false);
   });
 });

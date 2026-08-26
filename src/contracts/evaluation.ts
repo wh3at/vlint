@@ -49,10 +49,37 @@ export interface LocalViolation extends ViolationBase {
   readonly details: JsonValue;
 }
 
+/** Attribution precedence for a table-header candidate (KTD5). */
+export type TableHeaderCandidateSource = "native" | "aria" | "additional";
+
+export interface TableHeaderSingleLineViolation extends ViolationBase {
+  readonly type: "table-header-single-line";
+  readonly candidateSource: TableHeaderCandidateSource;
+  readonly text: string;
+  readonly lineCount: number;
+  /** Rounded representative line-top per cluster, in measured order. */
+  readonly lineTops: readonly number[];
+  readonly lineTopTolerancePx: number;
+}
+
 export type Violation =
   | TabLabelSingleLineViolation
   | PageHorizontalOverflowViolation
+  | TableHeaderSingleLineViolation
   | LocalViolation;
+
+/**
+ * Machine-readable candidate outcome that is not a violation (R14). The field
+ * is omitted when empty so existing rule output stays stable (KTD4).
+ */
+export type TableHeaderCandidateDiagnostic =
+  | {
+      readonly kind: "excluded";
+      readonly locator: string;
+      /** First configured exclusion selector that matched the candidate. */
+      readonly excludeSelector: string;
+    }
+  | { kind: "generated-content-unmeasured"; readonly locator: string };
 
 export function isTabLabelSingleLineViolation(
   violation: Violation,
@@ -64,9 +91,16 @@ export function isLocalViolation(violation: Violation): violation is LocalViolat
   return violation.type === "local";
 }
 
+export function isTableHeaderSingleLineViolation(
+  violation: Violation,
+): violation is TableHeaderSingleLineViolation {
+  return violation.type === "table-header-single-line";
+}
+
 export interface RuleEvaluationFact<TViolation extends Violation = Violation> {
   readonly elementsInspected: number;
   readonly violations: readonly TViolation[];
+  readonly candidateDiagnostics?: readonly TableHeaderCandidateDiagnostic[];
 }
 
 export interface RuleEvaluationOutcome<TViolation extends Violation = Violation> {

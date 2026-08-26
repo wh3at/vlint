@@ -122,11 +122,28 @@ async function evaluateWithCancellation(
       };
     }
     evaluation = evaluateLocalRule(page, rule, contract, auditCase, auditCase.name, signal);
+  } else if (rule.type === "table-header-single-line") {
+    // Interim dispatch guard: the dedicated evaluator lands with the next unit.
+    // Failing typed beats silently running another built-in's measurement.
+    return {
+      facts: { elementsInspected: 0, violations: [] },
+      failure: {
+        stage: "rule-evaluation",
+        code: "rule-script-failed",
+        message: "table-header-single-line evaluator is not available",
+        target: auditCase?.name ?? null,
+        device: auditCase?.deviceName ?? null,
+        rule: rule.name,
+      },
+    };
+  } else if (rule.type === "page-horizontal-overflow") {
+    evaluation = Promise.resolve(
+      evaluatePageHorizontalOverflow(page, rule, auditCase?.name ?? null),
+    );
   } else {
-    evaluation =
-      rule.type === "tab-label-single-line"
-        ? Promise.resolve(evaluateTabLabelSingleLine(page, rule, auditCase?.name ?? null))
-        : Promise.resolve(evaluatePageHorizontalOverflow(page, rule, auditCase?.name ?? null));
+    evaluation = Promise.resolve(
+      evaluateTabLabelSingleLine(page, rule, auditCase?.name ?? null),
+    );
   }
   if (signal === undefined) return evaluation;
   let abortListener: (() => void) | null = null;

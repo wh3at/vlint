@@ -110,6 +110,10 @@ export function renderTerminal(result: RunResult): string {
           lines.push(
             `    violation overflow=${violation.overflowPx}px locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height} css=${escapeTerminal(JSON.stringify(violation.computedStyle))}`,
           );
+        } else if (violation.type === "table-header-single-line") {
+          lines.push(
+            `    violation lines=${violation.lineCount} source=${violation.candidateSource} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height} text=${escapeTerminal(violation.text)}`,
+          );
         } else {
           lines.push(
             `    violation message=${escapeTerminal(violation.message)} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height}`,

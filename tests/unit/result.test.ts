@@ -724,4 +724,30 @@ describe("result contracts", () => {
     expect(result.cases[0]?.rules[0]?.type).toBe("local");
     expect(result.cases[0]?.rules[0]?.violations[0]?.type).toBe("local");
   });
+
+  test("preserves result and summary behavior when candidate diagnostics are absent or present", async () => {
+    const evaluateWithDiagnostics = {
+      facts: {
+        elementsInspected: 1,
+        violations: [],
+        candidateDiagnostics: [
+          { kind: "excluded" as const, locator: "#wrapped", excludeSelector: ".intentional-wrap" },
+          { kind: "generated-content-unmeasured" as const, locator: "#generated" },
+        ],
+      },
+      failure: null,
+    };
+    const withDiagnostics = await runResolvedCheck(
+      plan(["a"], [rule("tables")]),
+      dependencies({ evaluate: () => evaluateWithDiagnostics }),
+      { toolVersion: "0.1.0" },
+    );
+    const withoutDiagnostics = await runResolvedCheck(
+      plan(["a"], [rule("tables")]),
+      dependencies(),
+      { toolVersion: "0.1.0" },
+    );
+    expect(withDiagnostics.summary).toEqual(withoutDiagnostics.summary);
+    expect(withDiagnostics.status).toBe(withoutDiagnostics.status);
+  });
 });

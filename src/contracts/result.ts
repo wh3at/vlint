@@ -1,4 +1,4 @@
-import type { RuleFinalization, Violation } from "./evaluation";
+import type { RuleFinalization, TableHeaderCandidateDiagnostic, Violation } from "./evaluation";
 import type { Failure } from "./failure";
 import type { RuleType } from "./config";
 
@@ -13,6 +13,8 @@ export interface RuleResult {
   readonly elementsInspected: number;
   readonly violations: readonly Violation[];
   readonly failure: Failure | null;
+  /** Present only when the rule produced non-violation candidate outcomes (KTD4). */
+  readonly candidateDiagnostics?: readonly TableHeaderCandidateDiagnostic[];
 }
 
 /**
