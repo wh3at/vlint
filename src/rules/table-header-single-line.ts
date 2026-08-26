@@ -24,10 +24,6 @@ export interface TableHeaderTextRect {
   readonly height: number;
 }
 
-interface LineCluster {
-  readonly anchor: number;
-  readonly representative: number;
-}
 
 function roundFinite(value: number): number {
   return Number.isFinite(value) ? Math.round(value * 1000) / 1000 : 0;
@@ -45,22 +41,18 @@ export function clusterTableHeaderLineTops(
       (a, b) =>
         a.rect.top - b.rect.top || a.rect.x - b.rect.x || a.index - b.index,
     );
-  const clusters: LineCluster[] = [];
+  const anchors: number[] = [];
   for (const { rect } of ordered) {
-    let nearest: LineCluster | null = null;
     let nearestDistance = Infinity;
-    for (const cluster of clusters) {
-      const distance = Math.abs(rect.top - cluster.anchor);
+    for (const anchor of anchors) {
+      const distance = Math.abs(rect.top - anchor);
       if (distance <= tolerancePx && distance < nearestDistance) {
-        nearest = cluster;
         nearestDistance = distance;
       }
     }
-    if (nearest === null) {
-      clusters.push({ anchor: rect.top, representative: rect.top });
-    }
+    if (nearestDistance === Infinity) anchors.push(rect.top);
   }
-  return clusters.map((cluster) => roundFinite(cluster.representative));
+  return anchors.map(roundFinite);
 }
 
 interface InPageConfig {
@@ -86,13 +78,11 @@ interface InPageRect {
 type InPageCandidate =
   | {
       readonly kind: "excluded";
-      readonly source: TableHeaderCandidateSource;
       readonly descriptor: ElementDescriptor;
       readonly excludeSelector: string;
     }
   | {
       readonly kind: "generated-content-unmeasured";
-      readonly source: TableHeaderCandidateSource;
       readonly descriptor: ElementDescriptor;
     }
   | {
@@ -293,17 +283,17 @@ function tableHeaderExtractor(config: InPageConfig): InPageResult {
         candidates.push({ kind: "skipped" });
         continue;
       }
-      const source = sourceFor(element);
       const descriptor = describeElement(element);
       const excludeSelector = config.excludeSelectors.find((selector) => element.matches(selector));
       if (excludeSelector !== undefined) {
-        candidates.push({ kind: "excluded", source, descriptor, excludeSelector });
+        candidates.push({ kind: "excluded", descriptor, excludeSelector });
         continue;
       }
       if (hasGeneratedContent(element)) {
-        candidates.push({ kind: "generated-content-unmeasured", source, descriptor });
+        candidates.push({ kind: "generated-content-unmeasured", descriptor });
         continue;
       }
+      const source = sourceFor(element);
       const text = normalizeText((element as HTMLElement).innerText ?? "");
       const fragments = extractTextRects(element);
       if (text.length === 0 || fragments.length === 0) {
