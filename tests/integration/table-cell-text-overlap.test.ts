@@ -110,6 +110,7 @@ test("clip-path references and normalised corners decide the visible text", asyn
     ["#round-inset", "#round-inset-neighbor"],
     ["#path-wide", "#path-wide-neighbor"],
     ["#url-round-rect", "#url-round-rect-neighbor"],
+    ["#obb-full", "#obb-full-neighbor"],
   ]);
   // Corner radii shrink against the inset rectangle, not the element box, so more of
   // the clipped text stays visible than a 40px radius would allow.

@@ -254,8 +254,7 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
   }
 
   /** An SVG basic shape as path geometry in its own user space; null when not modelled. */
-  function svgShape(element: Element): Path2D | null {
-    const viewport = svgViewport(element);
+  function svgShape(element: Element, viewport: { readonly width: number; readonly height: number }): Path2D | null {
     const attribute = (name: string): string | null => element.getAttribute(name);
     // Undefined means the attribute is absent; null means the length could not be resolved.
     const optional = (name: string, base: number): number | null | undefined => {
@@ -330,10 +329,14 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
         : new DOMMatrix([matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f]);
     };
     const group = svgMatrix(clip.getAttribute("transform"));
+    // `objectBoundingBox` writes its geometry as fractions of the element box, so its
+    // percentages resolve against 1 rather than against the SVG viewport.
+    const bounding = clip.getAttribute("clipPathUnits") === "objectBoundingBox";
+    const viewport = bounding ? { width: 1, height: 1 } : svgViewport(clip);
     const shapes: { readonly path: Path2D; readonly evenOdd: boolean }[] = [];
     for (const child of clip.children) {
       if (["title", "desc", "metadata"].includes(child.localName)) continue;
-      const path = svgShape(child);
+      const path = svgShape(child, viewport);
       if (path === null) return null;
       const matrix = new Path2D();
       matrix.addPath(path, group.multiply(svgMatrix(child.getAttribute("transform"))));
@@ -341,7 +344,6 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       shapes.push({ path: matrix, evenOdd: style.clipRule === "evenodd" || child.getAttribute("fill-rule") === "evenodd" });
     }
     if (shapes.length === 0) return null;
-    const bounding = clip.getAttribute("clipPathUnits") === "objectBoundingBox";
     return {
       box: null,
       covers: (x, y) => {
@@ -375,34 +377,30 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       const radii = cornerRadii(round, frames, { width: box.width / frames.scale.x, height: box.height / frames.scale.y });
       return radii === null ? null : { box, covers: roundedCovers(box, viewportRadii(radii)) };
     };
-    if (name === "inset" || name === "xywh") {
+    if (name === "inset") {
       const { sides, round } = sidesOf(body);
-      const lengths = name === "inset"
-        ? [
-            elementLength(sides[3] ?? sides[1] ?? sides[0], frames.width),
-            elementLength(sides[0], frames.height),
-            elementLength(sides[1] ?? sides[0], frames.width),
-            elementLength(sides[2] ?? sides[0], frames.height),
-          ]
-        : [
-            elementLength(sides[0], frames.width),
-            elementLength(sides[1], frames.height),
-            elementLength(sides[2], frames.width),
-            elementLength(sides[3], frames.height),
-          ];
-      if (lengths.some((length) => length === null)) return null;
-      const [first, second, third, fourth] = lengths as number[];
-      const box: Box = name === "inset"
-        ? {
-            x: viewportX(first!), y: viewportY(second!),
-            width: (frames.width - first! - third!) * frames.scale.x,
-            height: (frames.height - second! - fourth!) * frames.scale.y,
-          }
-        : {
-            x: viewportX(first!), y: viewportY(second!),
-            width: third! * frames.scale.x, height: fourth! * frames.scale.y,
-          };
-      return roundedRegion(box, round);
+      const left = elementLength(sides[3] ?? sides[1] ?? sides[0], frames.width);
+      const top = elementLength(sides[0], frames.height);
+      const right = elementLength(sides[1] ?? sides[0], frames.width);
+      const bottom = elementLength(sides[2] ?? sides[0], frames.height);
+      if (left === null || top === null || right === null || bottom === null) return null;
+      return roundedRegion({
+        x: viewportX(left), y: viewportY(top),
+        width: (frames.width - left - right) * frames.scale.x,
+        height: (frames.height - top - bottom) * frames.scale.y,
+      }, round);
+    }
+    if (name === "xywh") {
+      const { sides, round } = sidesOf(body);
+      const x = elementLength(sides[0], frames.width);
+      const y = elementLength(sides[1], frames.height);
+      const width = elementLength(sides[2], frames.width);
+      const height = elementLength(sides[3], frames.height);
+      if (x === null || y === null || width === null || height === null) return null;
+      return roundedRegion(
+        { x: viewportX(x), y: viewportY(y), width: width * frames.scale.x, height: height * frames.scale.y },
+        round,
+      );
     }
     if (name === "circle" || name === "ellipse") {
       const tokens = tokensOf(body);

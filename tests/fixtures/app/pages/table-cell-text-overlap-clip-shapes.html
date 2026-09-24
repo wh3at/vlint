@@ -4,7 +4,7 @@ table { table-layout: fixed; border-spacing: 4px; width: 360px; }
 col:first-child { width: 120px; }
 th, td { padding: 0; height: 40px; vertical-align: top; }
 </style></head><body>
-<svg style="position:absolute;width:0;height:0"><clipPath id="shifted" transform="translate(-300 0)"><rect x="0" y="0" width="240" height="40"/></clipPath><clipPath id="round"><rect x="0" y="0" width="135" height="40" rx="10"/></clipPath><clipPath id="zero"><rect x="0" y="0" width="0%" height="40"/></clipPath><clipPath id="clamped"><rect x="0" y="0" width="240" height="40" rx="120" ry="120"/></clipPath></svg>
+<svg style="position:absolute;width:0;height:0"><clipPath id="shifted" transform="translate(-300 0)"><rect x="0" y="0" width="240" height="40"/></clipPath><clipPath id="round"><rect x="0" y="0" width="135" height="40" rx="10"/></clipPath><clipPath id="zero"><rect x="0" y="0" width="0%" height="40"/></clipPath><clipPath id="obb" clipPathUnits="objectBoundingBox"><rect x="0" y="0" width="100%" height="100%"/></clipPath><clipPath id="clamped"><rect x="0" y="0" width="240" height="40" rx="120" ry="120"/></clipPath></svg>
 <table><colgroup><col><col></colgroup><tbody>
 <tr><td id="round-inset" style="height:80px"><span style="display:block;width:240px;height:80px;clip-path:inset(20px round 999px)"><span style="position:relative;left:190px;top:20px;white-space:nowrap">OverflowingLabel</span></span></td><td id="round-inset-neighbor" style="height:80px">1</td></tr>
 <tr><td id="url-shifted"><span style="display:block;width:240px;height:40px;clip-path:url(#shifted)"><span style="position:relative;left:130px;white-space:nowrap">OverflowingLabel</span></span></td><td id="url-shifted-neighbor">2</td></tr>
@@ -12,4 +12,5 @@ th, td { padding: 0; height: 40px; vertical-align: top; }
 <tr><td id="url-round-rect"><span style="display:block;width:135px;clip-path:url(#round);white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></td><td id="url-round-rect-neighbor">4</td></tr>
 <tr><td id="url-zero-percent"><span style="display:block;width:135px;clip-path:url(#zero);white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></td><td id="url-zero-percent-neighbor">5</td></tr>
 <tr><td id="rx-clamped"><span style="display:block;width:240px;height:40px;clip-path:url(#clamped)"><span style="position:relative;left:200px;top:-13px;font-size:6px;white-space:nowrap">X</span></span></td><td id="rx-clamped-neighbor">6</td></tr>
+<tr><td id="obb-full"><span style="display:block;width:240px;height:40px;clip-path:url(#obb)"><span style="position:relative;left:130px;white-space:nowrap">OverflowingLabel</span></span></td><td id="obb-full-neighbor">7</td></tr>
 </tbody></table></body></html>
