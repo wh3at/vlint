@@ -25,7 +25,8 @@ interface Extraction {
 }
 interface Scale { readonly x: number; readonly y: number }
 interface Region {
-  readonly box: Box;
+  /** The region's rectangle, or null when only the shape itself bounds it. */
+  readonly box: Box | null;
   /** Null when the region is exactly its box; otherwise whether a point is inside the shape. */
   readonly covers: ((x: number, y: number) => boolean) | null;
 }
@@ -156,10 +157,17 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
   }
 
   /** `round` corner radii in element space, reduced so adjacent corners do not overlap. */
-  function cornerRadii(tokens: readonly string[], frames: Frames): { x: number; y: number }[] | null {
+  /**
+   * `round` corner radii: percentages follow the reference box, then the radii shrink
+   * until opposite corners meet on the resulting shape rectangle (CSS border-radius rules).
+   */
+  function cornerRadii(
+    tokens: readonly string[],
+    frames: Frames,
+    shape: { readonly width: number; readonly height: number },
+  ): { x: number; y: number }[] | null {
     const slash = tokens.indexOf("/");
     const horizontal = slash === -1 ? tokens : tokens.slice(0, slash);
-    const vertical = slash === -1 ? tokens : tokens.slice(slash + 1);
     const spread = (parts: readonly string[], base: number) => {
       const values = parts.map((part) => elementLength(part, base));
       if (values.length === 0 || values.some((value) => value === null)) return null;
@@ -167,13 +175,13 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       return [first!, second ?? first!, third ?? first!, fourth ?? second ?? first!];
     };
     const horizontalRadii = spread(horizontal, frames.width);
-    const verticalRadii = slash === -1 ? horizontalRadii : spread(vertical, frames.height);
+    const verticalRadii = spread(slash === -1 ? horizontal : tokens.slice(slash + 1), frames.height);
     if (horizontalRadii === null || verticalRadii === null) return null;
     const edges = [
-      { length: frames.width, sum: horizontalRadii[0]! + horizontalRadii[1]! },
-      { length: frames.width, sum: horizontalRadii[3]! + horizontalRadii[2]! },
-      { length: frames.height, sum: verticalRadii[0]! + verticalRadii[3]! },
-      { length: frames.height, sum: verticalRadii[1]! + verticalRadii[2]! },
+      { length: shape.width, sum: horizontalRadii[0]! + horizontalRadii[1]! },
+      { length: shape.width, sum: horizontalRadii[3]! + horizontalRadii[2]! },
+      { length: shape.height, sum: verticalRadii[0]! + verticalRadii[3]! },
+      { length: shape.height, sum: verticalRadii[1]! + verticalRadii[2]! },
     ];
     const factor = Math.min(1, ...edges.map((edge) => (edge.sum > 0 ? edge.length / edge.sum : Number.POSITIVE_INFINITY)));
     return horizontalRadii.map((radius, index) => ({ x: radius * factor, y: verticalRadii[index]! * factor }));
@@ -206,34 +214,48 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
 
   /** An SVG basic shape as path geometry in its own user space; null when not modelled. */
   function svgShape(element: Element): Path2D | null {
-    const number = (name: string, fallback?: number): number | null => {
+    // Undefined means the attribute is absent; null means the length is not modelled.
+    const number = (name: string): number | null | undefined => {
       const raw = element.getAttribute(name);
-      if (raw === null) return fallback ?? null;
+      if (raw === null) return undefined;
+      // Percentage lengths depend on the SVG viewport, which a clip path need not have.
+      if (raw.trim().endsWith("%")) return null;
       const value = Number.parseFloat(raw);
       return Number.isFinite(value) ? value : null;
     };
+    const or = (name: string, fallback: number) => {
+      const value = number(name);
+      return value === undefined ? fallback : value;
+    };
     const geometry = new Path2D();
     if (element.localName === "rect") {
-      const x = number("x", 0), y = number("y", 0), width = number("width"), height = number("height");
-      if (x === null || y === null || width === null || height === null) return null;
-      geometry.rect(x, y, width, height);
+      const x = or("x", 0), y = or("y", 0), width = number("width"), height = number("height");
+      if (x === null || y === null || width === null || width === undefined || height === null || height === undefined) return null;
+      const rx = number("rx"), ry = number("ry");
+      if (rx === null || ry === null) return null;
+      const radiusX = rx ?? ry ?? 0;
+      const radiusY = ry ?? rx ?? 0;
+      if (radiusX > 0 || radiusY > 0) geometry.roundRect(x, y, width, height, [{ x: radiusX, y: radiusY }]);
+      else geometry.rect(x, y, width, height);
       return geometry;
     }
     if (element.localName === "circle") {
-      const cx = number("cx", 0), cy = number("cy", 0), r = number("r");
-      if (cx === null || cy === null || r === null) return null;
+      const cx = or("cx", 0), cy = or("cy", 0), r = number("r");
+      if (cx === null || cy === null || r === null || r === undefined) return null;
       geometry.arc(cx, cy, r, 0, Math.PI * 2);
       return geometry;
     }
     if (element.localName === "ellipse") {
-      const cx = number("cx", 0), cy = number("cy", 0);
+      const cx = or("cx", 0), cy = or("cy", 0);
       const rx = number("rx"), ry = number("ry");
-      if (cx === null || cy === null || rx === null || ry === null) return null;
+      if (cx === null || cy === null || rx === null || rx === undefined || ry === null || ry === undefined) return null;
       geometry.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
       return geometry;
     }
     if (element.localName === "polygon" || element.localName === "polyline") {
-      const points = (element.getAttribute("points") ?? "").trim().split(/[\s,]+/).map(Number.parseFloat);
+      const raw = element.getAttribute("points") ?? "";
+      if (raw.includes("%")) return null;
+      const points = raw.trim().split(/[\s,]+/).map(Number.parseFloat);
       if (points.length < 4 || points.length % 2 !== 0 || points.some((value) => !Number.isFinite(value))) return null;
       for (let index = 0; index < points.length; index += 2) {
         if (index === 0) geometry.moveTo(points[0]!, points[1]!);
@@ -254,23 +276,32 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     if (clip === null || clip.localName !== "clipPath") return null;
     const context = ink();
     if (context === null) return null;
+    // A transform on the clipPath itself applies to every child. SVG transform syntax
+    // needs the SVG parser, so it is consolidated through a throwaway <g>.
+    const svgMatrix = (value: string | null): DOMMatrix => {
+      if (value === null) return new DOMMatrix();
+      const holder = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      holder.setAttribute("transform", value);
+      const matrix = holder.transform.baseVal.consolidate()?.matrix;
+      return matrix === undefined
+        ? new DOMMatrix()
+        : new DOMMatrix([matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f]);
+    };
+    const group = svgMatrix(clip.getAttribute("transform"));
     const shapes: { readonly path: Path2D; readonly evenOdd: boolean }[] = [];
     for (const child of clip.children) {
       if (["title", "desc", "metadata"].includes(child.localName)) continue;
       const path = svgShape(child);
       if (path === null) return null;
-      const transform = (child as SVGGraphicsElement).transform?.baseVal.consolidate()?.matrix;
       const matrix = new Path2D();
-      matrix.addPath(path, transform === undefined ? undefined : new DOMMatrix([
-        transform.a, transform.b, transform.c, transform.d, transform.e, transform.f,
-      ]));
+      matrix.addPath(path, group.multiply(svgMatrix(child.getAttribute("transform"))));
       const style = getComputedStyle(child) as CSSStyleDeclaration & { readonly clipRule?: string };
       shapes.push({ path: matrix, evenOdd: style.clipRule === "evenodd" || child.getAttribute("fill-rule") === "evenodd" });
     }
     if (shapes.length === 0) return null;
     const bounding = clip.getAttribute("clipPathUnits") === "objectBoundingBox";
     return {
-      box: frames.bounds,
+      box: null,
       covers: (x, y) => {
         const left = bounding ? (x - frames.bounds.x) / frames.bounds.width : (x - frames.bounds.x) / frames.scale.x;
         const top = bounding ? (y - frames.bounds.y) / frames.bounds.height : (y - frames.bounds.y) / frames.scale.y;
@@ -297,33 +328,39 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
         round: round === null ? null : tokensOf(round[1]!),
       };
     };
-    if (name === "inset") {
-      const { sides, round } = sidesOf(body);
-      const top = elementLength(sides[0], frames.height);
-      const right = elementLength(sides[1] ?? sides[0], frames.width);
-      const bottom = elementLength(sides[2] ?? sides[0], frames.height);
-      const left = elementLength(sides[3] ?? sides[1] ?? sides[0], frames.width);
-      if (top === null || right === null || bottom === null || left === null) return null;
-      const box: Box = {
-        x: viewportX(left), y: viewportY(top),
-        width: (frames.width - left - right) * frames.scale.x,
-        height: (frames.height - top - bottom) * frames.scale.y,
-      };
+    const roundedRegion = (box: Box, round: readonly string[] | null): Region | null => {
       if (round === null) return { box, covers: null };
-      const radii = cornerRadii(round, frames);
+      const radii = cornerRadii(round, frames, { width: box.width / frames.scale.x, height: box.height / frames.scale.y });
       return radii === null ? null : { box, covers: roundedCovers(box, viewportRadii(radii)) };
-    }
-    if (name === "xywh") {
+    };
+    if (name === "inset" || name === "xywh") {
       const { sides, round } = sidesOf(body);
-      const x = elementLength(sides[0], frames.width);
-      const y = elementLength(sides[1], frames.height);
-      const width = elementLength(sides[2], frames.width);
-      const height = elementLength(sides[3], frames.height);
-      if (x === null || y === null || width === null || height === null) return null;
-      const box: Box = { x: viewportX(x), y: viewportY(y), width: width * frames.scale.x, height: height * frames.scale.y };
-      if (round === null) return { box, covers: null };
-      const radii = cornerRadii(round, frames);
-      return radii === null ? null : { box, covers: roundedCovers(box, viewportRadii(radii)) };
+      const lengths = name === "inset"
+        ? [
+            elementLength(sides[3] ?? sides[1] ?? sides[0], frames.width),
+            elementLength(sides[0], frames.height),
+            elementLength(sides[1] ?? sides[0], frames.width),
+            elementLength(sides[2] ?? sides[0], frames.height),
+          ]
+        : [
+            elementLength(sides[0], frames.width),
+            elementLength(sides[1], frames.height),
+            elementLength(sides[2], frames.width),
+            elementLength(sides[3], frames.height),
+          ];
+      if (lengths.some((length) => length === null)) return null;
+      const [first, second, third, fourth] = lengths as number[];
+      const box: Box = name === "inset"
+        ? {
+            x: viewportX(first!), y: viewportY(second!),
+            width: (frames.width - first! - third!) * frames.scale.x,
+            height: (frames.height - second! - fourth!) * frames.scale.y,
+          }
+        : {
+            x: viewportX(first!), y: viewportY(second!),
+            width: third! * frames.scale.x, height: fourth! * frames.scale.y,
+          };
+      return roundedRegion(box, round);
     }
     if (name === "circle" || name === "ellipse") {
       const tokens = tokensOf(body);
@@ -377,7 +414,7 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       let inkPath: Path2D;
       try { inkPath = new Path2D(data); } catch { return null; }
       return {
-        box: frames.bounds,
+        box: null,
         covers: (x, y) => context.isPointInPath(
           inkPath, (x - frames.bounds.x) / frames.scale.x, (y - frames.bounds.y) / frames.scale.y),
       };
@@ -473,7 +510,7 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       // that is not modelled leaves the rectangle alone rather than guessing.
       const region = clipRegion(clipPath, framesOf(ancestor, bounds));
       if (region !== null) {
-        next = intersect(next, region.box);
+        next = region.box === null ? next : intersect(next, region.box);
         if (next === null) return null;
         visible = { box: next, shapes: region.covers === null ? visible.shapes : [...visible.shapes, region.covers] };
       } else {

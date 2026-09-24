@@ -242,13 +242,15 @@ in the same table/grid, including cells across a `rowspan` or a row boundary.
 The check measures `Range.getClientRects()` after layout and clips fragments
 against applicable ancestor overflow, paint containment, the viewport, and the
 `clip-path` shapes `inset()`, `xywh()`, `circle()`, `ellipse()`, `polygon()`,
-including the `closest-side`/`farthest-side` radius keywords, `round` corners with
-CSS radius normalisation, `path("...")`, and `url(#id)` references built from SVG
-`rect`, `circle`, `ellipse`, `polygon`, `polyline`, and `path` shapes. An ancestor
-`transform` scales the overflow and `clip-path` bounds to match the rendered text.
-A non-rectangular shape is sampled on a grid of at most four CSS pixels, so a partly
-clipped fragment is reported only where that shape still shows it. Text that wraps
-inside its cell or is hidden by
+including the `closest-side`/`farthest-side` radius keywords, `round` corners normalised
+against the resulting rectangle, `path("...")`, and `url(#id)` references built from SVG
+`rect` (including `rx`/`ry`), `circle`, `ellipse`, `polygon`, `polyline`, and `path` shapes
+with their own transforms and `clipPathUnits`. An ancestor `transform` scales the
+overflow and `clip-path` bounds to match the rendered text. A non-rectangular shape is
+sampled on a grid of at most four CSS pixels, capped at 64 samples per axis, so a partly
+clipped fragment is reported only where that shape still shows it. `clip-path` values
+that name an unmodelled shape, or an SVG shape with percentage lengths, are ignored
+rather than treated as empty. Text that wraps inside its cell or is hidden by
 `overflow: hidden`, ellipsis, or an internal scroller is not reported.
 Elements marked `[role="tooltip"]`, `[role="dialog"]`, or `[popover]`, icons,
 and generated pseudo-element text are not measured; unmarked positioned body

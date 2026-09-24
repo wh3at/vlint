@@ -99,6 +99,24 @@ test("transformed and shaped clips decide the visible text", async () => {
   ]);
 });
 
+test("clip-path references and normalised corners decide the visible text", async () => {
+  const result = await runCheckCommand(directory, `${server.url}/table-cell-text-overlap-clip-shapes.html`, {}, "test");
+  const narrow = result.cases.find((item) => item.device.name === "390")!;
+  expect(narrow.status).toBe("complete");
+  expect(narrow.rules.find((rule) => rule.type === "page-horizontal-overflow")?.violations).toEqual([]);
+  const violations = narrow.rules.find((rule) => rule.type === "table-cell-text-overlap")?.violations ?? [];
+  expect(violations.filter((item) => item.type === "table-cell-text-overlap")
+    .map((item) => [item.locator, item.adjacentLocator])).toEqual([
+    ["#round-inset", "#round-inset-neighbor"],
+    ["#path-wide", "#path-wide-neighbor"],
+    ["#url-round-rect", "#url-round-rect-neighbor"],
+  ]);
+  // Corner radii shrink against the inset rectangle, not the element box, so more of
+  // the clipped text stays visible than a 40px radius would allow.
+  const rounded = violations.find((item) => item.locator === "#round-inset");
+  expect(rounded?.type === "table-cell-text-overlap" && rounded.overlapPx).toBeGreaterThan(25);
+});
+
 test("checks 1,000 rows without scanning every cell against every other cell", async () => {
   const browser = await chromium.launch();
   try {
