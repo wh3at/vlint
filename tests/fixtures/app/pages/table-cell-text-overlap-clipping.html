@@ -3,7 +3,9 @@ body { margin: 0; font: 16px Arial; }
 table { table-layout: fixed; border-spacing: 4px; width: 360px; }
 col:first-child { width: 120px; }
 th, td { padding: 0; height: 40px; vertical-align: top; }
-</style></head><body><table><colgroup><col><col></colgroup><tbody>
+</style></head><body>
+<svg style="position:absolute;width:0;height:0"><clipPath id="tiny"><rect x="0" y="0" width="10" height="10"/></clipPath><clipPath id="wide"><rect x="0" y="0" width="135" height="40"/></clipPath></svg>
+<table><colgroup><col><col></colgroup><tbody>
 <tr><td id="scaled-down"><span style="display:block;width:240px;overflow:hidden;transform:scale(0.5);transform-origin:top left;white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></td><td id="scaled-down-neighbor">1</td></tr>
 <tr><td id="polygon-hidden"><span style="display:block;width:135px;clip-path:polygon(0 0,0 0,0 0);white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></td><td id="polygon-hidden-neighbor">2</td></tr>
 <tr><td id="polygon-away"><span style="display:block;width:135px;height:40px;clip-path:polygon(0 0,100% 0,0 100%)"><span style="position:relative;left:110px;top:26px;white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></span></td><td id="polygon-away-neighbor">3</td></tr>
@@ -11,4 +13,12 @@ th, td { padding: 0; height: 40px; vertical-align: top; }
 <tr><td id="ellipse-hidden"><span style="display:block;width:135px;height:40px;clip-path:ellipse(40px 8px at 50% 50%)"><span style="position:relative;left:110px;top:30px;white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></span></td><td id="ellipse-hidden-neighbor">5</td></tr>
 <tr><td id="rounded-edge"><span style="display:block;width:135px;height:40px;clip-path:inset(0 round 8px)"><span style="position:relative;left:110px;white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></span></td><td id="rounded-edge-neighbor">6</td></tr>
 <tr><td id="scaled-up"><span style="display:block;width:120px;overflow:hidden;transform:scale(2);transform-origin:top left;white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></td><td id="scaled-up-neighbor">7</td></tr>
+<tr><td id="circle-default"><span style="display:block;width:360px;height:40px;clip-path:circle()"><span style="position:relative;left:170px;white-space:nowrap">OverflowingLabel</span></span></td><td id="circle-default-neighbor">8</td></tr>
+<tr><td id="ellipse-default"><span style="display:block;width:360px;height:40px;clip-path:ellipse()"><span style="position:relative;left:170px;white-space:nowrap">OverflowingLabel</span></span></td><td id="ellipse-default-neighbor">9</td></tr>
+<tr><td id="round-inflated"><span style="display:block;width:240px;height:40px;clip-path:inset(0 round 999px)"><span style="position:relative;left:130px;white-space:nowrap">OverflowingLabel</span></span></td><td id="round-inflated-neighbor">10</td></tr>
+<tr><td id="path-hidden"><span style="display:block;width:135px;clip-path:path('M 0 0 L 0 40 Z');white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></td><td id="path-hidden-neighbor">11</td></tr>
+<tr><td id="path-visible"><span style="display:block;width:200px;height:40px;clip-path:path('M 0 0 L 200 0 L 200 40 L 0 40 Z')"><span style="position:relative;left:110px;white-space:nowrap">OverflowingLabel</span></span></td><td id="path-visible-neighbor">12</td></tr>
+<tr><td id="url-hidden"><span style="display:block;width:135px;clip-path:url(#tiny);white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></td><td id="url-hidden-neighbor">13</td></tr>
+<tr><td id="url-visible"><span style="display:block;width:135px;clip-path:url(#wide);white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></td><td id="url-visible-neighbor">14</td></tr>
+<tr><td id="triangle-tall" style="height:80px"><span style="display:block;width:240px;height:80px;clip-path:polygon(0 0,240px 0,0 80px)"><span style="position:relative;top:64px;white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></span></td><td id="triangle-tall-neighbor" style="height:80px">15</td></tr>
 </tbody></table></body></html>

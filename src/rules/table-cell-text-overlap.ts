@@ -29,6 +29,11 @@ interface Region {
   /** Null when the region is exactly its box; otherwise whether a point is inside the shape. */
   readonly covers: ((x: number, y: number) => boolean) | null;
 }
+interface Visible {
+  readonly box: Box;
+  /** Ancestor shapes the box must still be inside; empty when every clip was rectangular. */
+  readonly shapes: readonly ((x: number, y: number) => boolean)[];
+}
 
 function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
   excludeSelectors: readonly string[];
@@ -82,7 +87,8 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     return getComputedStyle(element).display === "contents" || element.getClientRects().length > 0;
   }
   // `clip-path` and overflow lengths are element-space, so a transformed ancestor
-  // paints them scaled. Resolve them against the rendered border box.
+  // paints them scaled. Shapes resolve in element space and map back through the
+  // rendered border box, so a scale changes the clip exactly as it changes text.
   function scaleOf(element: Element, bounds: Box): Scale {
     const layout = element as HTMLElement;
     return {
@@ -91,11 +97,33 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     };
   }
 
-  /** One length of a `clip-path`: percentages use the rendered box, CSS lengths are scaled. */
-  function length(part: string | undefined, size: number, scale: number): number {
-    const value = Number.parseFloat(part ?? "");
-    if (!Number.isFinite(value)) return 0;
-    return (part ?? "").trim().endsWith("%") ? value * size / 100 : value * scale;
+  interface Frames {
+    readonly bounds: Box;
+    readonly scale: Scale;
+    /** The border box in element space, where `clip-path` lengths are written. */
+    readonly width: number;
+    readonly height: number;
+  }
+
+  function framesOf(element: Element, bounds: Box): Frames {
+    const scale = scaleOf(element, bounds);
+    return { bounds, scale, width: bounds.width / scale.x, height: bounds.height / scale.y };
+  }
+
+  /** One element-space length, or null when CSS wrote a keyword instead. */
+  function elementLength(part: string | undefined, base: number): number | null {
+    const text = (part ?? "").trim();
+    const value = Number.parseFloat(text);
+    if (!Number.isFinite(value)) return null;
+    return text.endsWith("%") ? value * base / 100 : value;
+  }
+
+  /** An `<ellipse>`/`<circle>` radius, including the `closest-side`/`farthest-side` keywords. */
+  function radiusOf(part: string | undefined, base: number, centre: number): number | null {
+    const text = (part ?? "").trim();
+    if (text === "closest-side") return Math.min(centre, base - centre);
+    if (text === "farthest-side") return Math.max(centre, base - centre);
+    return elementLength(part, base);
   }
 
   function ellipseRegion(cx: number, cy: number, rx: number, ry: number): Region {
@@ -127,46 +155,141 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     };
   }
 
-  function roundedCovers(box: Box, radii: readonly number[]) {
+  /** `round` corner radii in element space, reduced so adjacent corners do not overlap. */
+  function cornerRadii(tokens: readonly string[], frames: Frames): { x: number; y: number }[] | null {
+    const slash = tokens.indexOf("/");
+    const horizontal = slash === -1 ? tokens : tokens.slice(0, slash);
+    const vertical = slash === -1 ? tokens : tokens.slice(slash + 1);
+    const spread = (parts: readonly string[], base: number) => {
+      const values = parts.map((part) => elementLength(part, base));
+      if (values.length === 0 || values.some((value) => value === null)) return null;
+      const [first, second, third, fourth] = values as number[];
+      return [first!, second ?? first!, third ?? first!, fourth ?? second ?? first!];
+    };
+    const horizontalRadii = spread(horizontal, frames.width);
+    const verticalRadii = slash === -1 ? horizontalRadii : spread(vertical, frames.height);
+    if (horizontalRadii === null || verticalRadii === null) return null;
+    const edges = [
+      { length: frames.width, sum: horizontalRadii[0]! + horizontalRadii[1]! },
+      { length: frames.width, sum: horizontalRadii[3]! + horizontalRadii[2]! },
+      { length: frames.height, sum: verticalRadii[0]! + verticalRadii[3]! },
+      { length: frames.height, sum: verticalRadii[1]! + verticalRadii[2]! },
+    ];
+    const factor = Math.min(1, ...edges.map((edge) => (edge.sum > 0 ? edge.length / edge.sum : Number.POSITIVE_INFINITY)));
+    return horizontalRadii.map((radius, index) => ({ x: radius * factor, y: verticalRadii[index]! * factor }));
+  }
+
+  function roundedCovers(box: Box, radii: readonly { x: number; y: number }[]) {
     const corners = [
-      { x: box.x + radii[0]!, y: box.y + radii[0]!, radius: radii[0]!, left: true, top: true },
-      { x: box.x + box.width - radii[1]!, y: box.y + radii[1]!, radius: radii[1]!, left: false, top: true },
-      { x: box.x + box.width - radii[2]!, y: box.y + box.height - radii[2]!, radius: radii[2]!, left: false, top: false },
-      { x: box.x + radii[3]!, y: box.y + box.height - radii[3]!, radius: radii[3]!, left: true, top: false },
+      { cx: box.x + radii[0]!.x, cy: box.y + radii[0]!.y, rx: radii[0]!.x, ry: radii[0]!.y, left: true, top: true },
+      { cx: box.x + box.width - radii[1]!.x, cy: box.y + radii[1]!.y, rx: radii[1]!.x, ry: radii[1]!.y, left: false, top: true },
+      { cx: box.x + box.width - radii[2]!.x, cy: box.y + box.height - radii[2]!.y, rx: radii[2]!.x, ry: radii[2]!.y, left: false, top: false },
+      { cx: box.x + radii[3]!.x, cy: box.y + box.height - radii[3]!.y, rx: radii[3]!.x, ry: radii[3]!.y, left: true, top: false },
     ];
     return (x: number, y: number) => {
       if (x < box.x || x > box.x + box.width || y < box.y || y > box.y + box.height) return false;
       for (const corner of corners) {
-        if (!(corner.radius > 0)) continue;
-        if ((corner.left ? x < corner.x : x > corner.x) && (corner.top ? y < corner.y : y > corner.y) &&
-            Math.hypot(x - corner.x, y - corner.y) > corner.radius) return false;
+        if (!(corner.rx > 0 && corner.ry > 0)) continue;
+        if ((corner.left ? x < corner.cx : x > corner.cx) && (corner.top ? y < corner.cy : y > corner.cy) &&
+            ((x - corner.cx) / corner.rx) ** 2 + ((y - corner.cy) / corner.ry) ** 2 > 1) return false;
       }
       return true;
     };
   }
 
-  /** `inset()`, `circle()`, `ellipse()`, `polygon()` and `xywh()`; null when not modelled. */
-  function clipRegion(value: string, bounds: Box, scale: Scale): Region | null {
+  let inkContext: CanvasRenderingContext2D | null | undefined;
+  /** A 2D context used only to answer point-in-path questions about `clip-path`. */
+  function ink(): CanvasRenderingContext2D | null {
+    if (inkContext === undefined) inkContext = document.createElement("canvas").getContext("2d");
+    return inkContext;
+  }
+
+  /** An SVG basic shape as path geometry in its own user space; null when not modelled. */
+  function svgShape(element: Element): Path2D | null {
+    const number = (name: string, fallback?: number): number | null => {
+      const raw = element.getAttribute(name);
+      if (raw === null) return fallback ?? null;
+      const value = Number.parseFloat(raw);
+      return Number.isFinite(value) ? value : null;
+    };
+    const geometry = new Path2D();
+    if (element.localName === "rect") {
+      const x = number("x", 0), y = number("y", 0), width = number("width"), height = number("height");
+      if (x === null || y === null || width === null || height === null) return null;
+      geometry.rect(x, y, width, height);
+      return geometry;
+    }
+    if (element.localName === "circle") {
+      const cx = number("cx", 0), cy = number("cy", 0), r = number("r");
+      if (cx === null || cy === null || r === null) return null;
+      geometry.arc(cx, cy, r, 0, Math.PI * 2);
+      return geometry;
+    }
+    if (element.localName === "ellipse") {
+      const cx = number("cx", 0), cy = number("cy", 0);
+      const rx = number("rx"), ry = number("ry");
+      if (cx === null || cy === null || rx === null || ry === null) return null;
+      geometry.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      return geometry;
+    }
+    if (element.localName === "polygon" || element.localName === "polyline") {
+      const points = (element.getAttribute("points") ?? "").trim().split(/[\s,]+/).map(Number.parseFloat);
+      if (points.length < 4 || points.length % 2 !== 0 || points.some((value) => !Number.isFinite(value))) return null;
+      for (let index = 0; index < points.length; index += 2) {
+        if (index === 0) geometry.moveTo(points[0]!, points[1]!);
+        else geometry.lineTo(points[index]!, points[index + 1]!);
+      }
+      if (element.localName === "polygon") geometry.closePath();
+      return geometry;
+    }
+    if (element.localName === "path") {
+      try { return new Path2D(element.getAttribute("d") ?? ""); } catch { return null; }
+    }
+    return null;
+  }
+
+  /** A `url(#id)` clip-path as path geometry, evaluated in the clip element's user space. */
+  function referencedClip(id: string, frames: Frames): Region | null {
+    const clip = document.getElementById(id);
+    if (clip === null || clip.localName !== "clipPath") return null;
+    const context = ink();
+    if (context === null) return null;
+    const shapes: { readonly path: Path2D; readonly evenOdd: boolean }[] = [];
+    for (const child of clip.children) {
+      if (["title", "desc", "metadata"].includes(child.localName)) continue;
+      const path = svgShape(child);
+      if (path === null) return null;
+      const transform = (child as SVGGraphicsElement).transform?.baseVal.consolidate()?.matrix;
+      const matrix = new Path2D();
+      matrix.addPath(path, transform === undefined ? undefined : new DOMMatrix([
+        transform.a, transform.b, transform.c, transform.d, transform.e, transform.f,
+      ]));
+      const style = getComputedStyle(child) as CSSStyleDeclaration & { readonly clipRule?: string };
+      shapes.push({ path: matrix, evenOdd: style.clipRule === "evenodd" || child.getAttribute("fill-rule") === "evenodd" });
+    }
+    if (shapes.length === 0) return null;
+    const bounding = clip.getAttribute("clipPathUnits") === "objectBoundingBox";
+    return {
+      box: frames.bounds,
+      covers: (x, y) => {
+        const left = bounding ? (x - frames.bounds.x) / frames.bounds.width : (x - frames.bounds.x) / frames.scale.x;
+        const top = bounding ? (y - frames.bounds.y) / frames.bounds.height : (y - frames.bounds.y) / frames.scale.y;
+        return shapes.some((shape) => context.isPointInPath(shape.path, left, top, shape.evenOdd ? "evenodd" : "nonzero"));
+      },
+    };
+  }
+
+  /** `inset()`, `xywh()`, `circle()`, `ellipse()`, `polygon()`, `path()` and `url()`; null when not modelled. */
+  function clipRegion(value: string, frames: Frames): Region | null {
     const shape = /^([a-z-]+)\(([\s\S]*)\)$/.exec(value.trim());
     if (shape === null) return null;
     const name = shape[1]!;
     const body = shape[2]!.trim();
     const tokensOf = (text: string) => text.trim().split(/\s+/).filter((part) => part.length > 0);
-    const centerOf = (tokens: readonly string[]) => {
-      const position = tokens.length >= 2 ? tokens : ["50%", "50%"];
-      return {
-        x: bounds.x + length(position[0], bounds.width, scale.x),
-        y: bounds.y + length(position[1], bounds.height, scale.y),
-      };
-    };
-    const cornerRadii = (radii: readonly string[]) => {
-      const radius = (part: string | undefined) =>
-        Math.min(length(part, bounds.width, scale.x), length(part, bounds.height, scale.y));
-      return [
-        radius(radii[0]), radius(radii[1] ?? radii[0]),
-        radius(radii[2] ?? radii[0]), radius(radii[3] ?? radii[1] ?? radii[0]),
-      ];
-    };
+    const viewportX = (length: number) => frames.bounds.x + length * frames.scale.x;
+    const viewportY = (length: number) => frames.bounds.y + length * frames.scale.y;
+    const viewportRadii = (radii: readonly { x: number; y: number }[]) =>
+      radii.map((radius) => ({ x: radius.x * frames.scale.x, y: radius.y * frames.scale.y }));
     const sidesOf = (text: string) => {
       const round = /(?:^|\s)round\s+([\s\S]+)$/.exec(text);
       return {
@@ -174,38 +297,65 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
         round: round === null ? null : tokensOf(round[1]!),
       };
     };
-    if (name === "inset" || name === "xywh") {
+    if (name === "inset") {
       const { sides, round } = sidesOf(body);
-      const top = length(sides[0], bounds.height, scale.y);
-      const right = length(sides[1] ?? sides[0], bounds.width, scale.x);
-      const box: Box = name === "inset"
-        ? {
-            x: bounds.x + length(sides[3] ?? sides[1] ?? sides[0], bounds.width, scale.x),
-            y: bounds.y + top,
-            width: bounds.width - length(sides[3] ?? sides[1] ?? sides[0], bounds.width, scale.x) - right,
-            height: bounds.height - top - length(sides[2] ?? sides[0], bounds.height, scale.y),
-          }
-        : {
-            x: bounds.x + length(sides[0], bounds.width, scale.x),
-            y: bounds.y + length(sides[1], bounds.height, scale.y),
-            width: length(sides[2], bounds.width, scale.x),
-            height: length(sides[3], bounds.height, scale.y),
-          };
-      return round === null ? { box, covers: null } : { box, covers: roundedCovers(box, cornerRadii(round)) };
+      const top = elementLength(sides[0], frames.height);
+      const right = elementLength(sides[1] ?? sides[0], frames.width);
+      const bottom = elementLength(sides[2] ?? sides[0], frames.height);
+      const left = elementLength(sides[3] ?? sides[1] ?? sides[0], frames.width);
+      if (top === null || right === null || bottom === null || left === null) return null;
+      const box: Box = {
+        x: viewportX(left), y: viewportY(top),
+        width: (frames.width - left - right) * frames.scale.x,
+        height: (frames.height - top - bottom) * frames.scale.y,
+      };
+      if (round === null) return { box, covers: null };
+      const radii = cornerRadii(round, frames);
+      return radii === null ? null : { box, covers: roundedCovers(box, viewportRadii(radii)) };
+    }
+    if (name === "xywh") {
+      const { sides, round } = sidesOf(body);
+      const x = elementLength(sides[0], frames.width);
+      const y = elementLength(sides[1], frames.height);
+      const width = elementLength(sides[2], frames.width);
+      const height = elementLength(sides[3], frames.height);
+      if (x === null || y === null || width === null || height === null) return null;
+      const box: Box = { x: viewportX(x), y: viewportY(y), width: width * frames.scale.x, height: height * frames.scale.y };
+      if (round === null) return { box, covers: null };
+      const radii = cornerRadii(round, frames);
+      return radii === null ? null : { box, covers: roundedCovers(box, viewportRadii(radii)) };
     }
     if (name === "circle" || name === "ellipse") {
       const tokens = tokensOf(body);
       const split = tokens.indexOf("at");
       const radii = split === -1 ? tokens : tokens.slice(0, split);
-      const center = centerOf(split === -1 ? [] : tokens.slice(split + 1));
-      const coordinate = (part: string | undefined, size: number, scale: number) => Math.max(length(part, size, scale), 0);
-      if (name === "ellipse") {
-        return ellipseRegion(center.x, center.y,
-          coordinate(radii[0] ?? "0%", bounds.width, scale.x), coordinate(radii[1] ?? "0%", bounds.height, scale.y));
+      const centreTokens = split === -1 ? [] : tokens.slice(split + 1);
+      const centre = (index: number) => {
+        const part = centreTokens[index] ?? "50%";
+        return part === "center"
+          ? (index === 0 ? frames.width : frames.height) / 2
+          : elementLength(part, index === 0 ? frames.width : frames.height);
+      };
+      const cx = centre(0);
+      const cy = centre(1);
+      if (cx === null || cy === null) return null;
+      if (name === "circle") {
+        const token = (radii[0] ?? "").trim();
+        const percent = Number.parseFloat(token);
+        const resolved = token === "farthest-side"
+          ? Math.max(cx, frames.width - cx, cy, frames.height - cy)
+          : token === "" || token === "closest-side"
+            ? Math.min(cx, frames.width - cx, cy, frames.height - cy)
+            : token.endsWith("%")
+              ? (Number.isFinite(percent) ? percent * Math.hypot(frames.width, frames.height) / Math.SQRT2 / 100 : null)
+              : elementLength(radii[0], frames.height);
+        if (resolved === null || !(resolved >= 0)) return null;
+        return ellipseRegion(viewportX(cx), viewportY(cy), resolved * frames.scale.x, resolved * frames.scale.y);
       }
-      const part = radii[0] ?? "0";
-      const radius = coordinate(part, Math.hypot(bounds.width, bounds.height) / Math.SQRT2, (scale.x + scale.y) / 2);
-      return ellipseRegion(center.x, center.y, radius, radius);
+      const rx = radii[0] === undefined ? Math.min(cx, frames.width - cx) : radiusOf(radii[0], frames.width, cx);
+      const ry = radii[1] === undefined ? Math.min(cy, frames.height - cy) : radiusOf(radii[1], frames.height, cy);
+      if (rx === null || ry === null || !(rx >= 0) || !(ry >= 0)) return null;
+      return ellipseRegion(viewportX(cx), viewportY(cy), rx * frames.scale.x, ry * frames.scale.y);
     }
     if (name === "polygon") {
       const points = body
@@ -214,25 +364,64 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
         .map((pair) => tokensOf(pair))
         .filter((pair) => pair.length >= 2)
         .map((pair) => ({
-          x: bounds.x + length(pair[0], bounds.width, scale.x),
-          y: bounds.y + length(pair[1], bounds.height, scale.y),
+          x: elementLength(pair[0], frames.width),
+          y: elementLength(pair[1], frames.height),
         }));
-      return points.length >= 3 ? polygonRegion(points) : null;
+      if (points.length < 3 || points.some((point) => point.x === null || point.y === null)) return null;
+      return polygonRegion(points.map((point) => ({ x: viewportX(point.x!), y: viewportY(point.y!) })));
+    }
+    if (name === "path") {
+      const context = ink();
+      if (context === null) return null;
+      const data = body.replace(/^(["'])([\s\S]*)\1$/, "$2");
+      let inkPath: Path2D;
+      try { inkPath = new Path2D(data); } catch { return null; }
+      return {
+        box: frames.bounds,
+        covers: (x, y) => context.isPointInPath(
+          inkPath, (x - frames.bounds.x) / frames.scale.x, (y - frames.bounds.y) / frames.scale.y),
+      };
+    }
+    if (name === "url") {
+      const reference = /^["']?#([^"')\s]+)["']?$/.exec(body);
+      return reference === null ? null : referencedClip(reference[1]!, frames);
     }
     return null;
   }
 
-  /** Non-rectangular shapes are decided by sampling the surviving box. */
-  function anyInside(covers: (x: number, y: number) => boolean, rect: Box): boolean {
-    for (let column = 0; column < 5; column++) {
-      for (let row = 0; row < 3; row++) {
-        if (covers(rect.x + rect.width * (column + 0.5) / 5, rect.y + rect.height * (row + 0.5) / 3)) return true;
+  /**
+   * The part of an overlap box that a non-rectangular clip still shows. Sampled on a grid
+   * of at most four CSS pixels, then grown half a step so a thin sliver stays measurable.
+   */
+  function shapeOverlap(covers: readonly ((x: number, y: number) => boolean)[], rect: Box): Box | null {
+    const columns = Math.max(2, Math.min(64, Math.ceil(rect.width / 4)));
+    const rows = Math.max(2, Math.min(64, Math.ceil(rect.height / 4)));
+    const stepX = rect.width / columns;
+    const stepY = rect.height / rows;
+    let left = Number.POSITIVE_INFINITY, top = Number.POSITIVE_INFINITY;
+    let right = Number.NEGATIVE_INFINITY, bottom = Number.NEGATIVE_INFINITY;
+    for (let column = 0; column < columns; column++) {
+      for (let row = 0; row < rows; row++) {
+        const x = rect.x + stepX * (column + 0.5);
+        const y = rect.y + stepY * (row + 0.5);
+        if (!covers.every((cover) => cover(x, y))) continue;
+        left = Math.min(left, x); right = Math.max(right, x);
+        top = Math.min(top, y); bottom = Math.max(bottom, y);
       }
     }
-    return false;
+    if (!Number.isFinite(left)) return null;
+    const x = Math.max(rect.x, left - stepX / 2);
+    const y = Math.max(rect.y, top - stepY / 2);
+    return {
+      x, y,
+      width: Math.min(rect.x + rect.width, right + stepX / 2) - x,
+      height: Math.min(rect.y + rect.height, bottom + stepY / 2) - y,
+    };
   }
-  function visibleRect(rect: Box, parent: Element): Box | null {
-    let visible: Box | null = intersect(rect, { x: 0, y: 0, width: innerWidth, height: innerHeight });
+  function visibleRegion(rect: Box, parent: Element): Visible | null {
+    let visible: Visible | null = null;
+    const viewport = intersect(rect, { x: 0, y: 0, width: innerWidth, height: innerHeight });
+    if (viewport !== null) visible = { box: viewport, shapes: [] };
     let positioned: Element | null = null;
     let containingBlock: Element | null = null;
     for (let ancestor: Element | null = parent; ancestor !== null; ancestor = ancestor.parentElement) {
@@ -266,23 +455,29 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       if (!clipHorizontal && !clipVertical && clipPath === "none") continue;
       const bounds = box(ancestor.getBoundingClientRect());
       const scale = scaleOf(ancestor, bounds);
+      let next: Box | null = visible.box;
       if (clipHorizontal || clipVertical) {
         const clip = {
           x: bounds.x + ancestor.clientLeft * scale.x, y: bounds.y + ancestor.clientTop * scale.y,
           width: ancestor.clientWidth * scale.x, height: ancestor.clientHeight * scale.y,
         };
-        visible = intersect(visible, {
-          x: clipHorizontal ? clip.x : visible.x,
-          y: clipVertical ? clip.y : visible.y,
-          width: clipHorizontal ? clip.width : visible.width,
-          height: clipVertical ? clip.height : visible.height,
+        next = intersect(next, {
+          x: clipHorizontal ? clip.x : next.x,
+          y: clipVertical ? clip.y : next.y,
+          width: clipHorizontal ? clip.width : next.width,
+          height: clipVertical ? clip.height : next.height,
         });
+        if (next === null) return null;
       }
-      // Range geometry ignores `clip-path`, so the shape decides on its own.
-      const region = clipRegion(clipPath, bounds, scale);
-      if (region !== null && visible !== null) {
-        const clipped = intersect(visible, region.box);
-        visible = clipped === null || (region.covers !== null && !anyInside(region.covers, clipped)) ? null : clipped;
+      // Range geometry ignores `clip-path`, so the shape decides on its own. A shape
+      // that is not modelled leaves the rectangle alone rather than guessing.
+      const region = clipRegion(clipPath, framesOf(ancestor, bounds));
+      if (region !== null) {
+        next = intersect(next, region.box);
+        if (next === null) return null;
+        visible = { box: next, shapes: region.covers === null ? visible.shapes : [...visible.shapes, region.covers] };
+      } else {
+        visible = { box: next, shapes: visible.shapes };
       }
     }
     return visible;
@@ -392,17 +587,16 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
         range.setEnd(text, match.index + match[0].length);
         for (const fragment of range.getClientRects()) {
           if (fragment.width <= 0 || fragment.height <= 0) continue;
-          const visible = visibleRect(box(fragment), parent);
+          const visible = visibleRegion(box(fragment), parent);
           if (visible === null) continue;
           for (const { element, rect, direction } of neighbors) {
-            if (intersect(visible, rect) === null) continue;
-            const distance = direction === "right"
-              ? Math.min(visible.x + visible.width - rect.x, rect.width)
-              : direction === "left"
-                ? Math.min(rect.x + rect.width - visible.x, rect.width)
-                : direction === "below"
-                  ? Math.min(visible.y + visible.height - rect.y, rect.height)
-                  : Math.min(rect.y + rect.height - visible.y, rect.height);
+            const overlap = intersect(visible.box, rect);
+            if (overlap === null) continue;
+            // The shape decides inside the overlap too, so a clipped corner cannot
+            // report a neighbour the visible sliver never reaches.
+            const shown = visible.shapes.length === 0 ? overlap : shapeOverlap(visible.shapes, overlap);
+            if (shown === null) continue;
+            const distance = direction === "right" || direction === "left" ? shown.width : shown.height;
             breaches.set(element, Math.max(breaches.get(element) ?? 0, distance));
           }
         }

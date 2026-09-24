@@ -91,6 +91,11 @@ test("transformed and shaped clips decide the visible text", async () => {
     .map((item) => [item.locator, item.adjacentLocator])).toEqual([
     ["#rounded-edge", "#rounded-edge-neighbor"],
     ["#scaled-up", "#scaled-up-neighbor"],
+    ["#circle-default", "#circle-default-neighbor"],
+    ["#ellipse-default", "#ellipse-default-neighbor"],
+    ["#round-inflated", "#round-inflated-neighbor"],
+    ["#path-visible", "#path-visible-neighbor"],
+    ["#url-visible", "#url-visible-neighbor"],
   ]);
 });
 
