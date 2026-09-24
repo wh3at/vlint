@@ -81,6 +81,19 @@ test("detects painted glyphs across separated cells without treating blank or cl
   ]);
 });
 
+test("transformed and shaped clips decide the visible text", async () => {
+  const result = await runCheckCommand(directory, `${server.url}/table-cell-text-overlap-clipping.html`, {}, "test");
+  const narrow = result.cases.find((item) => item.device.name === "390")!;
+  expect(narrow.status).toBe("complete");
+  expect(narrow.rules.find((rule) => rule.type === "page-horizontal-overflow")?.violations).toEqual([]);
+  const violations = narrow.rules.find((rule) => rule.type === "table-cell-text-overlap")?.violations ?? [];
+  expect(violations.filter((item) => item.type === "table-cell-text-overlap")
+    .map((item) => [item.locator, item.adjacentLocator])).toEqual([
+    ["#rounded-edge", "#rounded-edge-neighbor"],
+    ["#scaled-up", "#scaled-up-neighbor"],
+  ]);
+});
+
 test("checks 1,000 rows without scanning every cell against every other cell", async () => {
   const browser = await chromium.launch();
   try {

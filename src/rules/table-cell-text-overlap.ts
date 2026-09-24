@@ -23,6 +23,12 @@ interface Extraction {
   readonly overlaps: readonly Overlap[];
   readonly selectorError: string | null;
 }
+interface Scale { readonly x: number; readonly y: number }
+interface Region {
+  readonly box: Box;
+  /** Null when the region is exactly its box; otherwise whether a point is inside the shape. */
+  readonly covers: ((x: number, y: number) => boolean) | null;
+}
 
 function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
   excludeSelectors: readonly string[];
@@ -75,6 +81,156 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     }
     return getComputedStyle(element).display === "contents" || element.getClientRects().length > 0;
   }
+  // `clip-path` and overflow lengths are element-space, so a transformed ancestor
+  // paints them scaled. Resolve them against the rendered border box.
+  function scaleOf(element: Element, bounds: Box): Scale {
+    const layout = element as HTMLElement;
+    return {
+      x: layout.offsetWidth > 0 ? bounds.width / layout.offsetWidth : 1,
+      y: layout.offsetHeight > 0 ? bounds.height / layout.offsetHeight : 1,
+    };
+  }
+
+  /** One length of a `clip-path`: percentages use the rendered box, CSS lengths are scaled. */
+  function length(part: string | undefined, size: number, scale: number): number {
+    const value = Number.parseFloat(part ?? "");
+    if (!Number.isFinite(value)) return 0;
+    return (part ?? "").trim().endsWith("%") ? value * size / 100 : value * scale;
+  }
+
+  function ellipseRegion(cx: number, cy: number, rx: number, ry: number): Region {
+    return {
+      box: { x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2 },
+      covers: rx > 0 && ry > 0
+        ? (x, y) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1
+        : () => false,
+    };
+  }
+
+  function polygonRegion(points: readonly { x: number; y: number }[]): Region {
+    const xs = points.map((point) => point.x);
+    const ys = points.map((point) => point.y);
+    return {
+      box: {
+        x: Math.min(...xs), y: Math.min(...ys),
+        width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys),
+      },
+      covers: (x, y) => {
+        let inside = false;
+        for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
+          const a = points[index]!;
+          const b = points[previous]!;
+          if ((a.y > y) !== (b.y > y) && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+        }
+        return inside;
+      },
+    };
+  }
+
+  function roundedCovers(box: Box, radii: readonly number[]) {
+    const corners = [
+      { x: box.x + radii[0]!, y: box.y + radii[0]!, radius: radii[0]!, left: true, top: true },
+      { x: box.x + box.width - radii[1]!, y: box.y + radii[1]!, radius: radii[1]!, left: false, top: true },
+      { x: box.x + box.width - radii[2]!, y: box.y + box.height - radii[2]!, radius: radii[2]!, left: false, top: false },
+      { x: box.x + radii[3]!, y: box.y + box.height - radii[3]!, radius: radii[3]!, left: true, top: false },
+    ];
+    return (x: number, y: number) => {
+      if (x < box.x || x > box.x + box.width || y < box.y || y > box.y + box.height) return false;
+      for (const corner of corners) {
+        if (!(corner.radius > 0)) continue;
+        if ((corner.left ? x < corner.x : x > corner.x) && (corner.top ? y < corner.y : y > corner.y) &&
+            Math.hypot(x - corner.x, y - corner.y) > corner.radius) return false;
+      }
+      return true;
+    };
+  }
+
+  /** `inset()`, `circle()`, `ellipse()`, `polygon()` and `xywh()`; null when not modelled. */
+  function clipRegion(value: string, bounds: Box, scale: Scale): Region | null {
+    const shape = /^([a-z-]+)\(([\s\S]*)\)$/.exec(value.trim());
+    if (shape === null) return null;
+    const name = shape[1]!;
+    const body = shape[2]!.trim();
+    const tokensOf = (text: string) => text.trim().split(/\s+/).filter((part) => part.length > 0);
+    const centerOf = (tokens: readonly string[]) => {
+      const position = tokens.length >= 2 ? tokens : ["50%", "50%"];
+      return {
+        x: bounds.x + length(position[0], bounds.width, scale.x),
+        y: bounds.y + length(position[1], bounds.height, scale.y),
+      };
+    };
+    const cornerRadii = (radii: readonly string[]) => {
+      const radius = (part: string | undefined) =>
+        Math.min(length(part, bounds.width, scale.x), length(part, bounds.height, scale.y));
+      return [
+        radius(radii[0]), radius(radii[1] ?? radii[0]),
+        radius(radii[2] ?? radii[0]), radius(radii[3] ?? radii[1] ?? radii[0]),
+      ];
+    };
+    const sidesOf = (text: string) => {
+      const round = /(?:^|\s)round\s+([\s\S]+)$/.exec(text);
+      return {
+        sides: (round === null ? text : text.slice(0, round.index)).trim().split(/\s+/),
+        round: round === null ? null : tokensOf(round[1]!),
+      };
+    };
+    if (name === "inset" || name === "xywh") {
+      const { sides, round } = sidesOf(body);
+      const top = length(sides[0], bounds.height, scale.y);
+      const right = length(sides[1] ?? sides[0], bounds.width, scale.x);
+      const box: Box = name === "inset"
+        ? {
+            x: bounds.x + length(sides[3] ?? sides[1] ?? sides[0], bounds.width, scale.x),
+            y: bounds.y + top,
+            width: bounds.width - length(sides[3] ?? sides[1] ?? sides[0], bounds.width, scale.x) - right,
+            height: bounds.height - top - length(sides[2] ?? sides[0], bounds.height, scale.y),
+          }
+        : {
+            x: bounds.x + length(sides[0], bounds.width, scale.x),
+            y: bounds.y + length(sides[1], bounds.height, scale.y),
+            width: length(sides[2], bounds.width, scale.x),
+            height: length(sides[3], bounds.height, scale.y),
+          };
+      return round === null ? { box, covers: null } : { box, covers: roundedCovers(box, cornerRadii(round)) };
+    }
+    if (name === "circle" || name === "ellipse") {
+      const tokens = tokensOf(body);
+      const split = tokens.indexOf("at");
+      const radii = split === -1 ? tokens : tokens.slice(0, split);
+      const center = centerOf(split === -1 ? [] : tokens.slice(split + 1));
+      const coordinate = (part: string | undefined, size: number, scale: number) => Math.max(length(part, size, scale), 0);
+      if (name === "ellipse") {
+        return ellipseRegion(center.x, center.y,
+          coordinate(radii[0] ?? "0%", bounds.width, scale.x), coordinate(radii[1] ?? "0%", bounds.height, scale.y));
+      }
+      const part = radii[0] ?? "0";
+      const radius = coordinate(part, Math.hypot(bounds.width, bounds.height) / Math.SQRT2, (scale.x + scale.y) / 2);
+      return ellipseRegion(center.x, center.y, radius, radius);
+    }
+    if (name === "polygon") {
+      const points = body
+        .replace(/^(?:evenodd|nonzero)\s*,\s*/i, "")
+        .split(",")
+        .map((pair) => tokensOf(pair))
+        .filter((pair) => pair.length >= 2)
+        .map((pair) => ({
+          x: bounds.x + length(pair[0], bounds.width, scale.x),
+          y: bounds.y + length(pair[1], bounds.height, scale.y),
+        }));
+      return points.length >= 3 ? polygonRegion(points) : null;
+    }
+    return null;
+  }
+
+  /** Non-rectangular shapes are decided by sampling the surviving box. */
+  function anyInside(covers: (x: number, y: number) => boolean, rect: Box): boolean {
+    for (let column = 0; column < 5; column++) {
+      for (let row = 0; row < 3; row++) {
+        if (covers(rect.x + rect.width * (column + 0.5) / 5, rect.y + rect.height * (row + 0.5) / 3)) return true;
+      }
+    }
+    return false;
+  }
   function visibleRect(rect: Box, parent: Element): Box | null {
     let visible: Box | null = intersect(rect, { x: 0, y: 0, width: innerWidth, height: innerHeight });
     let positioned: Element | null = null;
@@ -106,11 +262,14 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
           (ancestor !== containingBlock && containingBlock.contains(ancestor)));
       const clipHorizontal = (clipsX && !escapesOverflow) || paintsInside;
       const clipVertical = (clipsY && !escapesOverflow) || paintsInside;
+      const clipPath = style.clipPath;
+      if (!clipHorizontal && !clipVertical && clipPath === "none") continue;
+      const bounds = box(ancestor.getBoundingClientRect());
+      const scale = scaleOf(ancestor, bounds);
       if (clipHorizontal || clipVertical) {
-        const bounds = ancestor.getBoundingClientRect();
         const clip = {
-          x: bounds.left + ancestor.clientLeft, y: bounds.top + ancestor.clientTop,
-          width: ancestor.clientWidth, height: ancestor.clientHeight,
+          x: bounds.x + ancestor.clientLeft * scale.x, y: bounds.y + ancestor.clientTop * scale.y,
+          width: ancestor.clientWidth * scale.x, height: ancestor.clientHeight * scale.y,
         };
         visible = intersect(visible, {
           x: clipHorizontal ? clip.x : visible.x,
@@ -119,24 +278,11 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
           height: clipVertical ? clip.height : visible.height,
         });
       }
-      // Range geometry is not clipped by clip-path. A zero-radius circle hides all text.
-      if (/^circle\(0(?:\.0+)?(?:px|%)?(?:\s+at\s+[^)]+)?\)$/.test(style.clipPath)) return null;
-      // Inset clips are rectangular.
-      const inset = /^inset\(([^()]+)\)$/.exec(style.clipPath);
-      if (inset !== null && visible !== null) {
-        const bounds = ancestor.getBoundingClientRect();
-        // `inset(0 round 8px)` carries an optional border-radius clause that is not an offset.
-        const parts = inset[1]!.replace(/\bround\b[\s\S]*$/, "").trim().split(/\s+/);
-        const resolveInset = (part: string, size: number) =>
-          part.endsWith("%") ? Number.parseFloat(part) * size / 100 : Number.parseFloat(part);
-        const top = resolveInset(parts[0]!, bounds.height);
-        const right = resolveInset(parts[1] ?? parts[0]!, bounds.width);
-        const bottom = resolveInset(parts[2] ?? parts[0]!, bounds.height);
-        const left = resolveInset(parts[3] ?? parts[1] ?? parts[0]!, bounds.width);
-        visible = intersect(visible, {
-          x: bounds.left + left, y: bounds.top + top,
-          width: bounds.width - left - right, height: bounds.height - top - bottom,
-        });
+      // Range geometry ignores `clip-path`, so the shape decides on its own.
+      const region = clipRegion(clipPath, bounds, scale);
+      if (region !== null && visible !== null) {
+        const clipped = intersect(visible, region.box);
+        visible = clipped === null || (region.covers !== null && !anyInside(region.covers, clipped)) ? null : clipped;
       }
     }
     return visible;
@@ -150,8 +296,13 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
   const groups = new Map<Element, Cell["group"]>();
   const inspected: Cell[] = [];
   const bandSize = 64;
+  /** Indexing and lookup must agree on band boundaries, so both use one range. */
+  function bandRange(start: number, size: number): { readonly first: number; readonly last: number } {
+    return { first: Math.floor(start / bandSize), last: Math.floor((start + size - 0.001) / bandSize) };
+  }
   function index(bands: Map<number, Cell[]>, start: number, size: number, cell: Cell): void {
-    for (let band = Math.floor(start / bandSize); band <= Math.floor((start + size - 0.001) / bandSize); band++) {
+    const { first, last } = bandRange(start, size);
+    for (let band = first; band <= last; band++) {
       const entries = bands.get(band) ?? [];
       entries.push(cell);
       bands.set(band, entries);
@@ -159,7 +310,8 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
   }
   function nearby(bands: Map<number, Cell[]>, start: number, size: number): Set<Cell> {
     const found = new Set<Cell>();
-    for (let band = Math.floor(start / bandSize); band <= Math.floor((start + size - 0.001) / bandSize); band++) {
+    const { first, last } = bandRange(start, size);
+    for (let band = first; band <= last; band++) {
       for (const cell of bands.get(band) ?? []) found.add(cell);
     }
     return found;
