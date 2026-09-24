@@ -47,6 +47,10 @@ const STANDARD_RULES = [
     name: "table-header-single-line",
     type: "table-header-single-line",
   },
+  {
+    name: "table-cell-text-overlap",
+    type: "table-cell-text-overlap",
+  },
 ] as const;
 
 /**

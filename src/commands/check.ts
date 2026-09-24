@@ -15,6 +15,7 @@ import { createBrowserRunScope } from "../browser/lifecycle";
 import { evaluatePageHorizontalOverflow } from "../rules/page-horizontal-overflow";
 import { evaluateTabLabelSingleLine } from "../rules/tab-label-single-line";
 import { evaluateTableHeaderSingleLine } from "../rules/table-header-single-line";
+import { evaluateTableCellTextOverlap } from "../rules/table-cell-text-overlap";
 import {
   resultForResolutionFailure,
   runResolvedCheck,
@@ -123,6 +124,8 @@ async function evaluateWithCancellation(
       };
     }
     evaluation = evaluateLocalRule(page, rule, contract, auditCase, auditCase.name, signal);
+  } else if (rule.type === "table-cell-text-overlap") {
+    evaluation = evaluateTableCellTextOverlap(page, rule, auditCase?.name ?? null);
   } else if (rule.type === "table-header-single-line") {
     evaluation = Promise.resolve(
       evaluateTableHeaderSingleLine(page, rule, auditCase?.name ?? null),

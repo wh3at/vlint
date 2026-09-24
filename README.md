@@ -154,7 +154,8 @@ and iPhone 17 profiles.
   "rules": [
     { "name": "tab-label-single-line", "type": "tab-label-single-line" },
     { "name": "page-horizontal-overflow", "type": "page-horizontal-overflow" },
-    { "name": "table-header-single-line", "type": "table-header-single-line" }
+    { "name": "table-header-single-line", "type": "table-header-single-line" },
+    { "name": "table-cell-text-overlap", "type": "table-cell-text-overlap" }
   ],
   "provider": {
     "type": "static",
@@ -173,6 +174,7 @@ and iPhone 17 profiles.
 - **`tab-label-single-line`** — each rendered tab label must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `labelSelector`, `minimumLabels`, `allowZeroLabels`.
 - **`page-horizontal-overflow`** — detects unintended root-page horizontal scroll attributed to light-DOM elements. Field: `tolerancePx` (`0`–`100`, default `1`).
 - **`table-header-single-line`** — each rendered semantic column header must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `lineTopTolerancePx`, `minimumHeaders`, `allowZeroHeaders`.
+- **`table-cell-text-overlap`** — detects visible text entering another cell in the same table row. Fields: `enabled` (default `true`), `excludeSelectors` (default `[]`).
 - **`static`** provider — inline `targets` (`name`, `url`, defaults, optional `ruleOverrides`).
 - **`command`** provider — runs a trusted executable without a shell, reads `{"targets":[...]}` from stdout (`executable`, `args`, `timeoutMs`).
 
@@ -230,6 +232,35 @@ Line counts come from rendered DOM text geometry in each active viewport, not fr
 the computed `white-space` value or decorative element boxes. The same header can be
 clean on a desktop profile and violate on an iPhone-width profile; the violation
 reports its source, locator, box, text, line count, measured line tops, and tolerance.
+
+### Table cell text overlap rule
+
+Enabled by default, including when `rules` omits it. Checks native `th`/`td` and
+ARIA `table`/`grid` row, rowheader, columnheader, cell/gridcell pairs. A cell is
+reported only if rendered DOM text intersects another cell's box in the same
+row. The check measures `Range.getClientRects()` after layout and clips each
+fragment against its ancestors' overflow boundaries and the viewport. Text
+that wraps inside its cell or is hidden by `overflow: hidden`, ellipsis, or an
+internal scroller is not reported. Out-of-flow absolute/fixed descendants
+(including tooltips/popovers), icons and generated pseudo-element text are
+not measured. The default threshold is greater than 1 CSS pixel.
+
+The violation supplies `locator`, `geometry` (source cell), `adjacentLocator`
+(neighbor cell), and `overlapPx` (visible penetration into that cell). The
+rule is local to cells: `table-header-single-line` instead counts *column-header
+lines*, and `page-horizontal-overflow` instead detects *root-page horizontal
+scroll*. Neither needs to fail for this rule to report a collision.
+
+To opt out of known intentional cell content on one target:
+
+```jsonc
+{ "name": "report", "url": "http://localhost:3000/report",
+  "ruleOverrides": { "table-cell-text-overlap": { "excludeSelectors": [".intentional-overlap"] } } }
+```
+
+Set `enabled: false` in the rule declaration to disable it everywhere, or
+`enabled: false` in a target's `ruleOverrides` to disable it for that target.
+
 
 ## Local rule plugins
 
@@ -348,6 +379,8 @@ of `message`, `locator`, `geometry`, and `details`. Table-header violations incl
 `candidateSource`, `text`, `lineCount`, `lineTops`, `lineTopTolerancePx`, `geometry`,
 and `locator`; optional `candidateDiagnostics` on that rule result records excluded
 or generated-content-unmeasured candidates without representing them as violations.
+Table-cell text overlap violations add `adjacentLocator` and `overlapPx` (CSS pixels)
+to the source cell's `locator` and `geometry`; terminal output shows the same fields.
 
 ---
 

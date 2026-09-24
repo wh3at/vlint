@@ -1,0 +1,36 @@
+<!doctype html>
+<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+  body { margin: 0; }
+  table { table-layout: fixed; width: 360px; border-collapse: collapse; }
+  th, td { padding: 0; height: 40px; }
+  .label { width: 120px; }
+  button { display: flex; font: 16px Arial; padding: 0; border: 0; background: none; white-space: nowrap; }
+  .wrap { overflow-wrap: anywhere; }
+  .clip { overflow: hidden; white-space: nowrap; }
+  .ellipsis { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .scroll { overflow-x: auto; white-space: nowrap; }
+  .grid { width: 360px; }
+  .grid [role="row"] { display: flex; }
+  .grid [role="rowheader"], .grid [role="cell"], .grid [role="gridcell"] { flex: none; width: 120px; height: 40px; }
+  .grid [role="cell"], .grid [role="gridcell"] { width: 240px; }
+  .grid [role="cell"]:first-child { width: 120px; }
+  @media (min-width: 600px) {
+    table, .grid { width: 760px; }
+    .label, .grid [role="rowheader"] { width: 300px; }
+    .grid [role="cell"], .grid [role="gridcell"] { width: 460px; }
+    .grid [role="cell"]:first-child { width: 300px; }
+  }
+</style></head><body>
+<table><colgroup><col class="label"><col></colgroup><thead><tr><th scope="col">Property</th><th scope="col">Value</th></tr></thead><tbody>
+<tr><th id="native-row" scope="row"><button>VeryLongUnbrokenPropertyIdentifier</button></th><td id="native-neighbor">42</td></tr>
+<tr><td id="native-body"><button>VeryLongUnbrokenPropertyIdentifier</button></td><td id="body-neighbor">99</td></tr>
+<tr><td id="wrapped" class="wrap">VeryLongUnbrokenPropertyIdentifier</td><td>7</td></tr>
+<tr><td id="clipped" class="clip">VeryLongUnbrokenPropertyIdentifier</td><td>8</td></tr>
+<tr><td id="ellipsized" class="ellipsis">VeryLongUnbrokenPropertyIdentifier</td><td>9</td></tr>
+<tr><td id="scrolled" class="scroll">VeryLongUnbrokenPropertyIdentifier</td><td>10</td></tr>
+<tr><td id="child-clipped"><span style="display:block;width:120px;overflow:hidden;white-space:nowrap">VeryLongUnbrokenPropertyIdentifier</span></td><td>12</td></tr>
+<tr><td id="popover-cell" style="position:relative">Normal <span style="position:absolute;left:130px;top:0">Tooltip text outside</span></td><td>11</td></tr>
+</tbody></table>
+<div role="grid" class="grid"><div role="row"><div role="rowheader" id="aria-row"><button>VeryLongUnbrokenPropertyIdentifier</button></div><div role="gridcell" id="aria-neighbor">17</div></div></div>
+<div role="table" class="grid"><div role="row"><div role="cell" id="aria-body"><button>VeryLongUnbrokenPropertyIdentifier</button></div><div role="cell" id="aria-body-neighbor">19</div></div></div>
+</body></html>

@@ -41,6 +41,7 @@ describe("vlint init: standard config generation", () => {
       { name: "tab-label-single-line", type: "tab-label-single-line" },
       { name: "page-horizontal-overflow", type: "page-horizontal-overflow" },
       { name: "table-header-single-line", type: "table-header-single-line" },
+      { name: "table-cell-text-overlap", type: "table-cell-text-overlap" },
     ]);
 
     const [macbook, iphone] = config.devices;

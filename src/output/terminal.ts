@@ -114,6 +114,10 @@ export function renderTerminal(result: RunResult): string {
           lines.push(
             `    violation lines=${violation.lineCount} tops=${violation.lineTops.join(",")} tolerance=${violation.lineTopTolerancePx}px source=${violation.candidateSource} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height} text=${escapeTerminal(violation.text)}`,
           );
+        } else if (violation.type === "table-cell-text-overlap") {
+          lines.push(
+            `    violation locator=${escapeTerminal(violation.locator)} adjacent=${escapeTerminal(violation.adjacentLocator)} overlap=${violation.overlapPx}px box=${box.x},${box.y},${box.width},${box.height}`,
+          );
         } else {
           lines.push(
             `    violation message=${escapeTerminal(violation.message)} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height}`,

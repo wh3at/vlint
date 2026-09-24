@@ -74,7 +74,8 @@ export type ProviderConfig = StaticProviderConfig | CommandProviderConfig;
 export type BuiltinRuleType =
   | "tab-label-single-line"
   | "page-horizontal-overflow"
-  | "table-header-single-line";
+  | "table-header-single-line"
+  | "table-cell-text-overlap";
 
 export type RuleType = BuiltinRuleType | "local";
 
@@ -110,6 +111,12 @@ export interface TableHeaderSingleLineRuleInstance extends RuleInstanceBase {
   readonly allowZeroHeaders?: boolean;
 }
 
+export interface TableCellTextOverlapRuleInstance extends RuleInstanceBase {
+  readonly type: "table-cell-text-overlap";
+  readonly enabled?: boolean;
+  readonly excludeSelectors?: readonly string[];
+}
+
 export interface LocalRuleInstance extends RuleInstanceBase {
   readonly type: "local";
   /** Project-relative path to a self-contained TypeScript rule file (R1, R2). */
@@ -121,6 +128,7 @@ export type RuleInstance =
   | TabLabelSingleLineRuleInstance
   | PageHorizontalOverflowRuleInstance
   | TableHeaderSingleLineRuleInstance
+  | TableCellTextOverlapRuleInstance
   | LocalRuleInstance;
 
 export interface Config {
@@ -165,6 +173,11 @@ export interface EffectivePageHorizontalOverflowRule extends EffectiveRuleBase {
   readonly tolerancePx: number;
 }
 
+export interface EffectiveTableCellTextOverlapRule extends EffectiveRuleBase {
+  readonly type: "table-cell-text-overlap";
+  readonly excludeSelectors: readonly string[];
+}
+
 export interface EffectiveLocalRule extends EffectiveRuleBase {
   readonly type: "local";
   readonly path: string;
@@ -175,6 +188,7 @@ export type EffectiveRule =
   | EffectiveTabLabelSingleLineRule
   | EffectivePageHorizontalOverflowRule
   | EffectiveTableHeaderSingleLineRule
+  | EffectiveTableCellTextOverlapRule
   | EffectiveLocalRule;
 
 export type EffectiveRuleForTarget = EffectiveRule;

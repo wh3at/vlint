@@ -219,6 +219,13 @@ function ruleOverrideAt(value: unknown, path: string, rule: RuleMetadata): RuleO
     exactKeys(object, ["enabled"], path);
     return object.enabled === undefined ? {} : { enabled: booleanAt(object.enabled, `${path}.enabled`) };
   }
+  if (rule.type === "table-cell-text-overlap") {
+    exactKeys(object, ["enabled", "excludeSelectors"], path);
+    return {
+      ...(object.enabled === undefined ? {} : { enabled: booleanAt(object.enabled, `${path}.enabled`) }),
+      ...(object.excludeSelectors === undefined ? {} : { excludeSelectors: stringArrayAt(object.excludeSelectors, `${path}.excludeSelectors`) }),
+    };
+  }
   if (rule.type === "table-header-single-line") {
     exactKeys(object, ["enabled", "excludeSelectors", "minimumHeaders"], path);
     const result: { enabled?: boolean; excludeSelectors?: readonly string[]; minimumHeaders?: number } = {};
@@ -397,6 +404,15 @@ function ruleAt(value: unknown, path: string): RuleInstance {
       result.tolerancePx = finiteNumberAt(object.tolerancePx, `${path}.tolerancePx`, 0, 100);
     }
     return result;
+  }
+  if (object.type === "table-cell-text-overlap") {
+    exactKeys(object, ["name", "type", "enabled", "excludeSelectors"], path);
+    return {
+      name: nameAt(object.name, `${path}.name`),
+      type: "table-cell-text-overlap",
+      ...(object.enabled === undefined ? {} : { enabled: booleanAt(object.enabled, `${path}.enabled`) }),
+      ...(object.excludeSelectors === undefined ? {} : { excludeSelectors: stringArrayAt(object.excludeSelectors, `${path}.excludeSelectors`) }),
+    };
   }
   if (object.type === "table-header-single-line") {
     exactKeys(
