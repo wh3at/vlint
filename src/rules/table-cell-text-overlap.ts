@@ -333,9 +333,12 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     // percentages resolve against 1 rather than against the SVG viewport.
     const bounding = clip.getAttribute("clipPathUnits") === "objectBoundingBox";
     const viewport = bounding ? { width: 1, height: 1 } : svgViewport(clip);
+    // A clip path with no shape hides everything it applies to; an unreadable child
+    // leaves the whole reference unmodelled instead.
+    const children = [...clip.children].filter((child) => !["title", "desc", "metadata"].includes(child.localName));
+    if (children.length === 0) return { box: null, covers: () => false };
     const shapes: { readonly path: Path2D; readonly evenOdd: boolean }[] = [];
-    for (const child of clip.children) {
-      if (["title", "desc", "metadata"].includes(child.localName)) continue;
+    for (const child of children) {
       const path = svgShape(child, viewport);
       if (path === null) return null;
       const matrix = new Path2D();
@@ -343,7 +346,6 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       const style = getComputedStyle(child) as CSSStyleDeclaration & { readonly clipRule?: string };
       shapes.push({ path: matrix, evenOdd: style.clipRule === "evenodd" || child.getAttribute("fill-rule") === "evenodd" });
     }
-    if (shapes.length === 0) return null;
     return {
       box: null,
       covers: (x, y) => {

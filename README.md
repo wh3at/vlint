@@ -251,7 +251,7 @@ against the resulting rectangle, `path("...")`, and `url(#id)` references built 
 `clipPathUnits="objectBoundingBox"`, against the normalized element box. Any other unit,
 and a `clip-path` that names a shape this rule cannot read, leaves the shape unmodelled
 rather than empty; a `url(#id)` reference containing one such element is ignored as a
-whole. An ancestor `transform` scales the overflow and `clip-path` bounds to match the
+whole, while a `clipPath` with no shape hides the referenced text. An ancestor `transform` scales the overflow and `clip-path` bounds to match the
 rendered text. A non-rectangular shape is sampled on a grid of at most four CSS pixels,
 capped at 64 samples per axis, so a partly clipped fragment is reported only where that
 shape still shows it. Text that wraps inside its cell or is hidden by
