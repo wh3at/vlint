@@ -2,6 +2,8 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { chromium } from "playwright";
+import { evaluateTableCellTextOverlap } from "../../src/rules/table-cell-text-overlap";
 import { runCheckCommand } from "../../src/commands/check";
 import { renderTerminal } from "../../src/output/terminal";
 import { startFixtureServer, type FixtureServer } from "../fixtures/app/server";
@@ -61,6 +63,39 @@ test("positioned text escaping cell overflow is measured, while clipped text is 
     expect.objectContaining({ locator: "#escapes-overflow", adjacentLocator: "#overflow-neighbor" }),
   ]);
 });
+
+test("detects painted glyphs across separated cells without treating blank or clipped ranges as ink", async () => {
+  const result = await runCheckCommand(directory, `${server.url}/table-cell-text-overlap-review.html`, {}, "test");
+  const narrow = result.cases.find((item) => item.device.name === "390")!;
+  expect(narrow.status).toBe("complete");
+  const violations = narrow.rules.find((rule) => rule.type === "table-cell-text-overlap")?.violations ?? [];
+  expect(violations.filter((item) => item.type === "table-cell-text-overlap")
+    .map((item) => [item.locator, item.adjacentLocator])).toEqual([
+    ["#vertical-down", "#vertical-neighbor"],
+    ["#contents", "#contents-neighbor"],
+    ["#shadow", "#shadow-neighbor"],
+    ["#stroke", "#stroke-neighbor"],
+    ["#vertical-up", "#above-neighbor"],
+  ]);
+});
+
+test("checks 1,000 rows without scanning every cell against every other cell", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 720 } });
+    const rows = Array.from({ length: 1_000 }, (_, row) =>
+      `<tr>${Array.from({ length: 10 }, (_, column) => `<td>${row}-${column}</td>`).join("")}</tr>`).join("");
+    await page.setContent(`<style>table{table-layout:fixed;width:700px;border-collapse:collapse}td{width:70px;height:20px;padding:0}</style><table>${rows}</table>`);
+    const result = await evaluateTableCellTextOverlap(page, {
+      name: "table-cell-text-overlap", type: "table-cell-text-overlap", enabled: true, excludeSelectors: [],
+    });
+    expect(result.failure).toBeNull();
+    expect(result.facts.elementsInspected).toBe(10_000);
+    expect(result.facts.violations).toEqual([]);
+  } finally {
+    await browser.close();
+  }
+}, 20_000);
 
 test("named rule can be enabled per target with cell exclusions", async () => {
   const isolated = await mkdtemp(join(tmpdir(), "vlint-cell-overrides-"));

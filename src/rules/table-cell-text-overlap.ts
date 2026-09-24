@@ -68,9 +68,10 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     for (let current: Element | null = element; current !== null; current = current.parentElement) {
       const style = getComputedStyle(current);
       if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" ||
-          style.contentVisibility === "hidden" || Number.parseFloat(style.opacity) <= 0) return false;
+          style.contentVisibility === "hidden" || Number.parseFloat(style.opacity) <= 0 ||
+          /\bopacity\(\s*0(?:\.0+)?%?\s*\)/.test(style.filter)) return false;
     }
-    return element.getClientRects().length > 0;
+    return getComputedStyle(element).display === "contents" || element.getClientRects().length > 0;
   }
   function visibleRect(rect: Box, parent: Element): Box | null {
     let visible: Box | null = intersect(rect, { x: 0, y: 0, width: innerWidth, height: innerHeight });
@@ -122,14 +123,13 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       const inset = /^inset\(([^()]+)\)$/.exec(style.clipPath);
       if (inset !== null && visible !== null) {
         const bounds = ancestor.getBoundingClientRect();
-        const values = inset[1]!.split(/\s+/).map((part, index) => {
-          const size = index % 2 === 0 ? bounds.height : bounds.width;
-          return part.endsWith("%") ? Number.parseFloat(part) * size / 100 : Number.parseFloat(part);
-        });
-        const top = values[0] ?? 0;
-        const right = values[1] ?? top;
-        const bottom = values[2] ?? top;
-        const left = values[3] ?? right;
+        const parts = inset[1]!.trim().split(/\s+/);
+        const resolveInset = (part: string, size: number) =>
+          part.endsWith("%") ? Number.parseFloat(part) * size / 100 : Number.parseFloat(part);
+        const top = resolveInset(parts[0]!, bounds.height);
+        const right = resolveInset(parts[1] ?? parts[0]!, bounds.width);
+        const bottom = resolveInset(parts[2] ?? parts[0]!, bounds.height);
+        const left = resolveInset(parts[3] ?? parts[1] ?? parts[0]!, bounds.width);
         visible = intersect(visible, {
           x: bounds.left + left, y: bounds.top + top,
           width: bounds.width - left - right, height: bounds.height - top - bottom,
@@ -142,43 +142,78 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     try { document.querySelectorAll(selector); }
     catch { return { elementsInspected: 0, overlaps: [], selectorError: selector }; }
   }
-  const candidates = Array.from(document.querySelectorAll('table th, table td, [role="table"] [role="cell"], [role="table"] [role="rowheader"], [role="table"] [role="columnheader"], [role="grid"] [role="gridcell"], [role="grid"] [role="rowheader"], [role="grid"] [role="columnheader"]'));
-  const scope = (cell: Element) => cell.closest('table, [role="table"], [role="grid"]');
-  const row = (cell: Element) => cell.closest('tr, [role="row"]');
-  const cells = candidates.filter((cell) => scope(cell) !== null && row(cell) !== null && rendered(cell));
-  const inspected = cells.filter((cell) => !excludeSelectors.some((selector) => cell.matches(selector)));
-  const overlaps: Overlap[] = [];
-  function direction(rect: Box, cellBox: Box): "left" | "right" | "above" | "below" | null {
-    const sameHeight = rect.y < cellBox.y + cellBox.height && rect.y + rect.height > cellBox.y;
-    if (sameHeight && rect.x >= cellBox.x + cellBox.width - 1) return "right";
-    if (sameHeight && rect.x + rect.width <= cellBox.x + 1) return "left";
-    const sameColumn = rect.x < cellBox.x + cellBox.width && rect.x + rect.width > cellBox.x;
-    if (sameColumn && Math.abs(rect.y - (cellBox.y + cellBox.height)) <= 1) return "below";
-    if (sameColumn && Math.abs(rect.y + rect.height - cellBox.y) <= 1) return "above";
-    return null;
+  const candidates = document.querySelectorAll('table th, table td, [role="table"] [role="cell"], [role="table"] [role="rowheader"], [role="table"] [role="columnheader"], [role="grid"] [role="gridcell"], [role="grid"] [role="rowheader"], [role="grid"] [role="columnheader"]');
+  interface Cell { element: Element; rect: Box; group: { byX: Map<number, Cell[]>; byY: Map<number, Cell[]> } }
+  const groups = new Map<Element, Cell["group"]>();
+  const inspected: Cell[] = [];
+  const bandSize = 64;
+  function index(bands: Map<number, Cell[]>, start: number, size: number, cell: Cell): void {
+    for (let band = Math.floor(start / bandSize); band <= Math.floor((start + size - 0.001) / bandSize); band++) {
+      const entries = bands.get(band) ?? [];
+      entries.push(cell);
+      bands.set(band, entries);
+    }
   }
-  for (const cell of inspected) {
-    const cellBox = box(cell.getBoundingClientRect());
-    const peers = cells.filter((other) => other !== cell && scope(other) === scope(cell))
-      .map((element) => {
-        const rect = box(element.getBoundingClientRect());
-        return { element, rect, direction: direction(rect, cellBox) };
-      });
-    // Restrict lateral comparisons to the nearest cell in each column at a given height.
-    const neighbors = peers.filter((peer) => {
-      const { rect, direction } = peer;
-      if (direction === "right") {
-        return !peers.some((between) => between !== peer && between.direction === "right" &&
-          between.rect.y < rect.y + rect.height && between.rect.y + between.rect.height > rect.y &&
-          between.rect.x < rect.x);
+  function nearby(bands: Map<number, Cell[]>, start: number, size: number): Set<Cell> {
+    const found = new Set<Cell>();
+    for (let band = Math.floor(start / bandSize); band <= Math.floor((start + size - 0.001) / bandSize); band++) {
+      for (const cell of bands.get(band) ?? []) found.add(cell);
+    }
+    return found;
+  }
+  for (const element of candidates) {
+    const scope = element.closest('table, [role="table"], [role="grid"]');
+    if (scope === null || element.closest('tr, [role="row"]') === null || !rendered(element)) continue;
+    let group = groups.get(scope);
+    if (group === undefined) {
+      group = { byX: new Map(), byY: new Map() };
+      groups.set(scope, group);
+    }
+    const rect = box(element.getBoundingClientRect());
+    const cell = { element, rect, group };
+    index(group.byX, rect.x, rect.width, cell);
+    index(group.byY, rect.y, rect.height, cell);
+    if (!excludeSelectors.some((selector) => element.matches(selector))) inspected.push(cell);
+  }
+  const overlaps: Overlap[] = [];
+  for (const { element: cell, rect: cellBox, group } of inspected) {
+    const horizontal = [...nearby(group.byY, cellBox.y, cellBox.height)].filter((peer) => peer.element !== cell &&
+      peer.rect.y < cellBox.y + cellBox.height && peer.rect.y + peer.rect.height > cellBox.y);
+    const right = horizontal.filter(({ rect }) => rect.x >= cellBox.x + cellBox.width - 1)
+      .sort((a, b) => a.rect.x - b.rect.x);
+    const left = horizontal.filter(({ rect }) => rect.x + rect.width <= cellBox.x + 1)
+      .sort((a, b) => b.rect.x + b.rect.width - a.rect.x - a.rect.width);
+    // Keep the nearest cell at each height, including cells across a rowspan.
+    const lateral = (peers: Cell[], edge: "left" | "right") => {
+      const chosen: Cell[] = [];
+      for (const peer of peers) {
+        if (!chosen.some((between) =>
+          (edge === "right" ? between.rect.x < peer.rect.x : between.rect.x + between.rect.width > peer.rect.x + peer.rect.width) &&
+          between.rect.y < peer.rect.y + peer.rect.height && between.rect.y + between.rect.height > peer.rect.y)) chosen.push(peer);
       }
-      if (direction === "left") {
-        return !peers.some((between) => between !== peer && between.direction === "left" &&
-          between.rect.y < rect.y + rect.height && between.rect.y + between.rect.height > rect.y &&
-          between.rect.x + between.rect.width > rect.x + rect.width);
+      return chosen;
+    };
+    const vertical = [...nearby(group.byX, cellBox.x, cellBox.width)].filter((peer) => peer.element !== cell &&
+      peer.rect.x < cellBox.x + cellBox.width && peer.rect.x + peer.rect.width > cellBox.x);
+    const below = vertical.filter(({ rect }) => rect.y >= cellBox.y + cellBox.height - 1)
+      .sort((a, b) => a.rect.y - b.rect.y);
+    const above = vertical.filter(({ rect }) => rect.y + rect.height <= cellBox.y + 1)
+      .sort((a, b) => b.rect.y + b.rect.height - a.rect.y - a.rect.height);
+    // A separated-border table has a gap between rows; keep the nearest cell in each column.
+    const nearest = (peers: Cell[]) => {
+      const chosen: Cell[] = [];
+      for (const peer of peers) {
+        if (!chosen.some((between) =>
+          between.rect.x < peer.rect.x + peer.rect.width && between.rect.x + between.rect.width > peer.rect.x)) chosen.push(peer);
       }
-      return direction !== null;
-    });
+      return chosen;
+    };
+    const neighbors = [
+      ...lateral(right, "right").map((peer) => ({ ...peer, direction: "right" as const })),
+      ...lateral(left, "left").map((peer) => ({ ...peer, direction: "left" as const })),
+      ...nearest(below).map((peer) => ({ ...peer, direction: "below" as const })),
+      ...nearest(above).map((peer) => ({ ...peer, direction: "above" as const })),
+    ];
     const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
     const range = document.createRange();
     const breaches = new Map<Element, number>();
@@ -186,25 +221,33 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       const text = walker.currentNode as Text;
       const parent = text.parentElement;
       if (parent === null || !text.nodeValue?.trim() || !rendered(parent)) continue;
-      const ink = getComputedStyle(parent).webkitTextFillColor || getComputedStyle(parent).color;
-      if (ink === "transparent" || /^(?:rgba|hsla)\([^)]*,\s*0(?:\.0+)?\s*\)$/.test(ink)) continue;
+      const style = getComputedStyle(parent);
+      const ink = style.webkitTextFillColor || style.color;
+      const transparent = (color: string) => color === "transparent" || /^(?:rgba|hsla)\([^)]*,\s*0(?:\.0+)?\s*\)$/.test(color);
+      const shadow = style.textShadow !== "none" && !/^(?:transparent|(?:rgba|hsla)\([^)]*,\s*0(?:\.0+)?\s*\))\s/.test(style.textShadow);
+      const stroke = Number.parseFloat(style.webkitTextStrokeWidth) > 0 && !transparent(style.webkitTextStrokeColor);
+      if (transparent(ink) && !shadow && !stroke) continue;
       // Nested tables/grids belong to their own cells, not the containing cell.
       if (parent.closest('th, td, [role="cell"], [role="gridcell"], [role="rowheader"], [role="columnheader"]') !== cell) continue;
-      range.selectNodeContents(text);
-      for (const fragment of range.getClientRects()) {
-        if (fragment.width <= 0 || fragment.height <= 0) continue;
-        const visible = visibleRect(box(fragment), parent);
-        if (visible === null) continue;
-        for (const { element, rect, direction } of neighbors) {
-          if (intersect(visible, rect) === null) continue;
-          const distance = direction === "right"
-            ? Math.min(visible.x + visible.width - rect.x, rect.width)
-            : direction === "left"
-              ? Math.min(rect.x + rect.width - visible.x, rect.width)
-              : direction === "below"
-                ? Math.min(visible.y + visible.height - rect.y, rect.height)
-                : Math.min(rect.y + rect.height - visible.y, rect.height);
-          breaches.set(element, Math.max(breaches.get(element) ?? 0, distance));
+      // Whitespace can advance a Range without painting a glyph (notably under white-space: pre).
+      for (const match of text.data.matchAll(/\S+/g)) {
+        range.setStart(text, match.index);
+        range.setEnd(text, match.index + match[0].length);
+        for (const fragment of range.getClientRects()) {
+          if (fragment.width <= 0 || fragment.height <= 0) continue;
+          const visible = visibleRect(box(fragment), parent);
+          if (visible === null) continue;
+          for (const { element, rect, direction } of neighbors) {
+            if (intersect(visible, rect) === null) continue;
+            const distance = direction === "right"
+              ? Math.min(visible.x + visible.width - rect.x, rect.width)
+              : direction === "left"
+                ? Math.min(rect.x + rect.width - visible.x, rect.width)
+                : direction === "below"
+                  ? Math.min(visible.y + visible.height - rect.y, rect.height)
+                  : Math.min(rect.y + rect.height - visible.y, rect.height);
+            breaches.set(element, Math.max(breaches.get(element) ?? 0, distance));
+          }
         }
       }
     }

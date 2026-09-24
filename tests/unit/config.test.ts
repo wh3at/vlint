@@ -407,6 +407,19 @@ devices: [DESKTOP_DEVICE],
     ]);
   });
 
+  test("keeps a pre-existing local rule named table-cell-text-overlap", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      devices: [DESKTOP_DEVICE],
+      rules: [{ name: "table-cell-text-overlap", type: "local", path: "rules/cells.ts" }],
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok) throw new Error(loaded.failure.message);
+    expect(loaded.value.rules.filter((rule) => rule.name === "table-cell-text-overlap")).toEqual([
+      expect.objectContaining({ type: "local", path: "rules/cells.ts" }),
+    ]);
+  });
+
   test("applies overflow project and target enablement precedence", async () => {
     const directory = await temporaryDirectory();
     await writeConfig(directory, {

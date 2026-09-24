@@ -50,7 +50,7 @@ export function rulesWithBuiltins(rules: readonly RuleInstance[] | undefined): r
     ...configured,
     ...(configured.some((rule) => rule.type === "page-horizontal-overflow") ? [] : [BUILTIN_OVERFLOW_RULE]),
     ...(configured.some((rule) => rule.type === "table-header-single-line") ? [] : [BUILTIN_TABLE_RULE]),
-    ...(configured.some((rule) => rule.type === "table-cell-text-overlap") ? [] : [BUILTIN_CELL_RULE]),
+    ...(configured.some((rule) => rule.type === "table-cell-text-overlap" || rule.name === BUILTIN_CELL_RULE.name) ? [] : [BUILTIN_CELL_RULE]),
   ];
 }
 
