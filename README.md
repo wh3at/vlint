@@ -240,12 +240,14 @@ ARIA `table`/`grid` row, rowheader, columnheader, cell/gridcell pairs. A cell is
 reported only if rendered DOM text intersects a geometrically adjacent cell
 in the same table/grid, including cells across a `rowspan` or a row boundary.
 The check measures `Range.getClientRects()` after layout and clips fragments
-against ancestors' overflow and paint containment, rectangular `clip-path: inset()`
-and the viewport. Text that wraps inside its cell or is hidden by
+against applicable ancestor overflow, paint containment, rectangular `clip-path: inset()`,
+zero-radius `clip-path: circle()`, and the viewport. Other `clip-path` shapes are
+not accounted for. Text that wraps inside its cell or is hidden by
 `overflow: hidden`, ellipsis, or an internal scroller is not reported.
-Out-of-flow tooltips/popovers, icons and generated pseudo-element text are not
-measured; positioned body text anchored inside its cell is measured. The
-default threshold is greater than 1 CSS pixel.
+Elements marked `[role="tooltip"]`, `[role="dialog"]`, or `[popover]`, icons,
+and generated pseudo-element text are not measured; unmarked positioned body
+text is measured even when it starts outside its source cell. The default
+threshold is greater than 1 CSS pixel.
 
 The violation supplies `locator`, `geometry` (source cell), `adjacentLocator`
 (neighbor cell), and `overlapPx` (visible penetration into that cell). The

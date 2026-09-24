@@ -72,35 +72,53 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     }
     return element.getClientRects().length > 0;
   }
-  function visibleRect(rect: Box, parent: Element, cell: Element): Box | null {
+  function visibleRect(rect: Box, parent: Element): Box | null {
     let visible: Box | null = intersect(rect, { x: 0, y: 0, width: innerWidth, height: innerHeight });
-    const source = cell.getBoundingClientRect();
+    let positioned: Element | null = null;
+    let containingBlock: Element | null = null;
+    for (let ancestor: Element | null = parent; ancestor !== null; ancestor = ancestor.parentElement) {
+      const position = getComputedStyle(ancestor).position;
+      if (position !== "absolute" && position !== "fixed") continue;
+      positioned = ancestor;
+      for (let block = ancestor.parentElement; block !== null; block = block.parentElement) {
+        const style = getComputedStyle(block);
+        const containsLayout = style.contain.split(/\s+/).some((part) => ["layout", "paint", "content", "strict"].includes(part));
+        if ((position === "absolute" && style.position !== "static") || style.transform !== "none" ||
+            style.filter !== "none" || style.perspective !== "none" || containsLayout) {
+          containingBlock = block;
+          break;
+        }
+      }
+      break;
+    }
     for (let ancestor: Element | null = parent; ancestor !== null && visible !== null; ancestor = ancestor.parentElement) {
       const style = getComputedStyle(ancestor);
-      if (ancestor !== cell && cell.contains(ancestor) && (style.position === "absolute" || style.position === "fixed")) {
-        // Body text may be positioned, but a separate overlay starts outside the source cell.
-        const positioned = ancestor.getBoundingClientRect();
-        if (positioned.left < source.left - 1 || positioned.left >= source.right ||
-            positioned.top < source.top - 1 || positioned.top >= source.bottom ||
-            ancestor.matches('[role="tooltip"], [role="dialog"], [popover]')) return null;
-      }
+      if (ancestor.matches('[role="tooltip"], [role="dialog"], [popover]')) return null;
       const clipsX = ["hidden", "clip", "scroll", "auto"].includes(style.overflowX);
       const clipsY = ["hidden", "clip", "scroll", "auto"].includes(style.overflowY);
       const paintsInside = style.contain.split(/\s+/).some((part) => ["paint", "content", "strict"].includes(part));
-      if (clipsX || clipsY || paintsInside) {
+      // A positioned descendant escapes overflow between it and its containing block.
+      const escapesOverflow = positioned !== null && ancestor !== positioned &&
+        ancestor.contains(positioned) && (containingBlock === null ||
+          (ancestor !== containingBlock && containingBlock.contains(ancestor)));
+      const clipHorizontal = (clipsX && !escapesOverflow) || paintsInside;
+      const clipVertical = (clipsY && !escapesOverflow) || paintsInside;
+      if (clipHorizontal || clipVertical) {
         const bounds = ancestor.getBoundingClientRect();
         const clip = {
           x: bounds.left + ancestor.clientLeft, y: bounds.top + ancestor.clientTop,
           width: ancestor.clientWidth, height: ancestor.clientHeight,
         };
         visible = intersect(visible, {
-          x: clipsX || paintsInside ? clip.x : visible.x,
-          y: clipsY || paintsInside ? clip.y : visible.y,
-          width: clipsX || paintsInside ? clip.width : visible.width,
-          height: clipsY || paintsInside ? clip.height : visible.height,
+          x: clipHorizontal ? clip.x : visible.x,
+          y: clipVertical ? clip.y : visible.y,
+          width: clipHorizontal ? clip.width : visible.width,
+          height: clipVertical ? clip.height : visible.height,
         });
       }
-      // Range geometry is not clipped by clip-path. Inset clips are rectangular.
+      // Range geometry is not clipped by clip-path. A zero-radius circle hides all text.
+      if (/^circle\(0(?:\.0+)?(?:px|%)?(?:\s+at\s+[^)]+)?\)$/.test(style.clipPath)) return null;
+      // Inset clips are rectangular.
       const inset = /^inset\(([^()]+)\)$/.exec(style.clipPath);
       if (inset !== null && visible !== null) {
         const bounds = ancestor.getBoundingClientRect();
@@ -130,26 +148,36 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
   const cells = candidates.filter((cell) => scope(cell) !== null && row(cell) !== null && rendered(cell));
   const inspected = cells.filter((cell) => !excludeSelectors.some((selector) => cell.matches(selector)));
   const overlaps: Overlap[] = [];
+  function direction(rect: Box, cellBox: Box): "left" | "right" | "above" | "below" | null {
+    const sameHeight = rect.y < cellBox.y + cellBox.height && rect.y + rect.height > cellBox.y;
+    if (sameHeight && rect.x >= cellBox.x + cellBox.width - 1) return "right";
+    if (sameHeight && rect.x + rect.width <= cellBox.x + 1) return "left";
+    const sameColumn = rect.x < cellBox.x + cellBox.width && rect.x + rect.width > cellBox.x;
+    if (sameColumn && Math.abs(rect.y - (cellBox.y + cellBox.height)) <= 1) return "below";
+    if (sameColumn && Math.abs(rect.y + rect.height - cellBox.y) <= 1) return "above";
+    return null;
+  }
   for (const cell of inspected) {
     const cellBox = box(cell.getBoundingClientRect());
     const peers = cells.filter((other) => other !== cell && scope(other) === scope(cell))
-      .map((element) => ({ element, rect: box(element.getBoundingClientRect()) }));
+      .map((element) => {
+        const rect = box(element.getBoundingClientRect());
+        return { element, rect, direction: direction(rect, cellBox) };
+      });
     // Restrict lateral comparisons to the nearest cell in each column at a given height.
-    const neighbors = peers.filter(({ rect }) => {
-      const sameHeight = rect.y < cellBox.y + cellBox.height && rect.y + rect.height > cellBox.y;
-      if (sameHeight && rect.x >= cellBox.x + cellBox.width - 1) {
-        return !peers.some(({ rect: between }) => between !== rect &&
-          between.y < rect.y + rect.height && between.y + between.height > rect.y &&
-          between.x >= cellBox.x + cellBox.width - 1 && between.x < rect.x);
+    const neighbors = peers.filter((peer) => {
+      const { rect, direction } = peer;
+      if (direction === "right") {
+        return !peers.some((between) => between !== peer && between.direction === "right" &&
+          between.rect.y < rect.y + rect.height && between.rect.y + between.rect.height > rect.y &&
+          between.rect.x < rect.x);
       }
-      if (sameHeight && rect.x + rect.width <= cellBox.x + 1) {
-        return !peers.some(({ rect: between }) => between !== rect &&
-          between.y < rect.y + rect.height && between.y + between.height > rect.y &&
-          between.x + between.width <= cellBox.x + 1 && between.x + between.width > rect.x + rect.width);
+      if (direction === "left") {
+        return !peers.some((between) => between !== peer && between.direction === "left" &&
+          between.rect.y < rect.y + rect.height && between.rect.y + between.rect.height > rect.y &&
+          between.rect.x + between.rect.width > rect.x + rect.width);
       }
-      const sameColumn = rect.x < cellBox.x + cellBox.width && rect.x + rect.width > cellBox.x;
-      return sameColumn && (Math.abs(rect.y - (cellBox.y + cellBox.height)) <= 1 ||
-        Math.abs(rect.y + rect.height - cellBox.y) <= 1);
+      return direction !== null;
     });
     const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
     const range = document.createRange();
@@ -165,15 +193,15 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       range.selectNodeContents(text);
       for (const fragment of range.getClientRects()) {
         if (fragment.width <= 0 || fragment.height <= 0) continue;
-        const visible = visibleRect(box(fragment), parent, cell);
+        const visible = visibleRect(box(fragment), parent);
         if (visible === null) continue;
-        for (const { element, rect } of neighbors) {
+        for (const { element, rect, direction } of neighbors) {
           if (intersect(visible, rect) === null) continue;
-          const distance = rect.x >= cellBox.x + cellBox.width - 1
+          const distance = direction === "right"
             ? Math.min(visible.x + visible.width - rect.x, rect.width)
-            : rect.x + rect.width <= cellBox.x + 1
+            : direction === "left"
               ? Math.min(rect.x + rect.width - visible.x, rect.width)
-              : rect.y >= cellBox.y + cellBox.height - 1
+              : direction === "below"
                 ? Math.min(visible.y + visible.height - rect.y, rect.height)
                 : Math.min(rect.y + rect.height - visible.y, rect.height);
           breaches.set(element, Math.max(breaches.get(element) ?? 0, distance));

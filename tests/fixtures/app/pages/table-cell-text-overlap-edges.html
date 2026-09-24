@@ -12,4 +12,8 @@ button { display: flex; border: 0; padding: 0; background: none; white-space: no
 <tr><td id="paint-contained"><span style="display:block;width:120px;contain:paint"><button>VeryLongUnbrokenPropertyIdentifier</button></span></td><td>4</td></tr>
 <tr><td id="positioned-body"><button style="position:absolute;top:170px;left:0">VeryLongUnbrokenPropertyIdentifier</button></td><td id="positioned-neighbor">5</td></tr>
 <tr><td id="transparent" style="white-space:nowrap;color:transparent">VeryLongUnbrokenPropertyIdentifier</td><td>6</td></tr>
+<tr><td id="positioned-outside"><button style="position:absolute;top:250px;left:130px">VeryLongUnbrokenPropertyIdentifier</button></td><td id="outside-neighbor">7</td></tr>
+<tr><td id="escapes-overflow" style="overflow:hidden"><button style="position:absolute;top:290px;left:0">VeryLongUnbrokenPropertyIdentifier</button></td><td id="overflow-neighbor">8</td></tr>
+<tr><td id="circle-clipped"><span style="display:block;clip-path:circle(0px)"><button>VeryLongUnbrokenPropertyIdentifier</button></span></td><td>9</td></tr>
+<tr><td id="contained-positioned"><span style="display:block;position:relative;width:120px;height:40px;overflow:hidden"><button style="position:absolute;top:0;left:0">VeryLongUnbrokenPropertyIdentifier</button></span></td><td>10</td></tr>
 </tbody></table></section></body></html>

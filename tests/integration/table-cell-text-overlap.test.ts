@@ -49,7 +49,7 @@ test("default check detects visible cell text overlap without page overflow at n
   expect(JSON.stringify(result)).toContain('"adjacentLocator":"#native-neighbor"');
 });
 
-test("positioned tables, spanning rows and non-overflow clipping retain only visible adjacent text", async () => {
+test("positioned text escaping cell overflow is measured, while clipped text is ignored", async () => {
   const result = await runCheckCommand(directory, `${server.url}/table-cell-text-overlap-edges.html`, {}, "test");
   const narrow = result.cases.find((item) => item.device.name === "390")!;
   expect(narrow.status).toBe("complete");
@@ -57,6 +57,8 @@ test("positioned tables, spanning rows and non-overflow clipping retain only vis
   expect(narrow.rules.find((rule) => rule.type === "table-cell-text-overlap")?.violations).toEqual([
     expect.objectContaining({ locator: "#spanning", adjacentLocator: "#second-row-neighbor" }),
     expect.objectContaining({ locator: "#positioned-body", adjacentLocator: "#positioned-neighbor" }),
+    expect.objectContaining({ locator: "#positioned-outside", adjacentLocator: "#outside-neighbor" }),
+    expect.objectContaining({ locator: "#escapes-overflow", adjacentLocator: "#overflow-neighbor" }),
   ]);
 });
 
