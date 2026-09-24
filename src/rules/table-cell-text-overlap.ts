@@ -212,51 +212,93 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     return inkContext;
   }
 
+  /** SVG and CSS length units in user units; `em` and unknown units resolve outside this table. */
+  const SVG_UNITS: Record<string, number> = {
+    "": 1, px: 1, in: 96, cm: 96 / 2.54, mm: 96 / 25.4, q: 96 / 101.6, pt: 96 / 72, pc: 16,
+  };
+
+  /** The SVG viewport in user units: the `viewBox` size when set, otherwise the rendered size. */
+  function svgViewport(element: Element): { readonly width: number; readonly height: number } {
+    const svg = (element as SVGGraphicsElement).ownerSVGElement;
+    if (svg === null) return { width: 0, height: 0 };
+    const view = svg.viewBox.baseVal;
+    if (view.width > 0 && view.height > 0) return { width: view.width, height: view.height };
+    const bounds = svg.getBoundingClientRect();
+    return { width: bounds.width, height: bounds.height };
+  }
+
+  /** An SVG length in user units, or null when the value needs a font or a unit we do not know. */
+  function svgLength(element: Element, raw: string, base: number): number | null {
+    const match = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)([a-z%]*)$/i.exec(raw.trim());
+    if (match === null) return null;
+    const value = Number.parseFloat(match[1]!);
+    const unit = match[2]!.toLowerCase();
+    if (unit === "%") return value * base / 100;
+    if (unit === "em") return value * Number.parseFloat(getComputedStyle(element).fontSize);
+    const scale = SVG_UNITS[unit];
+    return scale === undefined ? null : value * scale;
+  }
+
+  /** A rounded rectangle with independent axis radii, as SVG clamps them. */
+  function roundedRect(geometry: Path2D, x: number, y: number, width: number, height: number, rx: number, ry: number): void {
+    geometry.moveTo(x + rx, y);
+    geometry.lineTo(x + width - rx, y);
+    geometry.ellipse(x + width - rx, y + ry, rx, ry, 0, -Math.PI / 2, 0);
+    geometry.lineTo(x + width, y + height - ry);
+    geometry.ellipse(x + width - rx, y + height - ry, rx, ry, 0, 0, Math.PI / 2);
+    geometry.lineTo(x + rx, y + height);
+    geometry.ellipse(x + rx, y + height - ry, rx, ry, 0, Math.PI / 2, Math.PI);
+    geometry.lineTo(x, y + ry);
+    geometry.ellipse(x + rx, y + ry, rx, ry, 0, Math.PI, Math.PI * 1.5);
+    geometry.closePath();
+  }
+
   /** An SVG basic shape as path geometry in its own user space; null when not modelled. */
   function svgShape(element: Element): Path2D | null {
-    // Undefined means the attribute is absent; null means the length is not modelled.
-    const number = (name: string): number | null | undefined => {
-      const raw = element.getAttribute(name);
-      if (raw === null) return undefined;
-      // Percentage lengths depend on the SVG viewport, which a clip path need not have.
-      if (raw.trim().endsWith("%")) return null;
-      const value = Number.parseFloat(raw);
-      return Number.isFinite(value) ? value : null;
+    const viewport = svgViewport(element);
+    const attribute = (name: string): string | null => element.getAttribute(name);
+    // Undefined means the attribute is absent; null means the length could not be resolved.
+    const optional = (name: string, base: number): number | null | undefined => {
+      const raw = attribute(name);
+      return raw === null ? undefined : svgLength(element, raw, base);
     };
-    const or = (name: string, fallback: number) => {
-      const value = number(name);
+    const length = (name: string, base: number, fallback: number): number | null => {
+      const value = optional(name, base);
       return value === undefined ? fallback : value;
     };
     const geometry = new Path2D();
     if (element.localName === "rect") {
-      const x = or("x", 0), y = or("y", 0), width = number("width"), height = number("height");
-      if (x === null || y === null || width === null || width === undefined || height === null || height === undefined) return null;
-      const rx = number("rx"), ry = number("ry");
-      if (rx === null || ry === null) return null;
-      const radiusX = rx ?? ry ?? 0;
-      const radiusY = ry ?? rx ?? 0;
-      if (radiusX > 0 || radiusY > 0) geometry.roundRect(x, y, width, height, [{ x: radiusX, y: radiusY }]);
+      const x = length("x", viewport.width, 0), y = length("y", viewport.height, 0);
+      const width = length("width", viewport.width, 0), height = length("height", viewport.height, 0);
+      if (x === null || y === null || width === null || height === null) return null;
+      const radiusX = optional("rx", viewport.width), radiusY = optional("ry", viewport.height);
+      if (radiusX === null || radiusY === null) return null;
+      const rx = Math.min(radiusX ?? radiusY ?? 0, width / 2);
+      const ry = Math.min(radiusY ?? radiusX ?? 0, height / 2);
+      if (rx > 0 && ry > 0) roundedRect(geometry, x, y, width, height, rx, ry);
       else geometry.rect(x, y, width, height);
       return geometry;
     }
     if (element.localName === "circle") {
-      const cx = or("cx", 0), cy = or("cy", 0), r = number("r");
-      if (cx === null || cy === null || r === null || r === undefined) return null;
+      const cx = length("cx", viewport.width, 0), cy = length("cy", viewport.height, 0);
+      const r = length("r", Math.hypot(viewport.width, viewport.height) / Math.SQRT2, 0);
+      if (cx === null || cy === null || r === null) return null;
       geometry.arc(cx, cy, r, 0, Math.PI * 2);
       return geometry;
     }
     if (element.localName === "ellipse") {
-      const cx = or("cx", 0), cy = or("cy", 0);
-      const rx = number("rx"), ry = number("ry");
-      if (cx === null || cy === null || rx === null || rx === undefined || ry === null || ry === undefined) return null;
+      const cx = length("cx", viewport.width, 0), cy = length("cy", viewport.height, 0);
+      const rx = length("rx", viewport.width, 0), ry = length("ry", viewport.height, 0);
+      if (cx === null || cy === null || rx === null || ry === null) return null;
       geometry.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
       return geometry;
     }
     if (element.localName === "polygon" || element.localName === "polyline") {
-      const raw = element.getAttribute("points") ?? "";
-      if (raw.includes("%")) return null;
-      const points = raw.trim().split(/[\s,]+/).map(Number.parseFloat);
-      if (points.length < 4 || points.length % 2 !== 0 || points.some((value) => !Number.isFinite(value))) return null;
+      const raw = (attribute("points") ?? "").trim();
+      if (raw.length === 0) return null;
+      const tokens = raw.split(/[\s,]+/);
+      const points = tokens.map((token, index) => svgLength(element, token, index % 2 === 0 ? viewport.width : viewport.height));
+      if (points.length < 4 || points.length % 2 !== 0 || points.some((point) => point === null)) return null;
       for (let index = 0; index < points.length; index += 2) {
         if (index === 0) geometry.moveTo(points[0]!, points[1]!);
         else geometry.lineTo(points[index]!, points[index + 1]!);
@@ -265,7 +307,7 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       return geometry;
     }
     if (element.localName === "path") {
-      try { return new Path2D(element.getAttribute("d") ?? ""); } catch { return null; }
+      try { return new Path2D(attribute("d") ?? ""); } catch { return null; }
     }
     return null;
   }

@@ -244,13 +244,15 @@ against applicable ancestor overflow, paint containment, the viewport, and the
 `clip-path` shapes `inset()`, `xywh()`, `circle()`, `ellipse()`, `polygon()`,
 including the `closest-side`/`farthest-side` radius keywords, `round` corners normalised
 against the resulting rectangle, `path("...")`, and `url(#id)` references built from SVG
-`rect` (including `rx`/`ry`), `circle`, `ellipse`, `polygon`, `polyline`, and `path` shapes
-with their own transforms and `clipPathUnits`. An ancestor `transform` scales the
-overflow and `clip-path` bounds to match the rendered text. A non-rectangular shape is
-sampled on a grid of at most four CSS pixels, capped at 64 samples per axis, so a partly
-clipped fragment is reported only where that shape still shows it. `clip-path` values
-that name an unmodelled shape, or an SVG shape with percentage lengths, are ignored
-rather than treated as empty. Text that wraps inside its cell or is hidden by
+`rect` (with `rx`/`ry` clamped per axis), `circle`, `ellipse`, `polygon`, `polyline`, and
+`path` shapes, with their own transforms and `clipPathUnits`. An SVG length uses the usual
+CSS units, and a percentage resolves against the SVG viewport: its `viewBox` size when set,
+its rendered size otherwise. An ancestor `transform` scales the overflow and `clip-path`
+bounds to match the rendered text. A non-rectangular shape is sampled on a grid of at most
+four CSS pixels, capped at 64 samples per axis, so a partly clipped fragment is reported
+only where that shape still shows it. A `clip-path` that names a shape this rule cannot
+read, such as an unsupported SVG element or length keyword, is ignored rather than treated
+as empty. Text that wraps inside its cell or is hidden by
 `overflow: hidden`, ellipsis, or an internal scroller is not reported.
 Elements marked `[role="tooltip"]`, `[role="dialog"]`, or `[popover]`, icons,
 and generated pseudo-element text are not measured; unmarked positioned body
