@@ -242,23 +242,33 @@ in the same table/grid, including cells across a `rowspan` or a row boundary.
 The check measures `Range.getClientRects()` after layout and clips fragments
 against applicable ancestor overflow, paint containment, the viewport, and the
 `clip-path` shapes `inset()`, `xywh()`, `circle()`, `ellipse()`, `polygon()`,
-including the `closest-side`/`farthest-side` radius keywords, `round` corners normalised
+including the `closest-side`/`farthest-side` radius keywords and a `calc()` length or
+percentage built from `+`, `-`, `*` and `/`, `round` corners normalised
 against the resulting rectangle, `path("...")`, and `url(#id)` references built from SVG
 `rect` (with `rx`/`ry` clamped per axis), `circle`, `ellipse`, `polygon`, `polyline`, and
-`path` shapes, with their own transforms and `clipPathUnits`. An SVG length accepts `px`,
+`path` shapes, with their own transforms and `clipPathUnits`. A negative `r`, `rx`, or `ry`
+is an SVG error, so an `ellipse` draws from the other axis' radius while a `circle` draws
+nothing. An SVG length accepts `px`,
 `in`, `cm`, `mm`, `q`, `pt`, `pc`, and `em`; a percentage resolves against the SVG viewport
 (its `viewBox` size when set, its rendered size otherwise) or, under
 `clipPathUnits="objectBoundingBox"`, against the normalized element box. Any other unit,
-and a `clip-path` that names a shape this rule cannot read, leaves the shape unmodelled
-rather than empty; a `url(#id)` reference containing one such element is ignored as a
+an expression the engine cannot reduce, and a `clip-path` that names a shape this rule
+cannot read, leave the shape unmodelled rather than empty; a `url(#id)` reference
+containing one such element is ignored as a
 whole, while a `clipPath` with no shape hides the referenced text. An ancestor `transform` scales the overflow and `clip-path` bounds to match the
 rendered text. A non-rectangular shape is sampled on a grid of at most four CSS pixels,
 capped at 64 samples per axis, so a partly clipped fragment is reported only where that
 shape still shows it. Text that wraps inside its cell or is hidden by
-`overflow: hidden`, ellipsis, or an internal scroller is not reported.
-Elements marked `[role="tooltip"]`, `[role="dialog"]`, or `[popover]`, icons,
-and generated pseudo-element text are not measured; unmarked positioned body
-text is measured even when it starts outside its source cell. The default
+`overflow: hidden` on a block, flex or grid container box, ellipsis, or an internal scroller is
+not reported. A `border-radius` on that box rounds the clip where both axes clip, so a corner
+that cuts the text away is not reported either, while one clipped axis beside a visible one
+keeps the plain rectangle; a non-replaced inline box generates no overflow clip and does not
+hide its text.
+An overlay opened from inside the source cell (`[role="tooltip"]`, `[role="dialog"]`, or
+`[popover]`), a text-backed icon (a descendant marked `[role="img"]` or `[aria-hidden="true"]`),
+and generated pseudo-element text are not measured, while a table hosted inside such an overlay
+still is. An `aria-hidden` cell or ancestor still paints its own text, so that text is measured.
+Unmarked positioned body text is measured even when it starts outside its source cell. The default
 threshold is greater than 1 CSS pixel.
 
 The violation supplies `locator`, `geometry` (source cell), `adjacentLocator`

@@ -22,6 +22,8 @@ export function createClippingEngine(): ClippingEngine {
   /** One element-space length, or null when CSS wrote a keyword instead. */
   function elementLength(part: string | undefined, base: number): number | null {
     const text = (part ?? "").trim();
+    const expression = /^calc\(([\s\S]*)\)$/i.exec(text);
+    if (expression !== null) return calcLength(expression[1]!, base);
     const value = Number.parseFloat(text);
     if (!Number.isFinite(value)) return null;
     return text.endsWith("%") ? value * base / 100 : value;
@@ -143,6 +145,85 @@ export function createClippingEngine(): ClippingEngine {
     return scale === undefined ? null : value * scale;
   }
 
+  /**
+   * A `calc()` expression reduced to one element-space length. Only `+`, `-`, `*` and `/` over
+   * lengths, percentages and numbers are modelled, with nesting; a keyword such as `min()` or a
+   * unit with no fixed size leaves the expression unresolved, so the caller keeps the shape
+   * unmodelled instead of reading an unreadable expression as a zero clip.
+   */
+  function calcLength(text: string, base: number): number | null {
+    interface Term { readonly value: number; readonly length: boolean }
+    let index = 0;
+    function skipSpace(): void {
+      while (index < text.length && /\s/.test(text[index]!)) index += 1;
+    }
+    function atom(): Term | null {
+      skipSpace();
+      if (text[index] === "(") {
+        index += 1;
+        const inner = sum();
+        skipSpace();
+        if (inner === null || text[index] !== ")") return null;
+        index += 1;
+        return inner;
+      }
+      const match = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?([a-z%]*)/i.exec(text.slice(index));
+      if (match === null) return null;
+      index += match[0]!.length;
+      const value = Number.parseFloat(match[0]!);
+      const unit = match[1]!.toLowerCase();
+      if (unit === "%") return { value: value * base / 100, length: true };
+      if (unit === "") return { value, length: false };
+      const scale = SVG_UNITS[unit];
+      return scale === undefined ? null : { value: value * scale, length: true };
+    }
+    function product(): Term | null {
+      let left = atom();
+      for (;;) {
+        if (left === null) return null;
+        skipSpace();
+        const operator = text[index];
+        if (operator !== "*" && operator !== "/") return left;
+        index += 1;
+        const right = atom();
+        // CSS multiplies and divides by a number, so two lengths have no product.
+        if (right === null || left.length === right.length) return null;
+        if (operator === "*") left = { value: left.value * right.value, length: true };
+        else if (right.value !== 0) left = { value: left.value / right.value, length: left.length };
+        else return null;
+      }
+    }
+    function sum(): Term | null {
+      let left = product();
+      for (;;) {
+        if (left === null) return null;
+        skipSpace();
+        const operator = text[index];
+        if (operator !== "+" && operator !== "-") return left;
+        index += 1;
+        const right = product();
+        if (right === null || left.length !== right.length) return null;
+        left = {
+          value: operator === "+" ? left.value + right.value : left.value - right.value,
+          length: left.length,
+        };
+      }
+    }
+    const resolved = sum();
+    skipSpace();
+    if (resolved === null || !resolved.length || index !== text.length) return null;
+    return resolved.value;
+  }
+
+  /**
+   * A negative `r`/`rx`/`ry` is an SVG error: the browser draws that axis with the shape's
+   * other radius, or draws nothing when it has none. `Path2D.arc` and `Path2D.ellipse` throw
+   * on the invalid value itself.
+   */
+  function drawableRadius(value: number, other: number): number {
+    return value < 0 ? Math.max(other, 0) : value;
+  }
+
   /** A rounded rectangle with independent axis radii, as SVG clamps them. */
   function roundedRect(geometry: Path2D, x: number, y: number, width: number, height: number, rx: number, ry: number): void {
     geometry.moveTo(x + rx, y);
@@ -186,14 +267,17 @@ export function createClippingEngine(): ClippingEngine {
       const cx = length("cx", viewport.width, 0), cy = length("cy", viewport.height, 0);
       const r = length("r", Math.hypot(viewport.width, viewport.height) / Math.SQRT2, 0);
       if (cx === null || cy === null || r === null) return null;
+      // An invalid radius draws nothing, so the reference stays modelled as an empty shape
+      // instead of becoming an unmodelled one that leaves the text clipped by nothing.
+      if (r < 0) return geometry;
       geometry.arc(cx, cy, r, 0, Math.PI * 2);
       return geometry;
     }
     if (element.localName === "ellipse") {
       const cx = length("cx", viewport.width, 0), cy = length("cy", viewport.height, 0);
-      const rx = length("rx", viewport.width, 0), ry = length("ry", viewport.height, 0);
-      if (cx === null || cy === null || rx === null || ry === null) return null;
-      geometry.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+      const radiusX = length("rx", viewport.width, 0), radiusY = length("ry", viewport.height, 0);
+      if (cx === null || cy === null || radiusX === null || radiusY === null) return null;
+      geometry.ellipse(cx, cy, drawableRadius(radiusX, radiusY), drawableRadius(radiusY, radiusX), 0, 0, Math.PI * 2);
       return geometry;
     }
     if (element.localName === "polygon" || element.localName === "polyline") {
@@ -277,7 +361,27 @@ export function createClippingEngine(): ClippingEngine {
     if (shape === null) return null;
     const name = shape[1]!;
     const body = shape[2]!.trim();
-    const tokensOf = (text: string) => text.trim().split(/\s+/).filter((part) => part.length > 0);
+    /**
+     * Whitespace-separated parts, keeping a functional notation such as `calc(50% + 2px)` whole.
+     * A plain split cuts the expression into fragments no length can resolve.
+     */
+    const tokensOf = (text: string): string[] => {
+      const tokens: string[] = [];
+      let token = "";
+      let depth = 0;
+      for (const character of text) {
+        if (character === "(") depth += 1;
+        else if (character === ")") depth -= 1;
+        else if (depth === 0 && /\s/.test(character)) {
+          if (token.length > 0) tokens.push(token);
+          token = "";
+          continue;
+        }
+        token += character;
+      }
+      if (token.length > 0) tokens.push(token);
+      return tokens;
+    };
     const viewportX = (length: number) => frames.bounds.x + length * frames.scale.x;
     const viewportY = (length: number) => frames.bounds.y + length * frames.scale.y;
     const viewportRadii = (radii: readonly { x: number; y: number }[]) =>
@@ -285,7 +389,7 @@ export function createClippingEngine(): ClippingEngine {
     const sidesOf = (text: string) => {
       const round = /(?:^|\s)round\s+([\s\S]+)$/.exec(text);
       return {
-        sides: (round === null ? text : text.slice(0, round.index)).trim().split(/\s+/),
+        sides: tokensOf(round === null ? text : text.slice(0, round.index)),
         round: round === null ? null : tokensOf(round[1]!),
       };
     };
@@ -342,7 +446,9 @@ export function createClippingEngine(): ClippingEngine {
             ? Math.min(cx, frames.width - cx, cy, frames.height - cy)
             : token.endsWith("%")
               ? (Number.isFinite(percent) ? percent * Math.hypot(frames.width, frames.height) / Math.SQRT2 / 100 : null)
-              : elementLength(radii[0], frames.height);
+              // A circle's percentage radius resolves against the reference box diagonal,
+              // so a `calc()` radius has to resolve against that same length.
+              : elementLength(radii[0], Math.hypot(frames.width, frames.height) / Math.SQRT2);
         if (resolved === null || !(resolved >= 0)) return null;
         return ellipseRegion(viewportX(cx), viewportY(cy), resolved * frames.scale.x, resolved * frames.scale.y);
       }
