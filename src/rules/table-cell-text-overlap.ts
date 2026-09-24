@@ -64,11 +64,13 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       stableDataAttribute: attribute(stableAttrs), semanticAttribute: attribute(semanticAttrs), path,
     };
   }
+  // display, content-visibility, opacity and opacity filters hide the whole subtree.
+  // visibility is inheritable and a descendant can restore it, so the text decides on its own value.
   function rendered(element: Element): boolean {
     for (let current: Element | null = element; current !== null; current = current.parentElement) {
       const style = getComputedStyle(current);
-      if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" ||
-          style.contentVisibility === "hidden" || Number.parseFloat(style.opacity) <= 0 ||
+      if (style.display === "none" || style.contentVisibility === "hidden" ||
+          Number.parseFloat(style.opacity) <= 0 ||
           /\bopacity\(\s*0(?:\.0+)?%?\s*\)/.test(style.filter)) return false;
     }
     return getComputedStyle(element).display === "contents" || element.getClientRects().length > 0;
@@ -123,7 +125,8 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       const inset = /^inset\(([^()]+)\)$/.exec(style.clipPath);
       if (inset !== null && visible !== null) {
         const bounds = ancestor.getBoundingClientRect();
-        const parts = inset[1]!.trim().split(/\s+/);
+        // `inset(0 round 8px)` carries an optional border-radius clause that is not an offset.
+        const parts = inset[1]!.replace(/\bround\b[\s\S]*$/, "").trim().split(/\s+/);
         const resolveInset = (part: string, size: number) =>
           part.endsWith("%") ? Number.parseFloat(part) * size / 100 : Number.parseFloat(part);
         const top = resolveInset(parts[0]!, bounds.height);
@@ -222,6 +225,8 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       const parent = text.parentElement;
       if (parent === null || !text.nodeValue?.trim() || !rendered(parent)) continue;
       const style = getComputedStyle(parent);
+      // A hidden cell or wrapper still paints a descendant that restores visibility.
+      if (style.visibility === "hidden" || style.visibility === "collapse") continue;
       const ink = style.webkitTextFillColor || style.color;
       const transparent = (color: string) => color === "transparent" || /^(?:rgba|hsla)\([^)]*,\s*0(?:\.0+)?\s*\)$/.test(color);
       const shadow = style.textShadow !== "none" && !/^(?:transparent|(?:rgba|hsla)\([^)]*,\s*0(?:\.0+)?\s*\))\s/.test(style.textShadow);

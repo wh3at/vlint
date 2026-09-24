@@ -76,6 +76,8 @@ test("detects painted glyphs across separated cells without treating blank or cl
     ["#shadow", "#shadow-neighbor"],
     ["#stroke", "#stroke-neighbor"],
     ["#vertical-up", "#above-neighbor"],
+    ["#hidden-ancestor", "#hidden-neighbor"],
+    ["#inset-round", "#inset-round-neighbor"],
   ]);
 });
 
