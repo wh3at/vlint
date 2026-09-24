@@ -1,0 +1,15 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+body { margin: 0; }
+.panel { position: fixed; left: 0; top: 0; width: 360px; }
+table { table-layout: fixed; border-collapse: collapse; width: 360px; }
+th, td { padding: 0; height: 40px; }
+col:first-child { width: 120px; }
+button { display: flex; border: 0; padding: 0; background: none; white-space: nowrap; font: 16px Arial; }
+</style></head><body><section class="panel"><table><colgroup><col><col></colgroup><tbody>
+<tr><th id="spanning" rowspan="2" style="vertical-align:top"><button style="position:relative;top:45px">VeryLongUnbrokenPropertyIdentifier</button></th><td id="first-row-neighbor">1</td></tr>
+<tr><td id="second-row-neighbor">2</td></tr>
+<tr><td id="clipped-path"><span style="display:block;clip-path:inset(0 100% 0 0)"><button>VeryLongUnbrokenPropertyIdentifier</button></span></td><td>3</td></tr>
+<tr><td id="paint-contained"><span style="display:block;width:120px;contain:paint"><button>VeryLongUnbrokenPropertyIdentifier</button></span></td><td>4</td></tr>
+<tr><td id="positioned-body"><button style="position:absolute;top:170px;left:0">VeryLongUnbrokenPropertyIdentifier</button></td><td id="positioned-neighbor">5</td></tr>
+<tr><td id="transparent" style="white-space:nowrap;color:transparent">VeryLongUnbrokenPropertyIdentifier</td><td>6</td></tr>
+</tbody></table></section></body></html>

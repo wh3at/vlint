@@ -74,23 +74,47 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
   }
   function visibleRect(rect: Box, parent: Element, cell: Element): Box | null {
     let visible: Box | null = intersect(rect, { x: 0, y: 0, width: innerWidth, height: innerHeight });
+    const source = cell.getBoundingClientRect();
     for (let ancestor: Element | null = parent; ancestor !== null && visible !== null; ancestor = ancestor.parentElement) {
       const style = getComputedStyle(ancestor);
-      // Out-of-flow overlays are not cell-body text. Generated content has no DOM text node.
-      if (ancestor !== cell && (style.position === "absolute" || style.position === "fixed")) return null;
-      if (["hidden", "clip", "scroll", "auto"].includes(style.overflowX) ||
-          ["hidden", "clip", "scroll", "auto"].includes(style.overflowY)) {
+      if (ancestor !== cell && cell.contains(ancestor) && (style.position === "absolute" || style.position === "fixed")) {
+        // Body text may be positioned, but a separate overlay starts outside the source cell.
+        const positioned = ancestor.getBoundingClientRect();
+        if (positioned.left < source.left - 1 || positioned.left >= source.right ||
+            positioned.top < source.top - 1 || positioned.top >= source.bottom ||
+            ancestor.matches('[role="tooltip"], [role="dialog"], [popover]')) return null;
+      }
+      const clipsX = ["hidden", "clip", "scroll", "auto"].includes(style.overflowX);
+      const clipsY = ["hidden", "clip", "scroll", "auto"].includes(style.overflowY);
+      const paintsInside = style.contain.split(/\s+/).some((part) => ["paint", "content", "strict"].includes(part));
+      if (clipsX || clipsY || paintsInside) {
         const bounds = ancestor.getBoundingClientRect();
         const clip = {
           x: bounds.left + ancestor.clientLeft, y: bounds.top + ancestor.clientTop,
           width: ancestor.clientWidth, height: ancestor.clientHeight,
         };
-        // Only clipped axes restrict the visible ink.
         visible = intersect(visible, {
-          x: ["hidden", "clip", "scroll", "auto"].includes(style.overflowX) ? clip.x : visible.x,
-          y: ["hidden", "clip", "scroll", "auto"].includes(style.overflowY) ? clip.y : visible.y,
-          width: ["hidden", "clip", "scroll", "auto"].includes(style.overflowX) ? clip.width : visible.width,
-          height: ["hidden", "clip", "scroll", "auto"].includes(style.overflowY) ? clip.height : visible.height,
+          x: clipsX || paintsInside ? clip.x : visible.x,
+          y: clipsY || paintsInside ? clip.y : visible.y,
+          width: clipsX || paintsInside ? clip.width : visible.width,
+          height: clipsY || paintsInside ? clip.height : visible.height,
+        });
+      }
+      // Range geometry is not clipped by clip-path. Inset clips are rectangular.
+      const inset = /^inset\(([^()]+)\)$/.exec(style.clipPath);
+      if (inset !== null && visible !== null) {
+        const bounds = ancestor.getBoundingClientRect();
+        const values = inset[1]!.split(/\s+/).map((part, index) => {
+          const size = index % 2 === 0 ? bounds.height : bounds.width;
+          return part.endsWith("%") ? Number.parseFloat(part) * size / 100 : Number.parseFloat(part);
+        });
+        const top = values[0] ?? 0;
+        const right = values[1] ?? top;
+        const bottom = values[2] ?? top;
+        const left = values[3] ?? right;
+        visible = intersect(visible, {
+          x: bounds.left + left, y: bounds.top + top,
+          width: bounds.width - left - right, height: bounds.height - top - bottom,
         });
       }
     }
@@ -108,9 +132,25 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
   const overlaps: Overlap[] = [];
   for (const cell of inspected) {
     const cellBox = box(cell.getBoundingClientRect());
-    const neighbors = cells.filter((other) => other !== cell && scope(other) === scope(cell) && row(other) === row(cell))
-      .map((element) => ({ element, rect: box(element.getBoundingClientRect()) }))
-      .filter(({ rect }) => rect.y < cellBox.y + cellBox.height && rect.y + rect.height > cellBox.y);
+    const peers = cells.filter((other) => other !== cell && scope(other) === scope(cell))
+      .map((element) => ({ element, rect: box(element.getBoundingClientRect()) }));
+    // Restrict lateral comparisons to the nearest cell in each column at a given height.
+    const neighbors = peers.filter(({ rect }) => {
+      const sameHeight = rect.y < cellBox.y + cellBox.height && rect.y + rect.height > cellBox.y;
+      if (sameHeight && rect.x >= cellBox.x + cellBox.width - 1) {
+        return !peers.some(({ rect: between }) => between !== rect &&
+          between.y < rect.y + rect.height && between.y + between.height > rect.y &&
+          between.x >= cellBox.x + cellBox.width - 1 && between.x < rect.x);
+      }
+      if (sameHeight && rect.x + rect.width <= cellBox.x + 1) {
+        return !peers.some(({ rect: between }) => between !== rect &&
+          between.y < rect.y + rect.height && between.y + between.height > rect.y &&
+          between.x + between.width <= cellBox.x + 1 && between.x + between.width > rect.x + rect.width);
+      }
+      const sameColumn = rect.x < cellBox.x + cellBox.width && rect.x + rect.width > cellBox.x;
+      return sameColumn && (Math.abs(rect.y - (cellBox.y + cellBox.height)) <= 1 ||
+        Math.abs(rect.y + rect.height - cellBox.y) <= 1);
+    });
     const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
     const range = document.createRange();
     const breaches = new Map<Element, number>();
@@ -118,6 +158,8 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       const text = walker.currentNode as Text;
       const parent = text.parentElement;
       if (parent === null || !text.nodeValue?.trim() || !rendered(parent)) continue;
+      const ink = getComputedStyle(parent).webkitTextFillColor || getComputedStyle(parent).color;
+      if (ink === "transparent" || /^(?:rgba|hsla)\([^)]*,\s*0(?:\.0+)?\s*\)$/.test(ink)) continue;
       // Nested tables/grids belong to their own cells, not the containing cell.
       if (parent.closest('th, td, [role="cell"], [role="gridcell"], [role="rowheader"], [role="columnheader"]') !== cell) continue;
       range.selectNodeContents(text);
@@ -127,10 +169,14 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
         if (visible === null) continue;
         for (const { element, rect } of neighbors) {
           if (intersect(visible, rect) === null) continue;
-          const rightBreach = visible.x + visible.width - rect.x;
-          const leftBreach = rect.x + rect.width - visible.x;
-          const distance = rect.x >= cellBox.x ? rightBreach : leftBreach;
-          breaches.set(element, Math.max(breaches.get(element) ?? 0, Math.min(distance, rect.width)));
+          const distance = rect.x >= cellBox.x + cellBox.width - 1
+            ? Math.min(visible.x + visible.width - rect.x, rect.width)
+            : rect.x + rect.width <= cellBox.x + 1
+              ? Math.min(rect.x + rect.width - visible.x, rect.width)
+              : rect.y >= cellBox.y + cellBox.height - 1
+                ? Math.min(visible.y + visible.height - rect.y, rect.height)
+                : Math.min(rect.y + rect.height - visible.y, rect.height);
+          breaches.set(element, Math.max(breaches.get(element) ?? 0, distance));
         }
       }
     }

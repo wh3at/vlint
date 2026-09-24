@@ -174,7 +174,7 @@ and iPhone 17 profiles.
 - **`tab-label-single-line`** — each rendered tab label must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `labelSelector`, `minimumLabels`, `allowZeroLabels`.
 - **`page-horizontal-overflow`** — detects unintended root-page horizontal scroll attributed to light-DOM elements. Field: `tolerancePx` (`0`–`100`, default `1`).
 - **`table-header-single-line`** — each rendered semantic column header must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `lineTopTolerancePx`, `minimumHeaders`, `allowZeroHeaders`.
-- **`table-cell-text-overlap`** — detects visible text entering another cell in the same table row. Fields: `enabled` (default `true`), `excludeSelectors` (default `[]`).
+- **`table-cell-text-overlap`** — detects visible text entering an adjacent cell in the same table/grid. Fields: `enabled` (default `true`), `excludeSelectors` (default `[]`).
 - **`static`** provider — inline `targets` (`name`, `url`, defaults, optional `ruleOverrides`).
 - **`command`** provider — runs a trusted executable without a shell, reads `{"targets":[...]}` from stdout (`executable`, `args`, `timeoutMs`).
 
@@ -237,13 +237,15 @@ reports its source, locator, box, text, line count, measured line tops, and tole
 
 Enabled by default, including when `rules` omits it. Checks native `th`/`td` and
 ARIA `table`/`grid` row, rowheader, columnheader, cell/gridcell pairs. A cell is
-reported only if rendered DOM text intersects another cell's box in the same
-row. The check measures `Range.getClientRects()` after layout and clips each
-fragment against its ancestors' overflow boundaries and the viewport. Text
-that wraps inside its cell or is hidden by `overflow: hidden`, ellipsis, or an
-internal scroller is not reported. Out-of-flow absolute/fixed descendants
-(including tooltips/popovers), icons and generated pseudo-element text are
-not measured. The default threshold is greater than 1 CSS pixel.
+reported only if rendered DOM text intersects a geometrically adjacent cell
+in the same table/grid, including cells across a `rowspan` or a row boundary.
+The check measures `Range.getClientRects()` after layout and clips fragments
+against ancestors' overflow and paint containment, rectangular `clip-path: inset()`
+and the viewport. Text that wraps inside its cell or is hidden by
+`overflow: hidden`, ellipsis, or an internal scroller is not reported.
+Out-of-flow tooltips/popovers, icons and generated pseudo-element text are not
+measured; positioned body text anchored inside its cell is measured. The
+default threshold is greater than 1 CSS pixel.
 
 The violation supplies `locator`, `geometry` (source cell), `adjacentLocator`
 (neighbor cell), and `overlapPx` (visible penetration into that cell). The
