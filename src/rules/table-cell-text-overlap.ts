@@ -335,7 +335,18 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     const viewport = bounding ? { width: 1, height: 1 } : svgViewport(clip);
     // A clip path with no shape hides everything it applies to; an unreadable child
     // leaves the whole reference unmodelled instead.
-    const children = [...clip.children].filter((child) => !["title", "desc", "metadata"].includes(child.localName));
+    const children = [...clip.children]
+      .filter((child) => !["title", "desc", "metadata"].includes(child.localName))
+      // A hidden shape contributes no geometry, so it cannot keep the clip open.
+      // `visibility` is inherited, but an ancestor's `display: none` is not.
+      .filter((child) => {
+        for (let current: Element | null = child; current !== null && current !== clip; current = current.parentElement) {
+          const style = getComputedStyle(current);
+          if (style.display === "none" || style.contentVisibility === "hidden" ||
+              (current === child && (style.visibility === "hidden" || style.visibility === "collapse"))) return false;
+        }
+        return true;
+      });
     if (children.length === 0) return { box: null, covers: () => false };
     const shapes: { readonly path: Path2D; readonly evenOdd: boolean }[] = [];
     for (const child of children) {
