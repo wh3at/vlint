@@ -1,0 +1,50 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+body { margin: 0; font: 16px Arial; background: #fff; }
+table { table-layout: fixed; border-spacing: 4px; width: 360px; }
+col:first-child { width: 120px; }
+td { padding: 0; height: 34px; vertical-align: top; white-space: nowrap; }
+</style></head><body>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="occluded-sticky">VeryLongUnbrokenPropertyIdentifier</td><td id="occluded-sticky-neighbor" style="position:sticky;left:0;z-index:1;background:#fff"></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="occluded-relative">VeryLongUnbrokenPropertyIdentifier</td><td id="occluded-relative-neighbor" style="position:relative;background:#fff"></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="occluded-padding-border">VeryLongUnbrokenPropertyIdentifier</td><td id="occluded-padding-border-neighbor" style="position:relative;z-index:1;background:#fff;background-clip:padding-box;border:2px solid #fff"></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="occluded-tie" style="position:relative">VeryLongUnbrokenPropertyIdentifier</td><td id="occluded-tie-neighbor" style="position:relative;z-index:1;background:#fff"></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="occluded-below"><span style="position:relative;top:38px">Down</span></td><td></td></tr>
+<tr><td id="occluded-below-neighbor" style="position:relative;z-index:1;background:#fff"></td><td></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="visible-static">VeryLongUnbrokenPropertyIdentifier</td><td id="visible-static-neighbor" style="background:#fff"></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="visible-clear">VeryLongUnbrokenPropertyIdentifier</td><td id="visible-clear-neighbor" style="position:relative;z-index:1"></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="visible-source-above" style="position:relative;z-index:2">VeryLongUnbrokenPropertyIdentifier</td><td id="visible-source-above-neighbor" style="position:sticky;left:0;z-index:1;background:#fff"></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="visible-nested-above" style="position:relative"><span style="position:relative;z-index:2">VeryLongUnbrokenPropertyIdentifier</span></td><td id="visible-nested-above-neighbor" style="position:relative;z-index:1;background:#fff"></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="visible-negative-z">VeryLongUnbrokenPropertyIdentifier</td><td id="visible-negative-z-neighbor" style="position:relative;z-index:-1;background:#fff"></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="visible-washed">VeryLongUnbrokenPropertyIdentifier</td><td id="visible-washed-neighbor" style="position:relative;z-index:1;background:#fff;opacity:0.5"></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="visible-clip-text">VeryLongUnbrokenPropertyIdentifier</td><td id="visible-clip-text-neighbor" style="position:relative;z-index:1;background:#fff;background-clip:text;color:transparent"></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="visible-rounded">VeryLongUnbrokenPropertyIdentifier</td><td id="visible-rounded-neighbor" style="position:relative;z-index:1;background:#fff;border-radius:30px"></td></tr>
+</tbody></table>
+<table><colgroup><col><col></colgroup><tbody>
+<tr><td id="visible-source-later-neighbor" style="position:sticky;left:0;background:#fff"></td><td id="visible-source-later"><span style="position:relative;left:-130px">VeryLongUnbrokenPropertyIdentifier</span></td></tr>
+</tbody></table>
+</body></html>

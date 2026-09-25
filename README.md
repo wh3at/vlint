@@ -154,7 +154,8 @@ and iPhone 17 profiles.
   "rules": [
     { "name": "tab-label-single-line", "type": "tab-label-single-line" },
     { "name": "page-horizontal-overflow", "type": "page-horizontal-overflow" },
-    { "name": "table-header-single-line", "type": "table-header-single-line" }
+    { "name": "table-header-single-line", "type": "table-header-single-line" },
+    { "name": "table-cell-text-overlap", "type": "table-cell-text-overlap" }
   ],
   "provider": {
     "type": "static",
@@ -173,6 +174,7 @@ and iPhone 17 profiles.
 - **`tab-label-single-line`** — each rendered tab label must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `labelSelector`, `minimumLabels`, `allowZeroLabels`.
 - **`page-horizontal-overflow`** — detects unintended root-page horizontal scroll attributed to light-DOM elements. Field: `tolerancePx` (`0`–`100`, default `1`).
 - **`table-header-single-line`** — each rendered semantic column header must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `lineTopTolerancePx`, `minimumHeaders`, `allowZeroHeaders`.
+- **`table-cell-text-overlap`** — detects visible text entering an adjacent cell in the same table/grid. Fields: `enabled` (default `true`), `excludeSelectors` (default `[]`).
 - **`static`** provider — inline `targets` (`name`, `url`, defaults, optional `ruleOverrides`).
 - **`command`** provider — runs a trusted executable without a shell, reads `{"targets":[...]}` from stdout (`executable`, `args`, `timeoutMs`).
 
@@ -230,6 +232,61 @@ Line counts come from rendered DOM text geometry in each active viewport, not fr
 the computed `white-space` value or decorative element boxes. The same header can be
 clean on a desktop profile and violate on an iPhone-width profile; the violation
 reports its source, locator, box, text, line count, measured line tops, and tolerance.
+
+### Table cell text overlap rule
+
+Enabled by default, including when `rules` omits it. Checks native `th`/`td` and
+ARIA `table`/`grid` row, rowheader, columnheader, cell/gridcell pairs. A cell is
+reported only if rendered DOM text intersects a geometrically adjacent cell
+in the same table/grid, including cells across a `rowspan` or a row boundary.
+The check measures `Range.getClientRects()` after layout and clips fragments
+against applicable ancestor overflow, paint containment, the viewport, and the
+`clip-path` shapes `inset()`, `xywh()`, `circle()`, `ellipse()`, `polygon()`,
+including the `closest-side`/`farthest-side` radius keywords and a `calc()` length or
+percentage built from `+`, `-`, `*` and `/`, `round` corners normalised
+against the resulting rectangle, `path("...")`, and `url(#id)` references built from SVG
+`rect` (with `rx`/`ry` clamped per axis), `circle`, `ellipse`, `polygon`, `polyline`, and
+`path` shapes, with their own transforms and `clipPathUnits`. A negative `r`, `rx`, or `ry`
+is an SVG error, so an `ellipse` draws from the other axis' radius while a `circle` draws
+nothing. An SVG length accepts `px`,
+`in`, `cm`, `mm`, `q`, `pt`, `pc`, and `em`; a percentage resolves against the SVG viewport
+(its `viewBox` size when set, its rendered size otherwise) or, under
+`clipPathUnits="objectBoundingBox"`, against the normalized element box. Any other unit,
+an expression the engine cannot reduce, and a `clip-path` that names a shape this rule
+cannot read, leave the shape unmodelled rather than empty; a `url(#id)` reference
+containing one such element is ignored as a
+whole, while a `clipPath` with no shape hides the referenced text. An ancestor `transform` scales the overflow and `clip-path` bounds to match the
+rendered text. A non-rectangular shape is sampled on a grid of at most four CSS pixels,
+capped at 64 samples per axis, so a partly clipped fragment is reported only where that
+shape still shows it. Text that wraps inside its cell or is hidden by
+`overflow: hidden` on a block, flex or grid container box, ellipsis, or an internal scroller is
+not reported. A `border-radius` on that box rounds the clip where both axes clip, so a corner
+that cuts the text away is not reported either, while one clipped axis beside a visible one
+keeps the plain rectangle; a non-replaced inline box generates no overflow clip and does not
+hide its text.
+An overlay opened from inside the source cell (`[role="tooltip"]`, `[role="dialog"]`, or
+`[popover]`), a text-backed icon (a descendant marked `[role="img"]` or `[aria-hidden="true"]`),
+and generated pseudo-element text are not measured, while a table hosted inside such an overlay
+still is. An `aria-hidden` cell or ancestor still paints its own text, so that text is measured.
+Unmarked positioned body text is measured even when it starts outside its source cell. The default
+threshold is greater than 1 CSS pixel.
+
+The violation supplies `locator`, `geometry` (source cell), `adjacentLocator`
+(neighbor cell), and `overlapPx` (visible penetration into that cell). The
+rule is local to cells: `table-header-single-line` instead counts *column-header
+lines*, and `page-horizontal-overflow` instead detects *root-page horizontal
+scroll*. Neither needs to fail for this rule to report a collision.
+
+To opt out of known intentional cell content on one target:
+
+```jsonc
+{ "name": "report", "url": "http://localhost:3000/report",
+  "ruleOverrides": { "table-cell-text-overlap": { "excludeSelectors": [".intentional-overlap"] } } }
+```
+
+Set `enabled: false` in the rule declaration to disable it everywhere, or
+`enabled: false` in a target's `ruleOverrides` to disable it for that target.
+
 
 ## Local rule plugins
 
@@ -348,6 +405,8 @@ of `message`, `locator`, `geometry`, and `details`. Table-header violations incl
 `candidateSource`, `text`, `lineCount`, `lineTops`, `lineTopTolerancePx`, `geometry`,
 and `locator`; optional `candidateDiagnostics` on that rule result records excluded
 or generated-content-unmeasured candidates without representing them as violations.
+Table-cell text overlap violations add `adjacentLocator` and `overlapPx` (CSS pixels)
+to the source cell's `locator` and `geometry`; terminal output shows the same fields.
 
 ---
 

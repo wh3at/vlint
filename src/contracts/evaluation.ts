@@ -62,10 +62,17 @@ export interface TableHeaderSingleLineViolation extends ViolationBase {
   readonly lineTopTolerancePx: number;
 }
 
+export interface TableCellTextOverlapViolation extends ViolationBase {
+  readonly type: "table-cell-text-overlap";
+  readonly adjacentLocator: string;
+  readonly overlapPx: number;
+}
+
 export type Violation =
   | TabLabelSingleLineViolation
   | PageHorizontalOverflowViolation
   | TableHeaderSingleLineViolation
+  | TableCellTextOverlapViolation
   | LocalViolation;
 
 /**

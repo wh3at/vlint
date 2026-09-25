@@ -38,6 +38,11 @@ export const BUILTIN_TABLE_RULE: RuleInstance = {
   type: "table-header-single-line",
 };
 
+export const BUILTIN_CELL_RULE: RuleInstance = {
+  name: "table-cell-text-overlap",
+  type: "table-cell-text-overlap",
+};
+
 export function rulesWithBuiltins(rules: readonly RuleInstance[] | undefined): readonly RuleInstance[] {
   const configured = rules ?? [];
   return [
@@ -45,6 +50,7 @@ export function rulesWithBuiltins(rules: readonly RuleInstance[] | undefined): r
     ...configured,
     ...(configured.some((rule) => rule.type === "page-horizontal-overflow") ? [] : [BUILTIN_OVERFLOW_RULE]),
     ...(configured.some((rule) => rule.type === "table-header-single-line") ? [] : [BUILTIN_TABLE_RULE]),
+    ...(configured.some((rule) => rule.type === "table-cell-text-overlap" || rule.name === BUILTIN_CELL_RULE.name) ? [] : [BUILTIN_CELL_RULE]),
   ];
 }
 
@@ -123,6 +129,8 @@ export function normalizeRules(rules: readonly RuleInstance[] | undefined): read
           minimumHeaders: rule.minimumHeaders ?? 0,
           allowZeroHeaders: rule.allowZeroHeaders ?? true,
         };
+      case "table-cell-text-overlap":
+        return { name: rule.name, type: rule.type, enabled: rule.enabled ?? true, excludeSelectors: rule.excludeSelectors ?? [] };
       case "local":
         return {
           name: rule.name,
@@ -174,6 +182,8 @@ function effectiveRulesForTarget(
           excludeSelectors: [...rule.excludeSelectors, ...(override?.excludeSelectors ?? [])],
           minimumHeaders: override?.minimumHeaders ?? rule.minimumHeaders,
         };
+      case "table-cell-text-overlap":
+        return { ...rule, enabled: override?.enabled ?? rule.enabled, excludeSelectors: [...rule.excludeSelectors, ...(override?.excludeSelectors ?? [])] };
       case "local":
         return effectiveLocalRuleForTarget(rule, target);
     }

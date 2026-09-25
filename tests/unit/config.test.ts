@@ -59,6 +59,7 @@ describe("configuration", () => {
       "tab-label-single-line",
       "page-horizontal-overflow",
       "table-header-single-line",
+      "table-cell-text-overlap",
     ]);
     const plan = resolveAdHocTarget(loaded.value, "http://127.0.0.1:4173/adhoc");
     expect(plan.targets.map((target) => target.name)).toEqual(["adhoc"]);
@@ -402,6 +403,20 @@ devices: [DESKTOP_DEVICE],
         minimumHeaders: 0,
         allowZeroHeaders: true,
       },
+      { name: "table-cell-text-overlap", type: "table-cell-text-overlap", enabled: true, excludeSelectors: [] },
+    ]);
+  });
+
+  test("keeps a pre-existing local rule named table-cell-text-overlap", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      devices: [DESKTOP_DEVICE],
+      rules: [{ name: "table-cell-text-overlap", type: "local", path: "rules/cells.ts" }],
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok) throw new Error(loaded.failure.message);
+    expect(loaded.value.rules.filter((rule) => rule.name === "table-cell-text-overlap")).toEqual([
+      expect.objectContaining({ type: "local", path: "rules/cells.ts" }),
     ]);
   });
 
@@ -524,6 +539,7 @@ devices: [DESKTOP_DEVICE],
       "spacing:local",
       "page-horizontal-overflow:page-horizontal-overflow",
       "table-header-single-line:table-header-single-line",
+      "table-cell-text-overlap:table-cell-text-overlap",
     ]);
     const local = loaded.value.rules.find((rule) => rule.type === "local");
     expect(local).toMatchObject({
@@ -718,6 +734,7 @@ devices: [DESKTOP_DEVICE],
         allowZeroHeaders: false,
       },
       expect.objectContaining({ name: "page-horizontal-overflow" }),
+      expect.objectContaining({ name: "table-cell-text-overlap" }),
     ]);
   });
 
@@ -856,4 +873,11 @@ devices: [DESKTOP_DEVICE],
       }).ok,
     ).toBe(false);
   });
+  test("validates cell-rule fields and target overrides", () => {
+    const base = { devices: [DESKTOP_DEVICE], rules: [{ name: "cells", type: "table-cell-text-overlap", excludeSelectors: [".skip"] }] };
+    expect(parseConfig(base).ok).toBe(true);
+    expect(parseConfig({ ...base, rules: [{ name: "cells", type: "table-cell-text-overlap", tolerancePx: 2 }] }).ok).toBe(false);
+    expect(parseConfig({ ...base, provider: { type: "static", targets: [{ name: "report", url: "https://example.com", ruleOverrides: { cells: { minimumHeaders: 1 } } }] } }).ok).toBe(false);
+  });
+
 });
