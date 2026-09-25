@@ -122,6 +122,178 @@ test("clip-path references and normalised corners decide the visible text", asyn
   expect(rounded?.type === "table-cell-text-overlap" && rounded.overlapPx).toBeGreaterThan(25);
 });
 
+test("an ellipse clip that omits one radius keeps the sliver of text the browser paints", async () => {
+  const result = await runCheckCommand(directory, `${server.url}/table-cell-text-overlap-ellipse-clip.html`, {}, "test");
+  const narrow = result.cases.find((item) => item.device.name === "390")!;
+  expect(narrow.status).toBe("complete");
+  expect(narrow.rules.find((rule) => rule.type === "page-horizontal-overflow")?.violations).toEqual([]);
+  const violations = narrow.rules.find((rule) => rule.type === "table-cell-text-overlap")?.violations ?? [];
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 720 } });
+    await page.goto(`${server.url}/table-cell-text-overlap-ellipse-clip.html`);
+    const ids = ["url-auto-ry", "url-auto-rx", "url-zero-rx", "url-zero-ry", "url-negative-ry"];
+    // The neighbour cells hold no text, so every dark pixel in the strip the label reaches is
+    // the label's own ink: an omitted radius keeps it, an explicit zero leaves the strip blank.
+    const strips = await page.evaluate((names: string[]) => names.map((id) => {
+      const range = document.createRange();
+      range.selectNodeContents(document.getElementById(`${id}-text`)!.firstChild!);
+      const rect = range.getBoundingClientRect();
+      const neighbour = document.getElementById(`${id}-neighbor`)!.getBoundingClientRect();
+      const left = Math.max(rect.left, neighbour.left);
+      const top = Math.max(rect.top, neighbour.top);
+      return {
+        left, top,
+        width: Math.min(rect.right, neighbour.right) - left,
+        height: Math.min(rect.bottom, neighbour.bottom) - top,
+      };
+    }), ids);
+    expect(strips.every((strip) => strip.width > 0 && strip.height > 0)).toBe(true);
+    // Bun's test runner refuses the first capture of a fresh browser often enough to need one retry.
+    const media = await mkdtemp(join(tmpdir(), "vlint-ellipse-clip-"));
+    const file = join(media, "cells.png");
+    let captured = false;
+    for (let attempt = 0; attempt < 2 && !captured; attempt++) {
+      captured = await page.screenshot({ path: file }).then(() => true, () => false);
+      if (!captured) await Bun.sleep(100);
+    }
+    expect(captured).toBe(true);
+    const shot = (await Bun.file(file).bytes()).toBase64();
+    await rm(media, { recursive: true, force: true });
+    const painted = await page.evaluate(async ({ data, strips }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      return strips.map((strip) => {
+        const pixels = context.getImageData(Math.floor(strip.left), Math.floor(strip.top),
+          Math.ceil(strip.width), Math.ceil(strip.height)).data;
+        let dark = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+          if (pixels[index]! + pixels[index + 1]! + pixels[index + 2]! < 750) dark += 1;
+        }
+        return dark;
+      });
+    }, { data: shot, strips });
+    expect(painted[0]).toBeGreaterThan(0);
+    expect(painted[1]).toBeGreaterThan(0);
+    expect(painted[2]).toBe(0);
+    expect(painted[3]).toBe(0);
+    expect(painted[4]).toBeGreaterThan(0);
+  } finally {
+    await browser.close();
+  }
+  // SVG reads an omitted `rx`/`ry` as `auto`, which takes the other axis' radius, so the sliver
+  // the browser keeps over the neighbour has to be measured. A negative radius is drawn with the
+  // other axis' radius too, while an explicit zero still draws nothing.
+  expect(violations.filter((item) => item.type === "table-cell-text-overlap")
+    .map((item) => [item.locator, item.adjacentLocator])).toEqual([
+    ["#url-auto-ry", "#url-auto-ry-neighbor"],
+    ["#url-auto-rx", "#url-auto-rx-neighbor"],
+    ["#url-negative-ry", "#url-negative-ry-neighbor"],
+  ]);
+});
+
+test("a neighbour painted above the text hides the glyphs its opaque background covers", async () => {
+  const result = await runCheckCommand(directory, `${server.url}/table-cell-text-overlap-occlusion.html`, {}, "test");
+  const narrow = result.cases.find((item) => item.device.name === "390")!;
+  expect(narrow.status).toBe("complete");
+  expect(narrow.rules.find((rule) => rule.type === "page-horizontal-overflow")?.violations).toEqual([]);
+  const violations = narrow.rules.find((rule) => rule.type === "table-cell-text-overlap")?.violations ?? [];
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 390, height: 720 } });
+    await page.goto(`${server.url}/table-cell-text-overlap-occlusion.html`);
+    const ids = [
+      "occluded-sticky", "occluded-relative", "occluded-padding-border", "occluded-tie", "occluded-below",
+      "visible-static", "visible-clear", "visible-source-above", "visible-nested-above", "visible-negative-z",
+      "visible-washed", "visible-clip-text", "visible-rounded", "visible-source-later",
+    ];
+    // The neighbour cells hold no ink of their own, so every dark pixel in the strip the label
+    // reaches is the label's text: a neighbour painted above it leaves the strip blank.
+    const strips = await page.evaluate((names: string[]) => names.map((id) => {
+      const walker = document.createTreeWalker(document.getElementById(id)!, NodeFilter.SHOW_TEXT);
+      let node: Text | null = null;
+      while (node === null && walker.nextNode()) {
+        const current = walker.currentNode as Text;
+        if (current.nodeValue?.trim()) node = current;
+      }
+      const range = document.createRange();
+      range.selectNodeContents(node!);
+      const rect = range.getBoundingClientRect();
+      const neighbour = document.getElementById(`${id}-neighbor`)!.getBoundingClientRect();
+      const left = Math.max(rect.left, neighbour.left);
+      const top = Math.max(rect.top, neighbour.top);
+      return {
+        left, top,
+        width: Math.min(rect.right, neighbour.right) - left,
+        height: Math.min(rect.bottom, neighbour.bottom) - top,
+      };
+    }), ids);
+    // Every strip has to be on screen, or a blank reading would come from the capture instead.
+    expect(strips.every((strip) => strip.width > 0 && strip.height > 0 && strip.top + strip.height <= 720)).toBe(true);
+    // Bun's test runner refuses the first capture of a fresh browser often enough to need one retry.
+    const media = await mkdtemp(join(tmpdir(), "vlint-cell-occlusion-"));
+    const file = join(media, "cells.png");
+    let captured = false;
+    for (let attempt = 0; attempt < 2 && !captured; attempt++) {
+      captured = await page.screenshot({ path: file }).then(() => true, () => false);
+      if (!captured) await Bun.sleep(100);
+    }
+    expect(captured).toBe(true);
+    const shot = (await Bun.file(file).bytes()).toBase64();
+    await rm(media, { recursive: true, force: true });
+    const painted = await page.evaluate(async ({ data, strips }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      return strips.map((strip) => {
+        const pixels = context.getImageData(Math.floor(strip.left), Math.floor(strip.top),
+          Math.ceil(strip.width), Math.ceil(strip.height)).data;
+        let dark = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+          if (pixels[index]! + pixels[index + 1]! + pixels[index + 2]! < 450) dark += 1;
+        }
+        return dark;
+      });
+    }, { data: shot, strips });
+    expect(painted.slice(0, 5)).toEqual([0, 0, 0, 0, 0]);
+    expect(painted.slice(5).every((count) => count > 0)).toBe(true);
+  } finally {
+    await browser.close();
+  }
+  // A sticky or positioned neighbour with an opaque background paints over the overflowing
+  // glyphs, so those rows report nothing. The static, clear, source-above (including a
+  // child above a relative z-index:auto cell), negative z-index, washed-out, glyph-clipped,
+  // rounded and later-painted rows keep their text on screen and still report.
+  expect(violations.filter((item) => item.type === "table-cell-text-overlap")
+    .map((item) => [item.locator, item.adjacentLocator])).toEqual([
+    ["#visible-static", "#visible-static-neighbor"],
+    ["#visible-clear", "#visible-clear-neighbor"],
+    ["#visible-source-above", "#visible-source-above-neighbor"],
+    ["#visible-nested-above", "#visible-nested-above-neighbor"],
+    ["#visible-negative-z", "#visible-negative-z-neighbor"],
+    ["#visible-washed", "#visible-washed-neighbor"],
+    ["#visible-clip-text", "#visible-clip-text-neighbor"],
+    ["#visible-rounded", "#visible-rounded-neighbor"],
+    ["#visible-source-later", "#visible-source-later-neighbor"],
+  ]);
+  // The rounded background paints the box but not the corner it cuts, so the corner sliver is
+  // what reports, not the whole fragment the neighbour covers.
+  const rounded = violations.find((item) => item.locator === "#visible-rounded");
+  expect(rounded?.type === "table-cell-text-overlap" && rounded.overlapPx).toBeGreaterThan(1);
+  expect(rounded?.type === "table-cell-text-overlap" && rounded.overlapPx).toBeLessThan(30);
+});
+
 test("a rounded overflow clip hides the corner it cuts and keeps the straight edge beside it", async () => {
   const result = await runCheckCommand(directory, `${server.url}/table-cell-text-overlap-overflow-radius.html`, {}, "test");
   const narrow = result.cases.find((item) => item.device.name === "390")!;

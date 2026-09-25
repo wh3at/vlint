@@ -268,6 +268,113 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     }
     return visible;
   }
+  // CSS background lists align by layer; commas inside a gradient are not layer separators.
+  function layers(value: string): string[] {
+    const result: string[] = [];
+    let depth = 0, start = 0;
+    for (let index = 0; index < value.length; index++) {
+      if (value[index] === "(") depth++;
+      else if (value[index] === ")") depth--;
+      else if (value[index] === "," && depth === 0) {
+        result.push(value.slice(start, index).trim());
+        start = index + 1;
+      }
+    }
+    result.push(value.slice(start).trim());
+    return result;
+  }
+  /** True when a computed colour paints at full opacity. */
+  function opaque(color: string): boolean {
+    const match = /^(?:rgb|hsl)a?\(([^)]*)\)$/i.exec(color.trim());
+    if (match === null) return false;
+    const parts = match[1]!.split(/[,/]/).map((part) => part.trim()).filter((part) => part !== "");
+    return parts.length === 3 || (parts.length === 4 && Number.parseFloat(parts[3]!) === 1);
+  }
+  /** True when every side paints a solid, fully opaque border, which covers the ring it fills. */
+  function opaqueBorder(style: CSSStyleDeclaration): boolean {
+    return [
+      [style.borderTopStyle, style.borderTopColor],
+      [style.borderRightStyle, style.borderRightColor],
+      [style.borderBottomStyle, style.borderBottomColor],
+      [style.borderLeftStyle, style.borderLeftColor],
+    ].every(([kind, color]) => kind === "solid" && opaque(color!));
+  }
+  interface PaintedLayer { readonly z: number; readonly node: Element }
+  /**
+   * The outermost stacking context of `node`'s branch inside `ancestor`, or its nearest
+   * positioned box when there is no context. A positioned ancestor with `z-index: auto`
+   * does not isolate a descendant's z-index, so the descendant can paint above a peer.
+   */
+  function paintLayer(node: Element, ancestor: Element): PaintedLayer | null {
+    let layer: PaintedLayer | null = null;
+    for (let current: Element | null = node; current !== null && current !== ancestor; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      const positioned = style.position !== "static";
+      const stacks = style.transform !== "none" || style.filter !== "none" ||
+        style.perspective !== "none" || style.isolation === "isolate" ||
+        style.contain.split(/\s+/).some((part) => ["layout", "paint", "content", "strict"].includes(part));
+      if (!positioned && !stacks) continue;
+      const z = positioned ? Number.parseInt(style.zIndex, 10) : 0;
+      // A real stacking context confines its descendants; `position: relative` with
+      // `z-index: auto` does not, even though its own box joins the positioned phase.
+      if (stacks || (positioned && (style.zIndex !== "auto" || style.position === "sticky" || style.position === "fixed")) || layer === null) {
+        layer = { z: Number.isFinite(z) ? z : 0, node: current };
+      }
+    }
+    return layer;
+  }
+  /**
+   * Whether `element` paints after the glyphs `text` lays down. CSS paints in-flow content before
+   * positioned and stacking-context boxes, a higher `z-index` after a lower one, and boxes at the
+   * same level in document order. An in-flow background paints before any glyph, so a box that
+   * stays in flow never hides the text.
+   */
+  function paintsAbove(element: Element, text: Element): boolean {
+    const ancestors = new Set<Element>();
+    for (let current: Element | null = element; current !== null; current = current.parentElement) ancestors.add(current);
+    let ancestor: Element | null = null;
+    for (let current: Element | null = text; current !== null && ancestor === null; current = current.parentElement) {
+      if (ancestors.has(current)) ancestor = current;
+    }
+    if (ancestor === null) return false;
+    const painted = paintLayer(element, ancestor);
+    if (painted === null) return false;
+    const source = paintLayer(text, ancestor);
+    if (source === null) return painted.z >= 0;
+    if (painted.z !== source.z) return painted.z > source.z;
+    return (source.node.compareDocumentPosition(painted.node) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+  }
+  /**
+   * The region an adjacent box paints over the glyphs, as a predicate, or null when it hides
+   * nothing: it paints below the text, its background is not opaque, or its `background-clip`
+   * trims the paint to a box or a shape this rule leaves unmodelled. The sliver a neighbour is
+   * compared against always lies inside its border box, so the paint over that box decides on
+   * its own.
+   */
+  function occludingPaint(element: Element, text: Element, rect: Box): ((x: number, y: number) => boolean) | null {
+    if (!paintsAbove(element, text)) return null;
+    const style = getComputedStyle(element);
+    if (Number.parseFloat(style.opacity) < 1) return null;
+    if (!opaque(style.backgroundColor)) return null;
+    // Only the last background layer paints the colour, and a clip to the glyphs or to the
+    // content box paints less than the border box the sliver was measured against.
+    const clip = layers(style.backgroundClip || style.webkitBackgroundClip).at(-1) ?? "border-box";
+    if (clip !== "border-box" && clip !== "padding-box") return null;
+    // A padding-box clip leaves the border out, and an opaque border paints that ring itself, so
+    // the border box stays the region the neighbour covers then.
+    const covers = clip === "border-box" || opaqueBorder(style);
+    const scale = scaleOf(element, rect);
+    const layout = element as HTMLElement;
+    const frames = framesOf(element, rect);
+    // A padding-box clip the border does not fill starts from the padding box, while the radii
+    // keep the border box's scale and percentage base, which is what CSS resolves them against.
+    const region = clipRegion(`inset(0 round ${style.borderRadius.trim() || "0px"})`, covers ? frames
+      : { ...frames, bounds: {
+        x: rect.x + layout.clientLeft * scale.x, y: rect.y + layout.clientTop * scale.y,
+        width: layout.clientWidth * scale.x, height: layout.clientHeight * scale.y,
+      } });
+    return region === null ? null : region.covers;
+  }
   for (const selector of excludeSelectors) {
     try { document.querySelectorAll(selector); }
     catch { return { elementsInspected: 0, overlaps: [], selectorError: selector }; }
@@ -547,21 +654,6 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       const shadow = style.textShadow !== "none" && !/^(?:transparent|(?:rgba|hsla)\([^)]*,\s*0(?:\.0+)?\s*\))\s/.test(style.textShadow);
       const stroke = Number.parseFloat(style.webkitTextStrokeWidth) > 0 && !transparent(style.webkitTextStrokeColor);
       if (transparent(ink) && !shadow && !stroke) {
-        // CSS background lists align by layer; commas inside a gradient are not layer separators.
-        const layers = (value: string): string[] => {
-          const result: string[] = [];
-          let depth = 0, start = 0;
-          for (let index = 0; index < value.length; index++) {
-            if (value[index] === "(") depth++;
-            else if (value[index] === ")") depth--;
-            else if (value[index] === "," && depth === 0) {
-              result.push(value.slice(start, index).trim());
-              start = index + 1;
-            }
-          }
-          result.push(value.slice(start).trim());
-          return result;
-        };
         // A gradient with only transparent stops cannot paint, even though its image is not `none`.
         const emptyGradient = (image: string): boolean => {
           const match = /^(?:repeating-)?linear-gradient\(([\s\S]*)\)$/i.exec(image);
@@ -593,13 +685,18 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
           for (const { element, rect, direction, ranges } of neighbors) {
             const overlap = intersect(visible.box, rect);
             if (overlap === null) continue;
+            const covering = occludingPaint(element, parent, rect);
             // A peer that stays nearest over only part of the source answers there alone, so the
             // rest keeps reporting against the nearer cell that owns it.
             const lateral = direction === "left" || direction === "right";
             for (const sliver of parts(overlap, ranges, lateral ? "y" : "x")) {
-              // The shape decides inside the overlap too, so a clipped corner cannot
-              // report a neighbour the visible sliver never reaches.
-              const shown = visible.shapes.length === 0 ? sliver : shapeOverlap(visible.shapes, sliver);
+              // The shape decides inside the overlap too, so a clipped corner cannot report a
+              // neighbour the visible sliver never reaches. A peer painted above the text covers
+              // the part of the sliver its opaque background hides, which then reports nothing.
+              const shapes = covering === null
+                ? visible.shapes
+                : [...visible.shapes, (x: number, y: number) => !covering(x, y)];
+              const shown = shapes.length === 0 ? sliver : shapeOverlap(shapes, sliver);
               if (shown === null) continue;
               const distance = lateral ? shown.width : shown.height;
               breaches.set(element, Math.max(breaches.get(element) ?? 0, distance));

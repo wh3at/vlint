@@ -275,9 +275,12 @@ export function createClippingEngine(): ClippingEngine {
     }
     if (element.localName === "ellipse") {
       const cx = length("cx", viewport.width, 0), cy = length("cy", viewport.height, 0);
-      const radiusX = length("rx", viewport.width, 0), radiusY = length("ry", viewport.height, 0);
+      // An absent `rx`/`ry` is the SVG `auto` value: the axis takes the other axis' radius,
+      // while an explicit zero still disables rendering of the element.
+      const radiusX = optional("rx", viewport.width), radiusY = optional("ry", viewport.height);
       if (cx === null || cy === null || radiusX === null || radiusY === null) return null;
-      geometry.ellipse(cx, cy, drawableRadius(radiusX, radiusY), drawableRadius(radiusY, radiusX), 0, 0, Math.PI * 2);
+      const rx = radiusX ?? radiusY ?? 0, ry = radiusY ?? radiusX ?? 0;
+      geometry.ellipse(cx, cy, drawableRadius(rx, ry), drawableRadius(ry, rx), 0, 0, Math.PI * 2);
       return geometry;
     }
     if (element.localName === "polygon" || element.localName === "polyline") {
