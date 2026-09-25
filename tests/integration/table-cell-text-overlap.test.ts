@@ -724,3 +724,288 @@ test("keeps a farther lateral peer over the heights a shorter nearer cell leaves
     await browser.close();
   }
 });
+
+test("keeps a farther vertical peer over the widths a nearer cell leaves open", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 720 } });
+    // Every grid holds a source cell spanning both columns, a nearer cell over its left column
+    // alone and a farther cell spanning both. The nearer cell reaches the left column alone, so the
+    // label there stops at the nearer cell while the label in the right column has only the farther
+    // cell above or below it.
+    const grid = (prefix: string, side: "above" | "below", left: number) => {
+      const source = `<div role="gridcell" id="${prefix}-source" class="source wide">
+        <span class="label" style="left:${left}px;top:${side === "below" ? "95px" : "-80px"}">Identifier</span>
+      </div>`;
+      const near = `<div role="gridcell" id="${prefix}-near"></div>`;
+      const far = `<div role="gridcell" id="${prefix}-far" class="wide"></div>`;
+      const rows = side === "below" ? [source, near, far] : [far, near, source];
+      return `<div role="grid">${rows.map((row) => `<div role="row">${row}</div>`).join("")}</div>`;
+    };
+    await page.setContent(`
+      <style>
+        body { margin: 0; font: 16px Arial; }
+        [role="grid"] { display: grid; grid-template-columns: 120px 120px; grid-auto-rows: 40px; gap: 4px; width: 244px; margin-bottom: 12px; }
+        [role="row"] { display: contents; }
+        .wide { grid-column: span 2; }
+        .source { position: relative; }
+        .label { position: absolute; white-space: nowrap; }
+      </style>
+      ${grid("covered-below", "below", 10)}
+      ${grid("open-below", "below", 130)}
+      ${grid("covered-above", "above", 10)}
+      ${grid("open-above", "above", 130)}`);
+    // Both labels sit in the farther cell's row and past the nearer cell's box, and the label in
+    // the left column stays inside that column.
+    const measured = await page.evaluate((ids: string[]) => ids.map((id) => {
+      const source = document.getElementById(id)!;
+      const prefix = id.replace("-source", "");
+      const range = document.createRange();
+      range.selectNodeContents(source.firstElementChild!.firstChild!);
+      const rect = range.getBoundingClientRect();
+      const peer = (name: string) => document.getElementById(`${prefix}-${name}`)!.getBoundingClientRect();
+      const near = peer("near");
+      const far = peer("far");
+      const reaches = (box: DOMRect) => rect.left < box.right && rect.right > box.left &&
+        rect.top < box.bottom && rect.bottom > box.top;
+      const left = Math.max(rect.left, far.left);
+      const top = Math.max(rect.top, far.top);
+      const bottom = Math.min(rect.bottom, far.bottom);
+      return {
+        id,
+        reachesNear: reaches(near),
+        reachesFar: reaches(far),
+        depth: bottom - top,
+        band: { left, top, width: Math.min(rect.right, far.right) - left, height: bottom - top },
+      };
+    }), ["covered-below-source", "open-below-source", "covered-above-source", "open-above-source"]);
+    expect(measured.map(({ id, reachesNear, reachesFar }) => ({ id, reachesNear, reachesFar }))).toEqual([
+      { id: "covered-below-source", reachesNear: false, reachesFar: true },
+      { id: "open-below-source", reachesNear: false, reachesFar: true },
+      { id: "covered-above-source", reachesNear: false, reachesFar: true },
+      { id: "open-above-source", reachesNear: false, reachesFar: true },
+    ]);
+    // Painted pixels rather than layout boxes: every label inks the farther cell, so the silence on
+    // the covered columns is the nearest-peer choice and not missing ink.
+    const directory = await mkdtemp(join(tmpdir(), "vlint-vertical-peers-"));
+    const file = join(directory, "cells.png");
+    let captured = false;
+    for (let attempt = 0; attempt < 2 && !captured; attempt++) {
+      captured = await page.screenshot({ path: file }).then(() => true, () => false);
+      if (!captured) await Bun.sleep(100);
+    }
+    expect(captured).toBe(true);
+    const shot = (await Bun.file(file).bytes()).toBase64();
+    await rm(directory, { recursive: true, force: true });
+    const ink = await page.evaluate(async ({ data, bands }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      return bands.map(({ left, top, width, height }) => {
+        const pixels = context.getImageData(Math.floor(left), Math.floor(top), Math.ceil(width), Math.ceil(height)).data;
+        let painted = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+          if (pixels[index]! + pixels[index + 1]! + pixels[index + 2]! < 750) painted += 1;
+        }
+        return painted;
+      });
+    }, { data: shot, bands: measured.map(({ band }) => band) });
+    expect(ink.every((painted) => painted > 0)).toBe(true);
+    const result = await evaluateTableCellTextOverlap(page, {
+      name: "table-cell-text-overlap", type: "table-cell-text-overlap", enabled: true, excludeSelectors: [],
+    });
+    expect(result.failure).toBeNull();
+    expect(result.facts.elementsInspected).toBe(12);
+    // Only the labels over the uncovered right column reach the farther cell; the two labels over
+    // the left column stop at the nearer cell, which already answers for that width.
+    expect(result.facts.violations.map((item) => [item.locator, item.adjacentLocator])).toEqual([
+      ["#open-below-source", "#open-below-far"],
+      ["#open-above-source", "#open-above-far"],
+    ]);
+    // The reported distance is the part of the label the farther cell's box holds.
+    for (const violation of result.facts.violations) {
+      const entry = measured.find(({ id }) => id === violation.locator.slice(1))!;
+      expect(violation.type === "table-cell-text-overlap" && violation.overlapPx).toBeCloseTo(entry.depth, 1);
+    }
+  } finally {
+    await browser.close();
+  }
+});
+
+test("checks a wide single-row grid without loading its whole row for each cell", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 720 } });
+    // A single row keeps every cell in one Y band, so a lookup keyed on Y hands each source cell
+    // the entire row. The X index keeps the lateral lookup inside one cell's neighbouring bands.
+    const cells = Array.from({ length: 10_000 }, (_, column) => `<div role="gridcell">${column}</div>`).join("");
+    await page.setContent(`
+      <style>
+        body { margin: 0; font: 16px Arial; }
+        [role="grid"] { display: flex; width: max-content; }
+        [role="row"] { display: contents; }
+        [role="gridcell"] { flex: 0 0 8px; height: 40px; overflow: hidden; white-space: nowrap; }
+      </style>
+      <div role="grid"><div role="row">${cells}</div></div>`);
+    const started = performance.now();
+    const result = await evaluateTableCellTextOverlap(page, {
+      name: "table-cell-text-overlap", type: "table-cell-text-overlap", enabled: true, excludeSelectors: [],
+    });
+    const elapsed = performance.now() - started;
+    expect(result.failure).toBeNull();
+    expect(result.facts.elementsInspected).toBe(10_000);
+    expect(result.facts.violations).toEqual([]);
+    // Handing every cell the whole row and sorting it twice measured 7.5s at this size, while the
+    // X walk reads only the bands beside the source cell.
+    expect(elapsed).toBeLessThan(2_000);
+  } finally {
+    await browser.close();
+  }
+}, 20_000);
+
+test("keeps the nearest lateral neighbour across a column gap wider than one band", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 720 } });
+    // The source text crosses a 140px border-spacing gap, wider than the 64px lookup band, so the
+    // lateral walk must step over empty bands to reach the neighbour. The far columns keep the row
+    // wide enough that the lookup walks X rather than reading the one Y band of the row.
+    const columns = Array.from({ length: 20 }, (_, column) =>
+      column === 0
+        ? `<td id="lateral-gap"><span class="label" style="left:118px">VeryLongUnbrokenPropertyIdentifier</span></td>`
+        : `<td id="lateral-gap-${column}">${column}</td>`).join("");
+    await page.setContent(`
+      <style>
+        body { margin: 0; font: 16px Arial; }
+        table { table-layout: fixed; width: 5340px; border-spacing: 140px 0; }
+        td { width: 120px; height: 40px; padding: 0; vertical-align: top; white-space: nowrap; }
+        .label { position: relative; }
+      </style>
+      <table><tr>${columns}</tr></table>`);
+    const depth = await page.evaluate(() => {
+      const source = document.getElementById("lateral-gap")!;
+      const range = document.createRange();
+      range.selectNodeContents(source.firstElementChild!.firstChild!);
+      const text = range.getBoundingClientRect();
+      const neighbor = document.getElementById("lateral-gap-1")!.getBoundingClientRect();
+      return Math.min(text.right, neighbor.right) - neighbor.left;
+    });
+    const result = await evaluateTableCellTextOverlap(page, {
+      name: "table-cell-text-overlap", type: "table-cell-text-overlap", enabled: true, excludeSelectors: [],
+    });
+    expect(result.failure).toBeNull();
+    expect(result.facts.elementsInspected).toBe(20);
+    expect(result.facts.violations.map((item) => [item.locator, item.adjacentLocator])).toEqual([
+      ["#lateral-gap", "#lateral-gap-1"],
+    ]);
+    const violation = result.facts.violations[0];
+    expect(violation?.type === "table-cell-text-overlap" && violation.overlapPx).toBeCloseTo(depth, 1);
+  } finally {
+    await browser.close();
+  }
+});
+
+test("counts a text-clipped background as ink while a clear text fill stays silent", async () => {
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 720 } });
+    // Gradient text keeps `color: transparent` and paints the glyphs through the background
+    // clipped to the text, so a label reaching into the next cell still paints it. A text clip
+    // over a clear background paints nothing, exactly like a plain transparent fill.
+    const row = (id: string, className: string) => `
+      <table><colgroup><col><col></colgroup><tbody><tr>
+        <td id="${id}"><span class="label ${className}">VeryLongUnbrokenPropertyIdentifier</span></td>
+        <td id="${id}-neighbor"></td>
+      </tr></tbody></table>`;
+    await page.setContent(`
+      <style>
+        body { margin: 0; font: 16px Arial; }
+        table { table-layout: fixed; border-collapse: collapse; width: 360px; margin-bottom: 12px; }
+        col:first-child { width: 120px; }
+        td { padding: 0; height: 40px; vertical-align: top; }
+        .label { white-space: nowrap; }
+        .gradient { color: transparent; background-image: linear-gradient(90deg, #000, #000); -webkit-background-clip: text; background-clip: text; }
+        .layered { color: transparent; background-image: linear-gradient(#000, #000), linear-gradient(transparent, transparent); background-clip: text, border-box; }
+        .empty-gradient { color: transparent; background-image: linear-gradient(transparent, transparent); background-clip: text; }
+        .solid { color: transparent; background-color: #000; -webkit-background-clip: text; background-clip: text; }
+        .clear { color: transparent; }
+        .clear-clip { color: transparent; background-color: transparent; -webkit-background-clip: text; background-clip: text; }
+      </style>
+      ${row("gradient", "gradient")}
+      ${row("layered", "layered")}
+      ${row("empty-gradient", "empty-gradient")}
+      ${row("solid", "solid")}
+      ${row("clear", "clear")}
+      ${row("clear-clip", "clear-clip")}`);
+    // The band each label inks in the neighbour cell: the overlap of the text rect with the peer box.
+    const measured = await page.evaluate((ids: string[]) => ids.map((id) => {
+      const range = document.createRange();
+      range.selectNodeContents(document.getElementById(id)!.firstElementChild!.firstChild!);
+      const text = range.getBoundingClientRect();
+      const peer = document.getElementById(`${id}-neighbor`)!.getBoundingClientRect();
+      const left = Math.max(text.left, peer.left);
+      const top = Math.max(text.top, peer.top);
+      const right = Math.min(text.right, peer.right);
+      const bottom = Math.min(text.bottom, peer.bottom);
+      return { id, pastCellEdge: text.right > peer.left, depth: right - left,
+        band: { x: left, y: top, width: right - left, height: bottom - top } };
+    }), ["gradient", "layered", "empty-gradient", "solid", "clear", "clear-clip"]);
+    expect(measured.map(({ id, pastCellEdge }) => ({ id, pastCellEdge }))).toEqual([
+      { id: "gradient", pastCellEdge: true },
+      { id: "layered", pastCellEdge: true },
+      { id: "empty-gradient", pastCellEdge: true },
+      { id: "solid", pastCellEdge: true },
+      { id: "clear", pastCellEdge: true },
+      { id: "clear-clip", pastCellEdge: true },
+    ]);
+    // Painted pixels rather than layout boxes: the two clipped backgrounds really paint the peer
+    // cell, so the silence on the clear fill is a clear fill and not a missing background.
+    let shot: string | null = null;
+    for (let attempt = 0; attempt < 2 && shot === null; attempt++) {
+      shot = await page.screenshot().then((bytes) => bytes.toString("base64"), () => null);
+      if (shot === null) await Bun.sleep(100);
+    }
+    expect(shot).not.toBeNull();
+    const ink = await page.evaluate(async ({ data, bands }) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${data}`;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const context = canvas.getContext("2d")!;
+      context.drawImage(image, 0, 0);
+      return bands.map((band) => {
+        const pixels = context.getImageData(Math.floor(band.x), Math.floor(band.y),
+          Math.ceil(band.width), Math.ceil(band.height)).data;
+        let count = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+          if (pixels[index]! + pixels[index + 1]! + pixels[index + 2]! < 750) count += 1;
+        }
+        return count;
+      });
+    }, { data: shot!, bands: measured.map(({ band }) => band) });
+    expect(ink.map((count) => count > 0)).toEqual([true, true, false, true, false, false]);
+    const result = await evaluateTableCellTextOverlap(page, {
+      name: "table-cell-text-overlap", type: "table-cell-text-overlap", enabled: true, excludeSelectors: [],
+    });
+    expect(result.failure).toBeNull();
+    expect(result.facts.elementsInspected).toBe(12);
+    expect(result.facts.violations.map((item) => [item.locator, item.adjacentLocator])).toEqual([
+      ["#gradient", "#gradient-neighbor"],
+      ["#layered", "#layered-neighbor"],
+      ["#solid", "#solid-neighbor"],
+    ]);
+    for (const violation of result.facts.violations) {
+      const entry = measured.find(({ id }) => id === violation.locator.slice(1))!;
+      expect(violation.type === "table-cell-text-overlap" && violation.overlapPx).toBeCloseTo(entry.depth, 1);
+    }
+  } finally {
+    await browser.close();
+  }
+});

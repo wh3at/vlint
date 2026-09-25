@@ -277,18 +277,23 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
   interface Group {
     readonly byX: Map<number, Cell[]>;
     readonly byY: Map<number, Cell[]>;
+    /** The x-bands the group's cells fill, so a lateral walk stops at the table's own extent. */
+    readonly xSpan: { first: number; last: number };
     /** The y-bands the group's cells fill, so a vertical walk stops at the table's own extent. */
     readonly ySpan: { first: number; last: number };
   }
-  /** A vertical range of the page in CSS pixels. */
-  interface Interval { readonly top: number; readonly bottom: number }
-  /** One cell a text fragment is compared with, and the heights where that comparison holds. */
+  /** A range of page coordinates in CSS pixels along one axis. */
+  interface Interval { readonly start: number; readonly end: number }
+  /** One cell a text fragment is compared with, and the part of it that comparison still holds on. */
   interface Neighbor {
     readonly element: Element;
     readonly rect: Box;
     readonly direction: "left" | "right" | "above" | "below";
-    /** The heights this peer is still the nearest one at; null when it is nearest at any height. */
-    readonly heights: readonly Interval[] | null;
+    /**
+     * Where this peer is still the nearest cell, on the axis the walk does not cross: the heights
+     * for a lateral peer, the widths for one above or below. Always non-empty.
+     */
+    readonly ranges: readonly Interval[];
   }
   const groups = new Map<Element, Cell["group"]>();
   const inspected: Cell[] = [];
@@ -309,70 +314,114 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     }
     return range;
   }
-  function nearby(bands: Map<number, Cell[]>, start: number, size: number): Set<Cell> {
-    const found = new Set<Cell>();
+  /**
+   * How many cells share the bands a box fills on one axis. A lookup starts from whichever axis
+   * holds fewer, so a tall column and a wide row both stay bounded.
+   */
+  function bandLoad(bands: Map<number, Cell[]>, start: number, size: number): number {
     const { first, last } = bandRange(start, size);
-    for (let band = first; band <= last; band++) {
-      for (const cell of bands.get(band) ?? []) found.add(cell);
-    }
-    return found;
+    let load = 0;
+    for (let band = first; band <= last; band++) load += bands.get(band)?.length ?? 0;
+    return load;
   }
 
-  /** True when the peers kept so far already span the box, so a later peer only overlaps one. */
-  function spansBox(box: Box, peers: readonly Cell[]): boolean {
-    let right = box.x;
-    for (const { rect } of [...peers].sort((a, b) => a.rect.x - b.rect.x)) {
-      if (rect.x > right + 1) return false;
-      right = Math.max(right, rect.x + rect.width);
+  /**
+   * True when the peers kept so far already span the box on `axis`, so a later peer only holds
+   * widths or heights one of them already covers.
+   */
+  function spansBox(box: Box, peers: readonly Cell[], axis: "x" | "y"): boolean {
+    const from = axis === "x" ? box.x : box.y;
+    const size = axis === "x" ? box.width : box.height;
+    const near = (rect: Box) => axis === "x" ? rect.x : rect.y;
+    const end = (rect: Box) => axis === "x" ? rect.x + rect.width : rect.y + rect.height;
+    let reach = from;
+    for (const peer of [...peers].sort((a, b) => near(a.rect) - near(b.rect))) {
+      if (near(peer.rect) > reach + 1) return false;
+      reach = Math.max(reach, end(peer.rect));
     }
-    return right >= box.x + box.width - 1;
+    return reach >= from + size - 1;
   }
   /**
    * The parts of an interval that `covered` does not already hold. Covered intervals may overlap
-   * and arrive in any order, since they are the heights kept by the peers chosen before.
+   * and arrive in any order, since they are the ranges kept by the peers chosen before.
    */
   function openIntervals(interval: Interval, covered: readonly Interval[]): Interval[] {
     const held = covered
-      .filter((span) => span.bottom > interval.top && span.top < interval.bottom)
-      .sort((a, b) => a.top - b.top);
+      .filter((span) => span.end > interval.start && span.start < interval.end)
+      .sort((a, b) => a.start - b.start);
     const open: Interval[] = [];
-    let top = interval.top;
+    let start = interval.start;
     for (const span of held) {
-      if (span.top > top) open.push({ top, bottom: span.top });
-      top = Math.max(top, span.bottom);
+      if (span.start > start) open.push({ start, end: span.start });
+      start = Math.max(start, span.end);
     }
-    if (top < interval.bottom) open.push({ top, bottom: interval.bottom });
+    if (start < interval.end) open.push({ start, end: interval.end });
     return open;
   }
-  /** The parts of a box the listed heights hold, in order. */
-  function slices(box: Box, heights: readonly Interval[]): Box[] {
-    const parts: Box[] = [];
-    for (const height of heights) {
-      const top = Math.max(box.y, height.top);
-      const bottom = Math.min(box.y + box.height, height.bottom);
-      if (bottom > top) parts.push({ x: box.x, y: top, width: box.width, height: bottom - top });
+  /**
+   * The peers that are still the nearest cell somewhere, nearest first. Each keeps only the part of
+   * its `span` no nearer peer already answers for, so a peer left with nothing only answered
+   * coordinates a nearer peer owns.
+   */
+  function nearestFirst(
+    peers: readonly Cell[],
+    direction: Neighbor["direction"],
+    span: (rect: Box) => Interval,
+  ): Neighbor[] {
+    const covered: Interval[] = [];
+    const chosen: Neighbor[] = [];
+    for (const peer of peers) {
+      const ranges = openIntervals(span(peer.rect), covered);
+      if (ranges.length === 0) continue;
+      chosen.push({ element: peer.element, rect: peer.rect, direction, ranges });
+      covered.push(...ranges);
     }
-    return parts;
+    return chosen;
+  }
+  /** The parts of a box the listed ranges hold, in order. */
+  function parts(box: Box, ranges: readonly Interval[], axis: "x" | "y"): Box[] {
+    const pieces: Box[] = [];
+    for (const range of ranges) {
+      const from = Math.max(axis === "x" ? box.x : box.y, range.start);
+      const to = Math.min(axis === "x" ? box.x + box.width : box.y + box.height, range.end);
+      if (to <= from) continue;
+      pieces.push(axis === "x"
+        ? { x: from, y: box.y, width: to - from, height: box.height }
+        : { x: box.x, y: from, width: box.width, height: to - from });
+    }
+    return pieces;
   }
 
   /**
-   * The nearest cell on one side of the box, per column. A peer only answers the walk at the band
-   * its own edge falls in, so walking the y-bands outwards from the box meets neighbours nearest
-   * first and a tall single-column table never loads its whole column for one cell. Border spacing
-   * and rowspans leave gaps, so the walk runs until the peers it kept span the box across x, where
-   * every later peer would overlap one of them and be dropped.
+   * The nearest cell on one side of the box, per column. A tall column and a wide row both stay
+   * bounded: when the source's own X bands hold fewer cells than its Y bands, the vertical peers
+   * come straight from the X index, otherwise the walk steps the Y bands outward from the box. A
+   * walked peer only answers at the band its own y-edge falls in, so the walk meets neighbours
+   * nearest first, and it runs until the peers it kept span the box across x, where every later
+   * peer only holds widths one of them already covers. Border spacing and rowspans leave the gaps
+   * the walk skips by band.
    */
   function nearestSide(cell: Cell, side: "above" | "below"): Cell[] {
+    const { byX, byY, ySpan } = cell.group;
     const box = cell.rect;
-    const { byY, ySpan } = cell.group;
     const below = side === "below";
     const step = below ? 1 : -1;
-    const start = bandOf(below ? box.y + box.height - 1 : box.y + 1 - 0.001);
-    const ownBand = (peer: Cell) => below ? bandOf(peer.rect.y) : bandOf(peer.rect.y + peer.rect.height - 0.001);
     const separates = (peer: Cell) => below
       ? peer.rect.y >= box.y + box.height - 1
       : peer.rect.y + peer.rect.height <= box.y + 1;
     const distance = (peer: Cell) => below ? peer.rect.y : -peer.rect.y - peer.rect.height;
+    if (bandLoad(byX, box.x, box.width) <= bandLoad(byY, box.y, box.height)) {
+      const peers = new Set<Cell>();
+      for (let band = bandOf(box.x); band <= bandOf(box.x + box.width - 0.001); band++) {
+        for (const peer of byX.get(band) ?? []) peers.add(peer);
+      }
+      return [...peers]
+        .filter((peer) => peer.element !== cell.element && peer.rect.x < box.x + box.width &&
+          peer.rect.x + peer.rect.width > box.x && separates(peer))
+        .sort((a, b) => distance(a) - distance(b));
+    }
+    const start = bandOf(below ? box.y + box.height - 1 : box.y + 1 - 0.001);
+    const ownBand = (peer: Cell) => below ? bandOf(peer.rect.y) : bandOf(peer.rect.y + peer.rect.height - 0.001);
     const chosen: Cell[] = [];
     for (let band = start; band >= ySpan.first && band <= ySpan.last; band += step) {
       const batch: Cell[] = [];
@@ -383,11 +432,53 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       }
       if (batch.length === 0) continue;
       batch.sort((a, b) => distance(a) - distance(b));
-      for (const peer of batch) {
-        if (!chosen.some((between) => between.rect.x < peer.rect.x + peer.rect.width &&
-          between.rect.x + between.rect.width > peer.rect.x)) chosen.push(peer);
+      chosen.push(...batch);
+      if (spansBox(box, chosen, "x")) break;
+    }
+    return chosen;
+  }
+  /**
+   * The nearest cell on one side of the box, per row. A tall column and a wide row both stay
+   * bounded: when the source's own Y bands hold fewer cells than its X bands, the lateral peers
+   * come straight from the Y index, otherwise the walk steps the X bands outward from the box. A
+   * walked peer only answers at the band its own x-edge falls in, so the walk meets neighbours
+   * nearest first, and it runs until the peers it kept span the box across y, where every later
+   * peer only holds heights one of them already covers. Rowspans, column gaps and border spacing
+   * leave the gaps the walk skips by band.
+   */
+  function nearestLateral(cell: Cell, side: "left" | "right"): Cell[] {
+    const { byX, byY, xSpan } = cell.group;
+    const box = cell.rect;
+    const rightward = side === "right";
+    const step = rightward ? 1 : -1;
+    const separates = (peer: Cell) => rightward
+      ? peer.rect.x >= box.x + box.width - 1
+      : peer.rect.x + peer.rect.width <= box.x + 1;
+    const distance = (peer: Cell) => rightward ? peer.rect.x : -peer.rect.x - peer.rect.width;
+    if (bandLoad(byY, box.y, box.height) <= bandLoad(byX, box.x, box.width)) {
+      const peers = new Set<Cell>();
+      for (let band = bandOf(box.y); band <= bandOf(box.y + box.height - 0.001); band++) {
+        for (const peer of byY.get(band) ?? []) peers.add(peer);
       }
-      if (spansBox(box, chosen)) break;
+      return [...peers]
+        .filter((peer) => peer.element !== cell.element && peer.rect.y < box.y + box.height &&
+          peer.rect.y + peer.rect.height > box.y && separates(peer))
+        .sort((a, b) => distance(a) - distance(b));
+    }
+    const start = bandOf(rightward ? box.x + box.width - 1 : box.x + 1 - 0.001);
+    const ownBand = (peer: Cell) => rightward ? bandOf(peer.rect.x) : bandOf(peer.rect.x + peer.rect.width - 0.001);
+    const chosen: Cell[] = [];
+    for (let band = start; band >= xSpan.first && band <= xSpan.last; band += step) {
+      const batch: Cell[] = [];
+      for (const peer of byX.get(band) ?? []) {
+        if (peer.element === cell.element || ownBand(peer) !== band) continue;
+        if (peer.rect.y >= box.y + box.height || peer.rect.y + peer.rect.height <= box.y) continue;
+        if (separates(peer)) batch.push(peer);
+      }
+      if (batch.length === 0) continue;
+      batch.sort((a, b) => distance(a) - distance(b));
+      chosen.push(...batch);
+      if (spansBox(box, chosen, "y")) break;
     }
     return chosen;
   }
@@ -398,13 +489,16 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     if (group === undefined) {
       group = {
         byX: new Map(), byY: new Map(),
+        xSpan: { first: Number.POSITIVE_INFINITY, last: Number.NEGATIVE_INFINITY },
         ySpan: { first: Number.POSITIVE_INFINITY, last: Number.NEGATIVE_INFINITY },
       };
       groups.set(scope, group);
     }
     const rect = box(element.getBoundingClientRect());
     const cell = { element, rect, group };
-    index(group.byX, rect.x, rect.width, cell);
+    const xBands = index(group.byX, rect.x, rect.width, cell);
+    group.xSpan.first = Math.min(group.xSpan.first, xBands.first);
+    group.xSpan.last = Math.max(group.xSpan.last, xBands.last);
     const yBands = index(group.byY, rect.y, rect.height, cell);
     group.ySpan.first = Math.min(group.ySpan.first, yBands.first);
     group.ySpan.last = Math.max(group.ySpan.last, yBands.last);
@@ -418,33 +512,23 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
   const ICON_SELECTOR = '[role="img"], [aria-hidden="true"]';
   for (const cell of inspected) {
     const { rect: cellBox, group } = cell;
-    const horizontal = [...nearby(group.byY, cellBox.y, cellBox.height)].filter((peer) => peer.element !== cell.element &&
-      peer.rect.y < cellBox.y + cellBox.height && peer.rect.y + peer.rect.height > cellBox.y);
-    const right = horizontal.filter(({ rect }) => rect.x >= cellBox.x + cellBox.width - 1)
-      .sort((a, b) => a.rect.x - b.rect.x);
-    const left = horizontal.filter(({ rect }) => rect.x + rect.width <= cellBox.x + 1)
-      .sort((a, b) => b.rect.x + b.rect.width - a.rect.x - a.rect.width);
-    // Keep the nearest cell at each height, including cells across a rowspan. Both lists arrive
-    // nearest first, so each peer keeps only the heights no nearer cell covers, and a peer left
-    // with no height at all only reached heights a nearer cell already answers for.
-    const lateral = (peers: readonly Cell[]) => {
-      const covered: Interval[] = [];
-      const chosen: { readonly element: Element; readonly rect: Box; readonly heights: readonly Interval[] }[] = [];
-      for (const peer of peers) {
-        const heights = openIntervals({ top: peer.rect.y, bottom: peer.rect.y + peer.rect.height }, covered);
-        if (heights.length === 0) continue;
-        chosen.push({ element: peer.element, rect: peer.rect, heights });
-        covered.push(...heights);
-      }
-      return chosen;
-    };
-    const below = nearestSide(cell, "below");
-    const above = nearestSide(cell, "above");
+    const right = nearestLateral(cell, "right");
+    const left = nearestLateral(cell, "left");
+    // Keep the nearest cell at each coordinate, including cells across a rowspan. Every list
+    // arrives nearest first, so a peer keeps only the coordinates no nearer cell covers, and a peer
+    // left with none at all only reached coordinates a nearer cell already answers for.
+    const heights = (rect: Box): Interval => ({ start: rect.y, end: rect.y + rect.height });
+    // An above or below peer answers for the width of the source alone, so the stretch of the peer
+    // beside the source counts for nothing.
+    const widths = (rect: Box): Interval => ({
+      start: Math.max(cellBox.x, rect.x),
+      end: Math.min(cellBox.x + cellBox.width, rect.x + rect.width),
+    });
     const neighbors: Neighbor[] = [
-      ...lateral(right).map((peer) => ({ ...peer, direction: "right" as const })),
-      ...lateral(left).map((peer) => ({ ...peer, direction: "left" as const })),
-      ...below.map(({ element, rect }) => ({ element, rect, direction: "below" as const, heights: null })),
-      ...above.map(({ element, rect }) => ({ element, rect, direction: "above" as const, heights: null })),
+      ...nearestFirst(right, "right", heights),
+      ...nearestFirst(left, "left", heights),
+      ...nearestFirst(nearestSide(cell, "below"), "below", widths),
+      ...nearestFirst(nearestSide(cell, "above"), "above", widths),
     ];
     const walker = document.createTreeWalker(cell.element, NodeFilter.SHOW_TEXT);
     const range = document.createRange();
@@ -462,7 +546,40 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       const transparent = (color: string) => color === "transparent" || /^(?:rgba|hsla)\([^)]*,\s*0(?:\.0+)?\s*\)$/.test(color);
       const shadow = style.textShadow !== "none" && !/^(?:transparent|(?:rgba|hsla)\([^)]*,\s*0(?:\.0+)?\s*\))\s/.test(style.textShadow);
       const stroke = Number.parseFloat(style.webkitTextStrokeWidth) > 0 && !transparent(style.webkitTextStrokeColor);
-      if (transparent(ink) && !shadow && !stroke) continue;
+      if (transparent(ink) && !shadow && !stroke) {
+        // CSS background lists align by layer; commas inside a gradient are not layer separators.
+        const layers = (value: string): string[] => {
+          const result: string[] = [];
+          let depth = 0, start = 0;
+          for (let index = 0; index < value.length; index++) {
+            if (value[index] === "(") depth++;
+            else if (value[index] === ")") depth--;
+            else if (value[index] === "," && depth === 0) {
+              result.push(value.slice(start, index).trim());
+              start = index + 1;
+            }
+          }
+          result.push(value.slice(start).trim());
+          return result;
+        };
+        // A gradient with only transparent stops cannot paint, even though its image is not `none`.
+        const emptyGradient = (image: string): boolean => {
+          const match = /^(?:repeating-)?linear-gradient\(([\s\S]*)\)$/i.exec(image);
+          if (match === null) return false;
+          const stops = layers(match[1]!);
+          if (/^(?:to\s|[+-]?[\d.]+(?:deg|turn|rad|grad)\b)/i.test(stops[0] ?? "")) stops.shift();
+          return stops.length > 0 && stops.every((stop) =>
+            transparent(stop.replace(/\s+[-+]?[\d.]+(?:%|px)$/, "")));
+        };
+        const clips = layers(style.backgroundClip || style.webkitBackgroundClip);
+        const images = layers(style.backgroundImage);
+        const count = Math.max(clips.length, images.length);
+        const paintedBackground = Array.from({ length: count }, (_, index) => index).some((index) =>
+          clips[index % clips.length] === "text" &&
+          ((images[index % images.length] !== "none" && !emptyGradient(images[index % images.length]!)) ||
+            (index === count - 1 && !transparent(style.backgroundColor))));
+        if (!paintedBackground) continue;
+      }
       // Nested tables/grids belong to their own cells, not the containing cell.
       if (parent.closest('th, td, [role="cell"], [role="gridcell"], [role="rowheader"], [role="columnheader"]') !== cell.element) continue;
       // Whitespace can advance a Range without painting a glyph (notably under white-space: pre).
@@ -473,17 +590,18 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
           if (fragment.width <= 0 || fragment.height <= 0) continue;
           const visible = visibleRegion(box(fragment), parent, cell.element);
           if (visible === null) continue;
-          for (const { element, rect, direction, heights } of neighbors) {
+          for (const { element, rect, direction, ranges } of neighbors) {
             const overlap = intersect(visible.box, rect);
             if (overlap === null) continue;
-            // A peer that stays nearest over only part of its height answers there alone, so the
-            // covered heights keep reporting against the nearer cell that owns them.
-            for (const sliver of heights === null ? [overlap] : slices(overlap, heights)) {
+            // A peer that stays nearest over only part of the source answers there alone, so the
+            // rest keeps reporting against the nearer cell that owns it.
+            const lateral = direction === "left" || direction === "right";
+            for (const sliver of parts(overlap, ranges, lateral ? "y" : "x")) {
               // The shape decides inside the overlap too, so a clipped corner cannot
               // report a neighbour the visible sliver never reaches.
               const shown = visible.shapes.length === 0 ? sliver : shapeOverlap(visible.shapes, sliver);
               if (shown === null) continue;
-              const distance = direction === "right" || direction === "left" ? shown.width : shown.height;
+              const distance = lateral ? shown.width : shown.height;
               breaches.set(element, Math.max(breaches.get(element) ?? 0, distance));
             }
           }
