@@ -29,17 +29,16 @@ export interface TargetDefaults {
 export interface RuleOverride {
   readonly enabled?: boolean;
   readonly excludeSelectors?: readonly string[];
-  readonly minimumLabels?: number;
-  /** Per-target header minimum for table-header rules (KTD6). */
-  readonly minimumHeaders?: number;
-  /** JSON settings overlay for local rules (KTD6). */
+  readonly minimumInspected?: number;
   readonly settings?: JsonSettings;
 }
 
 export interface Target extends TargetDefaults {
   readonly name: string;
   readonly url: string;
+  readonly allowedUrls?: readonly string[];
   readonly ruleOverrides?: Readonly<Record<string, RuleOverride>>;
+  readonly deviceRuleMinimums?: Readonly<Record<string, Readonly<Record<string, number>>>>;
 }
 
 /**
@@ -55,6 +54,7 @@ export interface DeviceProfile {
   readonly isMobile: boolean;
   readonly hasTouch: boolean;
   readonly userAgent?: string;
+  readonly ruleMinimums?: Readonly<Record<string, number>>;
 }
 
 export interface StaticProviderConfig {
@@ -81,6 +81,7 @@ export type RuleType = BuiltinRuleType | "local";
 
 interface RuleInstanceBase {
   readonly name: string;
+  readonly minimumInspected?: number;
 }
 
 export interface TabLabelSingleLineRuleInstance extends RuleInstanceBase {
@@ -88,8 +89,6 @@ export interface TabLabelSingleLineRuleInstance extends RuleInstanceBase {
   readonly additionalCandidateSelectors?: readonly string[];
   readonly excludeSelectors?: readonly string[];
   readonly labelSelector?: string;
-  readonly minimumLabels?: number;
-  readonly allowZeroLabels?: boolean;
 }
 
 export interface PageHorizontalOverflowRuleInstance extends RuleInstanceBase {
@@ -107,8 +106,6 @@ export interface TableHeaderSingleLineRuleInstance extends RuleInstanceBase {
   readonly additionalCandidateSelectors?: readonly string[];
   readonly excludeSelectors?: readonly string[];
   readonly lineTopTolerancePx?: number;
-  readonly minimumHeaders?: number;
-  readonly allowZeroHeaders?: boolean;
 }
 
 export interface TableCellTextOverlapRuleInstance extends RuleInstanceBase {
@@ -147,6 +144,7 @@ export interface CommandProviderOutput {
 interface EffectiveRuleBase {
   readonly name: string;
   readonly enabled: boolean;
+  readonly minimumInspected?: number | null | undefined;
 }
 
 export interface EffectiveTabLabelSingleLineRule extends EffectiveRuleBase {
@@ -154,18 +152,13 @@ export interface EffectiveTabLabelSingleLineRule extends EffectiveRuleBase {
   readonly additionalCandidateSelectors: readonly string[];
   readonly excludeSelectors: readonly string[];
   readonly labelSelector: string | null;
-  readonly minimumLabels: number;
-  readonly allowZeroLabels: boolean;
 }
 
-/** Normalized table-header rule. Zero-header coverage stays instance-scoped. */
 export interface EffectiveTableHeaderSingleLineRule extends EffectiveRuleBase {
   readonly type: "table-header-single-line";
   readonly additionalCandidateSelectors: readonly string[];
   readonly excludeSelectors: readonly string[];
   readonly lineTopTolerancePx: number;
-  readonly minimumHeaders: number;
-  readonly allowZeroHeaders: boolean;
 }
 
 export interface EffectivePageHorizontalOverflowRule extends EffectiveRuleBase {
@@ -203,6 +196,7 @@ export type EffectiveRuleForTarget = EffectiveRule;
 export interface EffectiveTarget {
   readonly name: string;
   readonly url: string;
+  readonly allowedUrls?: readonly string[] | undefined;
   readonly viewport: Viewport;
   readonly deviceScaleFactor: number;
   readonly locale: string;
@@ -224,6 +218,7 @@ export interface EffectiveTarget {
 export interface EffectiveAuditCase {
   readonly name: string;
   readonly url: string;
+  readonly allowedUrls?: readonly string[] | undefined;
   readonly deviceName: string;
   readonly viewport: Viewport;
   readonly screen: Viewport;

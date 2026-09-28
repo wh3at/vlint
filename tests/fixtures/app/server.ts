@@ -42,6 +42,9 @@ export function startFixtureServer(options: { readonly port?: number } = {}): Fi
       const { pathname, searchParams } = new URL(request.url);
 
       if (pathname === "/health") return new Response("ok");
+      if (pathname === "/redirect") return Response.redirect(new URL(searchParams.get("to") ?? "/", request.url), 302);
+      if (pathname === "/csp") return new Response("<!doctype html><html><body><main id='ready'>ready</main></body></html>", { headers: { ...HTML_HEADERS, "content-security-policy": "default-src 'none'" } });
+      if (pathname === "/shadow-ready") return new Response("<!doctype html><html><body><div id='host'></div><script>document.querySelector('#host').attachShadow({mode:'open'}).innerHTML='<main id=ready>ready</main>'</script></body></html>", { headers: HTML_HEADERS });
 
       if (pathname === "/status") {
         const code = Number.parseInt(searchParams.get("code") ?? "0", 10);

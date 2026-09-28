@@ -87,7 +87,7 @@ describe("Commander CLI grammar", () => {
     expect(parsed.stderr.endsWith("\n")).toBe(true);
   });
 
-  test("keeps untrusted diagnostics inert and redacts URL credentials", () => {
+  test("keeps untrusted diagnostics inert and displays raw URL arguments", () => {
     const unsafe = terminal(["bogus\u001b\r\n\u202e"]);
     expect(unsafe.exitCode).toBe(1);
     expect(unsafe.stderr).not.toContain("\u001b");
@@ -103,10 +103,7 @@ describe("Commander CLI grammar", () => {
     ]) {
       const parsed = terminal(args);
       expect(parsed.exitCode).toBe(1);
-      expect(parsed.stderr).not.toContain("user:password");
-      expect(parsed.stderr).not.toContain("password");
-      expect(parsed.stderr).not.toContain("secret");
-      expect(parsed.stderr).not.toContain("fragment");
+      expect(parsed.stderr).toContain(args[0] === "check" ? "URL userinfo is forbidden" : "token=secret#fragment");
     }
   });
 

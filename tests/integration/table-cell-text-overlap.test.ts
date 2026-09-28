@@ -20,7 +20,7 @@ beforeAll(async () => {
   }));
   await Bun.write(join(directory, "vlint.config.json"), JSON.stringify({
     devices,
-    rules: [{ name: "tab-label-single-line", type: "tab-label-single-line", allowZeroLabels: true }],
+    rules: [{ name: "tab-label-single-line", type: "tab-label-single-line" }],
   }));
 });
 
@@ -731,7 +731,7 @@ test("named rule can be enabled per target with cell exclusions", async () => {
     await Bun.write(join(isolated, "vlint.config.json"), JSON.stringify({
       devices: [{ name: "phone", viewport: { width: 390, height: 720 }, screen: { width: 390, height: 720 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false }],
       rules: [
-        { name: "tab-label-single-line", type: "tab-label-single-line", allowZeroLabels: true },
+        { name: "tab-label-single-line", type: "tab-label-single-line" },
         { name: "cells", type: "table-cell-text-overlap", enabled: false, excludeSelectors: ["#native-body"] },
       ],
       provider: { type: "static", targets: [

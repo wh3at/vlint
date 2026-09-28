@@ -31,24 +31,6 @@ export function escapeTerminal(value: string): string {
   return output;
 }
 
-export function redactUrlForTerminal(value: string): string {
-  try {
-    const url = new URL(value);
-    url.username = "";
-    url.password = "";
-    const entries = [...url.searchParams.keys()];
-    for (const key of new Set(entries)) {
-      const count = url.searchParams.getAll(key).length;
-      url.searchParams.delete(key);
-      for (let index = 0; index < count; index += 1) url.searchParams.append(key, "<redacted>");
-    }
-    url.hash = "";
-    return escapeTerminal(url.toString());
-  } catch {
-    return escapeTerminal(value);
-  }
-}
-
 function escapeNullable(value: string | null): string {
   return value === null ? "-" : escapeTerminal(value);
 }
@@ -60,6 +42,7 @@ function failureLine(failure: {
   readonly target: string | null;
   readonly device: string | null;
   readonly rule: string | null;
+  readonly actualUrl?: string;
   readonly browserDiagnostic?: {
     readonly status: string;
     readonly requirements: {
@@ -71,7 +54,7 @@ function failureLine(failure: {
     }[];
   };
 }): string {
-  let line = `failure ${failure.stage}/${failure.code} target=${escapeNullable(failure.target)} device=${escapeNullable(failure.device)} rule=${escapeNullable(failure.rule)}: ${escapeTerminal(failure.message)}`;
+  let line = `failure ${failure.stage}/${failure.code} target=${escapeNullable(failure.target)} device=${escapeNullable(failure.device)} rule=${escapeNullable(failure.rule)}${failure.actualUrl === undefined ? "" : ` actualUrl=${escapeTerminal(failure.actualUrl)}`}: ${escapeTerminal(failure.message)}`;
   if (failure.browserDiagnostic !== undefined) {
     const diag = failure.browserDiagnostic;
     const revisions = diag.detectedRevisions.length > 0
@@ -93,7 +76,7 @@ export function renderTerminal(result: RunResult): string {
   ];
   for (const caseResult of published.cases) {
     lines.push(
-      `case target=${escapeTerminal(caseResult.target.name)} device=${escapeTerminal(caseResult.device.name)}: ${caseResult.status} ${redactUrlForTerminal(caseResult.target.url)} viewport=${caseResult.device.viewport.width}x${caseResult.device.viewport.height}@${caseResult.device.deviceScaleFactor}`,
+      `case target=${escapeTerminal(caseResult.target.name)} device=${escapeTerminal(caseResult.device.name)}: ${caseResult.status} url=${escapeTerminal(caseResult.target.url)} actualUrl=${escapeNullable(caseResult.actualUrl ?? null)} viewport=${caseResult.device.viewport.width}x${caseResult.device.viewport.height}@${caseResult.device.deviceScaleFactor}`,
     );
     for (const rule of caseResult.rules) {
       lines.push(

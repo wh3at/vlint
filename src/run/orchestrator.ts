@@ -24,6 +24,7 @@ import type {
 
 interface TargetScope<PageHandle> {
   readonly page: PageHandle;
+  readonly actualUrl?: string;
   close(): Promise<BoundaryResult<void>>;
 }
 
@@ -66,6 +67,7 @@ interface MutableRuleResult {
 
 interface MutableCaseResult {
   target: { name: string; url: string };
+  actualUrl: string | null;
   device: {
     name: string;
     viewport: { width: number; height: number };
@@ -99,6 +101,7 @@ function unexpectedFailure(
 function seededCases(plan: ResolvedCheckPlan): MutableCaseResult[] {
   return plan.cases.map((auditCase) => ({
     target: { name: auditCase.name, url: auditCase.url },
+    actualUrl: null,
     device: {
       name: auditCase.deviceName,
       viewport: auditCase.viewport,
@@ -205,12 +208,6 @@ export function exitCodeForResult(result: RunResult): 0 | 1 | 2 {
   return result.status === "violations" ? 1 : 0;
 }
 
-/**
- * Resolves run-wide finalizations in declaration order. Tab-label rules apply the
- * zero-label regression policy; local rules delegate to the check-owned adapter;
- * overflow rules may legitimately inspect zero elements. The first failing
- * finalization stops the cascade, and later rules stay not-executed.
- */
 async function resolveFinalizations<PageHandle>(
   plan: ResolvedCheckPlan,
   cases: readonly MutableCaseResult[],
@@ -221,10 +218,6 @@ async function resolveFinalizations<PageHandle>(
   for (let ruleIndex = 0; ruleIndex < plan.rules.length; ruleIndex += 1) {
     const rule = plan.rules[ruleIndex];
     if (rule === undefined) continue;
-    const enabledPairCount = plan.cases.reduce(
-      (count, auditCase) => count + (auditCase.rules[ruleIndex]?.enabled === true ? 1 : 0),
-      0,
-    );
     const elementsInspected = cases.reduce(
       (count, caseResult) => count + (caseResult.rules[ruleIndex]?.elementsInspected ?? 0),
       0,
@@ -260,37 +253,6 @@ async function resolveFinalizations<PageHandle>(
       }
       continue;
     }
-    const zeroCoverage =
-      rule.type === "tab-label-single-line" && !rule.allowZeroLabels
-        ? { code: "zero-labels-global" as const, noun: "labels" }
-        : rule.type === "table-header-single-line" && !rule.allowZeroHeaders
-          ? { code: "zero-headers-global" as const, noun: "headers" }
-          : null;
-    if (enabledPairCount > 0 && elementsInspected === 0 && zeroCoverage !== null) {
-      const finalizationFailure: Failure = {
-        stage: "rule-evaluation",
-        code: zeroCoverage.code,
-        message: `rule ${rule.name} inspected zero ${zeroCoverage.noun} across the run`,
-        target: null,
-        device: null,
-        rule: rule.name,
-      };
-      resolvedFinalizations.push({
-        name: rule.name,
-        status: "failed",
-        elementsInspected,
-        failure: finalizationFailure,
-      });
-      for (const later of plan.rules.slice(ruleIndex + 1)) {
-        resolvedFinalizations.push({
-          name: later.name,
-          status: "not-executed",
-          elementsInspected: 0,
-          failure: null,
-        });
-      }
-      break;
-    }
     resolvedFinalizations.push({
       name: rule.name,
       status: "passed",
@@ -301,17 +263,6 @@ async function resolveFinalizations<PageHandle>(
   return resolvedFinalizations;
 }
 
-/**
- * Runs every audit case on a fixed worker pool of at most two, sharing one
- * browser. Cases are pre-seeded in declared order and each worker writes its
- * result back into the seeded slot, so completion order never leaks into the
- * output. A case-level failure (navigation, readiness, rule, or scope cleanup)
- * is recorded on that case and never stops another case (KTD7 collect-all). An
- * external abort is the single exception: it halts new dispatch, lets active
- * scopes close, leaves unstarted cases not-executed, and records exactly one
- * run-level interrupt failure. Global finalization runs only when every case
- * completed, so a partial run cannot misread a zero-label rule (KTD8).
- */
 export async function runResolvedCheck<PageHandle>(
   plan: ResolvedCheckPlan,
   dependencies: CheckDependencies<PageHandle>,
@@ -382,11 +333,13 @@ export async function runResolvedCheck<PageHandle>(
         } else {
           caseResult.status = "failed";
           caseResult.failures.push(scopeFailure(opened.failure, auditCase.name, auditCase.deviceName, null));
+          caseResult.actualUrl = opened.failure.actualUrl ?? null;
         }
         return;
       }
 
       const targetScope = opened.value;
+      caseResult.actualUrl = targetScope.actualUrl ?? null;
       let pairFailedAt: number | null = null;
       for (let ruleIndex = 0; ruleIndex < auditCase.rules.length; ruleIndex += 1) {
         const effectiveRule = auditCase.rules[ruleIndex];
@@ -405,6 +358,20 @@ export async function runResolvedCheck<PageHandle>(
               effectiveRule.name,
             ),
           };
+        }
+        const count = outcome.facts?.elementsInspected;
+        if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
+          outcome = { facts: { elementsInspected: 0, violations: [] }, failure: {
+            stage: "rule-evaluation", code: "elements-inspected-invalid",
+            message: "rule returned an invalid elementsInspected count",
+            target: auditCase.name, device: auditCase.deviceName, rule: effectiveRule.name,
+          } };
+        } else if (outcome.failure === null && effectiveRule.minimumInspected != null && count < effectiveRule.minimumInspected) {
+          outcome = { ...outcome, failure: {
+            stage: "rule-evaluation", code: "minimum-inspected-unmet",
+            message: `inspected ${count} element(s); minimum is ${effectiveRule.minimumInspected}`,
+            target: auditCase.name, device: auditCase.deviceName, rule: effectiveRule.name,
+          } };
         }
         ruleResult.elementsInspected = outcome.facts.elementsInspected;
         ruleResult.violations = outcome.facts.violations;
@@ -492,8 +459,6 @@ export async function runResolvedCheck<PageHandle>(
   await Promise.all(workers);
   if (options.signal !== undefined) options.signal.removeEventListener("abort", onAbort);
 
-  // Global finalization runs only on a fully observed run, so a failing or
-  // interrupted case cannot trigger a false zero-label verdict.
   if (cases.every((caseResult) => caseResult.status === "complete")) {
     finalizations = await resolveFinalizations(plan, cases, dependencies, options.signal);
   }

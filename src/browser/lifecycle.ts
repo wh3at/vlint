@@ -6,6 +6,7 @@ import { chromium } from "playwright";
 import type { EffectiveAuditCase, ReadyState, Viewport } from "../contracts/config";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../contracts/failure";
 import { resolveManagedExecutableForCheck, type VersionProbe } from "./install";
+import { allowedArrival, sameUrl } from "./measurement";
 import {
   createDeadline,
   interruptFailure,
@@ -88,6 +89,7 @@ export interface BrowserState {
 /** Owns one Page and its BrowserContext for a single target. */
 export interface BrowserTargetScope {
   readonly page: Page;
+  readonly actualUrl?: string;
   close(): Promise<BoundaryResult<void>>;
 }
 
@@ -128,6 +130,7 @@ interface AcquisitionRequest extends DeviceContextSource {
   readonly name: string;
   readonly deviceName: string | null;
   readonly url: string;
+  readonly allowedUrls?: readonly string[] | undefined;
   readonly timeoutMs: number;
   readonly browserState: string | null;
   readonly readyCondition: {
@@ -455,10 +458,25 @@ async function acquireScope(
 
   const nav = await navigateToTarget(page, request.url, deadline, signal);
   if (!nav.ok) {
+    const actualUrl = page.url();
     await closeTargetQuiet(page, context);
-    return boundaryFailure(stampIdentity(request.name, request.deviceName, nav.failure));
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, actualUrl === "about:blank" ? nav.failure : { ...nav.failure, actualUrl }));
   }
 
+  const arrived = page.url();
+  if (!allowedArrival(request, arrived)) {
+    await closeTargetQuiet(page, context);
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, { ...navFailure("url-mismatch", "page arrived at an undeclared URL"), actualUrl: arrived }));
+  }
+  let movedUrl: string | null = null;
+  const onNavigation = (frame: import("playwright").Frame): void => { if (frame === page.mainFrame() && movedUrl === null) movedUrl = page.url(); };
+  page.on("framenavigated", onNavigation);
+  const failAfterArrival = async (reason: Failure): Promise<BoundaryResult<BrowserTargetScope>> => {
+    page.off("framenavigated", onNavigation);
+    const failure = movedUrl === null ? { ...reason, actualUrl: arrived } : { ...navFailure("navigation-during-measurement", "page navigated during acquisition"), actualUrl: movedUrl };
+    await closeTargetQuiet(page, context);
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, failure));
+  };
   if (request.readyCondition !== null) {
     const ready = await waitForReadyCondition(
       page,
@@ -467,19 +485,19 @@ async function acquireScope(
       deadline,
       signal,
     );
-    if (!ready.ok) {
-      await closeTargetQuiet(page, context);
-      return boundaryFailure(stampIdentity(request.name, request.deviceName, ready.failure));
-    }
+    if (!ready.ok) return failAfterArrival(ready.failure);
   }
 
   const fonts = await waitForFonts(page, deadline, signal);
-  if (!fonts.ok) {
-    await closeTargetQuiet(page, context);
-    return boundaryFailure(stampIdentity(request.name, request.deviceName, fonts.failure));
-  }
+  if (!fonts.ok) return failAfterArrival(fonts.failure);
 
-  return boundarySuccess(makeTargetScope(page, context, request.name, request.deviceName));
+  page.off("framenavigated", onNavigation);
+  if (movedUrl !== null || !sameUrl(page.url(), arrived)) {
+    const actualUrl = movedUrl ?? page.url();
+    await closeTargetQuiet(page, context);
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, { ...navFailure(sameUrl(actualUrl, arrived) ? "navigation-during-measurement" : "url-mismatch", "page navigated during acquisition"), actualUrl }));
+  }
+  return boundarySuccess({ ...makeTargetScope(page, context, request.name, request.deviceName), actualUrl: arrived });
 }
 
 /** Device-aware acquisition from a resolved audit case (the scheduler's input). */
@@ -494,6 +512,7 @@ async function acquireCaseScope(
       name: auditCase.name,
       deviceName: auditCase.deviceName,
       url: auditCase.url,
+      allowedUrls: auditCase.allowedUrls,
       viewport: auditCase.viewport,
       screen: auditCase.screen,
       deviceScaleFactor: auditCase.deviceScaleFactor,

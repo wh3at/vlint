@@ -440,11 +440,8 @@ describe.skipIf(!binaryPresent)(
       expect(firstFailure(parsed)).toMatchObject({ stage: "provider", code: "provider-output-invalid" });
     }, CHECK_TIMEOUT);
 
-    // --------------- terminal secret redaction, control escaping, JSON exactness
-
-    test("terminal redacts query secrets and fragments, escapes control/bidi chars; JSON preserves exact data", async () => {
+    test("terminal and JSON show raw URLs while escaping controls", async () => {
       const cwd = await tempDir();
-      // Generated in test memory — never a persisted credential fixture.
       const secret = "S3CR3T-VALUE-9k2";
       const controlName = "t\u0001ab\u202e";
       const secretUrl = `${acceptance.url}/clean?token=${secret}#section`;
@@ -456,27 +453,18 @@ describe.skipIf(!binaryPresent)(
       expect(termResult.exitCode, termResult.stderr).toBe(0);
       expect(termResult.stderr).toBe("");
 
-      // Secret value must not leak to terminal.
-      expect(termResult.stdout).not.toContain(secret);
-      // Fragment removed from terminal URL.
-      expect(termResult.stdout).not.toContain("#section");
-      // Query key retained but value redacted.
-      expect(termResult.stdout).toContain("token=");
-      expect(termResult.stdout).toContain("redacted");
-      // Control char escaped (literal backslash-u-brace form).
+      expect(termResult.stdout).toContain(secretUrl);
+      expect(termResult.stdout).toContain(`actualUrl=${secretUrl}`);
       expect(termResult.stdout).toContain("\\u{1}");
-      // Bidi override escaped.
       expect(termResult.stdout).toContain("\\u{202e}");
-      // Raw control / bidi bytes absent.
       expect(termResult.stdout).not.toContain("\u0001");
       expect(termResult.stdout).not.toContain("\u202e");
 
       const jsonResult = await execBinary(["check", "--format", "json"], cwd);
       expect(jsonResult.exitCode, jsonResult.stderr).toBe(0);
       const parsed = JSON.parse(jsonResult.stdout) as RunResult;
-      // JSON preserves the exact configured URL (secret + fragment intact).
       expect(parsed.cases[0]!.target.url).toBe(secretUrl);
-      // JSON preserves the exact target name with raw control/bidi code points.
+      expect(parsed.cases[0]!.actualUrl).toBe(secretUrl);
       expect(parsed.cases[0]!.target.name).toBe(controlName);
     }, CHECK_TIMEOUT);
 
@@ -844,7 +832,6 @@ describe.skipIf(!binaryPresent)(
         rules: [{
           name: "tab-label-single-line",
           type: "tab-label-single-line",
-          allowZeroLabels: true,
         }],
         provider: {
           type: "static",
@@ -1051,5 +1038,60 @@ describe.skipIf(!binaryPresent)(
       expect(localRule?.failure?.code).toBe("plugin-evaluator-invalid");
       expect(result.stdout).not.toContain("throw new Error");
     }, CHECK_TIMEOUT);
+    test("redirects require an exact allowlist even through --url", async () => {
+      const cwd = await tempDir();
+      const url = `${fixture.url}/redirect?to=${encodeURIComponent(`${acceptance.url}/clean`)}`;
+      await writeConfig(cwd, { provider: { type: "static", targets: [{ name: "redirect", url }] } });
+      const denied = await execBinary(["check", "--url", url, "--format", "json"], cwd);
+      expect(denied.exitCode).toBe(2);
+      const failed = JSON.parse(denied.stdout) as RunResult;
+      expect(failed.cases[0]?.failures[0]).toMatchObject({ code: "url-mismatch", actualUrl: `${acceptance.url}/clean`, target: "adhoc", device: "desktop" });
+      expect(failed.cases[0]?.actualUrl).toBe(`${acceptance.url}/clean`);
+      await writeConfig(cwd, { provider: { type: "static", targets: [{ name: "redirect", url, allowedUrls: [`${acceptance.url}/clean`] }] } });
+      const allowed = await execBinary(["check", "--format", "json"], cwd);
+      expect(allowed.exitCode).toBe(0);
+      const passed = JSON.parse(allowed.stdout) as RunResult;
+      expect(passed.cases[0]?.target.url).toBe(url);
+      expect(passed.cases[0]?.actualUrl).toBe(`${acceptance.url}/clean`);
+      const providerOutput = join(cwd, "targets.json");
+      await writeFile(providerOutput, JSON.stringify({ targets: [{ name: "command-redirect", url, allowedUrls: [`${acceptance.url}/clean`] }] }));
+      await writeConfig(cwd, { provider: { type: "command", executable: CAT, args: [providerOutput] } });
+      const command = await execBinary(["check", "--format", "json"], cwd);
+      expect(command.exitCode).toBe(0);
+      expect((JSON.parse(command.stdout) as RunResult).cases[0]?.actualUrl).toBe(`${acceptance.url}/clean`);
+    }, CHECK_TIMEOUT);
+
+    test("device-specific minimum reports only the short device as incomplete", async () => {
+      const cwd = await tempDir();
+      await writeConfig(cwd, {
+        devices: [{ ...MACBOOK_DEVICE, ruleMinimums: { tabs: 2 } }, { ...IPHONE_DEVICE, ruleMinimums: { tabs: 3 } }],
+        rules: [{ name: "tabs", type: "tab-label-single-line", minimumInspected: 1 }],
+        provider: { type: "static", targets: [{ name: "tabs", url: `${acceptance.url}/clean` }] },
+      });
+      const result = await execBinary(["check", "--format", "json"], cwd);
+      expect(result.exitCode).toBe(2);
+      const parsed = JSON.parse(result.stdout) as RunResult;
+      expect(parsed.cases[0]?.rules.find((rule) => rule.name === "tabs")?.status).toBe("clean");
+      expect(parsed.cases[1]?.rules.find((rule) => rule.name === "tabs")?.failure).toMatchObject({ code: "minimum-inspected-unmet", target: "tabs", device: "iphone-17", rule: "tabs" });
+    }, CHECK_TIMEOUT);
+
+    test.each(["url", "ready"])("detects transient %s loss inside a local evaluator", async (mode) => {
+      const cwd = await tempDir();
+      const filename = "transient-state-rule.ts";
+      await copyFile(join(pluginFixtureRoot, filename), join(cwd, filename));
+      const url = `${fixture.url}/`;
+      await writeConfig(cwd, {
+        rules: [{ name: "transient-state", type: "local", path: filename, settings: { mode }, minimumInspected: 1 }],
+        provider: { type: "static", targets: [{ name: "fixture", url, readyCondition: { selector: "#ready" } }] },
+      });
+      const result = await execBinary(["check", "--format", "json"], cwd);
+      expect(result.exitCode, result.stderr).toBe(2);
+      const parsed = JSON.parse(result.stdout) as RunResult;
+      expect(parsed.cases[0]?.actualUrl).toBe(url);
+      const failure = parsed.cases[0]?.rules.find((rule) => rule.name === "transient-state")?.failure;
+      expect(failure).toMatchObject({ code: mode === "url" ? "url-mismatch" : "ready-lost", target: "fixture", device: "desktop", rule: "transient-state" });
+      if (mode === "url") expect(failure?.actualUrl).toContain("/different?token=observed#fragment");
+    }, CHECK_TIMEOUT);
+
   },
 );

@@ -331,8 +331,6 @@ describe("plugin loader", () => {
         additionalCandidateSelectors: [],
         excludeSelectors: [],
         labelSelector: null,
-        minimumLabels: 0,
-        allowZeroLabels: false,
       },
     ]);
     expect(localPluginsConfigured(config.rules)).toBe(false);

@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import type { EffectiveAuditCase, EffectiveRuleForTarget, ResolvedCheckPlan } from "../contracts/config";
+import type { DeviceProfile, EffectiveAuditCase, EffectiveRule, EffectiveRuleForTarget, ResolvedCheckPlan, Target } from "../contracts/config";
 import type { RuleEvaluationOutcome } from "../contracts/evaluation";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../contracts/failure";
 import type { RunResult } from "../contracts/result";
@@ -12,6 +12,7 @@ import type { PluginRuntimeRegistry } from "../plugins/types";
 import { resolveCommandProvider } from "../providers/command";
 import { resolveStaticProvider } from "../providers/static";
 import { createBrowserRunScope } from "../browser/lifecycle";
+import { measureRule } from "../browser/measurement";
 import { evaluatePageHorizontalOverflow } from "../rules/page-horizontal-overflow";
 import { evaluateTabLabelSingleLine } from "../rules/tab-label-single-line";
 import { evaluateTableHeaderSingleLine } from "../rules/table-header-single-line";
@@ -27,6 +28,35 @@ export interface ResolvedCheckBundle {
   readonly pluginRegistry: PluginRuntimeRegistry | null;
 }
 
+function validateMinimums(
+  targets: readonly Target[],
+  devices: readonly DeviceProfile[],
+  rules: readonly EffectiveRule[],
+): BoundaryResult<void> {
+  const names = new Set(devices.map((device) => device.name));
+  for (const target of targets) {
+    for (const device of Object.keys(target.deviceRuleMinimums ?? {})) {
+      if (!names.has(device)) return boundaryFailure({ stage: "config", code: "config-schema-invalid", message: `unknown device minimum: ${device}`, target: target.name, device, rule: null });
+    }
+  }
+  for (const target of targets) {
+    for (const device of devices) {
+      for (const rule of rules) {
+        const targetMinimum = target.ruleOverrides?.[rule.name]?.minimumInspected;
+        const deviceMinimum = device.ruleMinimums?.[rule.name];
+        if (targetMinimum !== undefined && deviceMinimum !== undefined && targetMinimum !== deviceMinimum && target.deviceRuleMinimums?.[device.name]?.[rule.name] === undefined) {
+          return boundaryFailure({
+            stage: "config", code: "config-schema-invalid",
+            message: "target and device minimums conflict; specify deviceRuleMinimums",
+            target: target.name, device: device.name, rule: rule.name,
+          });
+        }
+      }
+    }
+  }
+  return boundarySuccess(undefined);
+}
+
 export async function resolveCheckPlan(
   cwd: string,
   url: string | null,
@@ -36,8 +66,10 @@ export async function resolveCheckPlan(
   const loaded = await loadConfig(cwd);
   if (!loaded.ok) return boundaryFailure(loaded.failure);
   let plan: ResolvedCheckPlan;
+  let targetsForMinimums: readonly Target[];
   if (url !== null) {
     plan = resolveAdHocTarget(loaded.value, url);
+    targetsForMinimums = [{ name: "adhoc", url }];
   } else if (loaded.value.provider === undefined) {
     return boundaryFailure({
       stage: "config",
@@ -60,7 +92,10 @@ export async function resolveCheckPlan(
         : await resolveCommandProvider(loaded.value.provider, context);
     if (!targets.ok) return boundaryFailure(targets.failure);
     plan = resolveTargets(loaded.value, targets.value);
+    targetsForMinimums = targets.value;
   }
+  const minimums = validateMinimums(targetsForMinimums, loaded.value.devices, loaded.value.rules);
+  if (!minimums.ok) return boundaryFailure(minimums.failure);
   const plugins = await loadLocalPluginsForConfig(
     loaded.value,
     plan,
@@ -153,7 +188,7 @@ async function evaluateWithCancellation(
 }
 
 function productionDependencies(pluginRegistry: PluginRuntimeRegistry | null): CheckDependencies<Page> {
-  const auditCaseByPage = new WeakMap<Page, EffectiveAuditCase>();
+  const auditCaseByPage = new WeakMap<Page, { auditCase: EffectiveAuditCase; fixedUrl: string }>();
   return {
     async launch(signal) {
       const created = await createBrowserRunScope(signal === undefined ? {} : { signal });
@@ -163,14 +198,19 @@ function productionDependencies(pluginRegistry: PluginRuntimeRegistry | null): C
         browserVersion: scope.browserVersion,
         openCase: async (auditCase, caseSignal) => {
           const opened = await scope.acquireCase(auditCase, caseSignal);
-          if (opened.ok) auditCaseByPage.set(opened.value.page, auditCase);
+          if (!opened.ok) return opened;
+          auditCaseByPage.set(opened.value.page, { auditCase, fixedUrl: opened.value.actualUrl ?? auditCase.url });
           return opened;
         },
         close: () => scope.close(),
       });
     },
-    evaluate: (page, rule, signal) =>
-      evaluateWithCancellation(page, rule, auditCaseByPage.get(page), pluginRegistry, signal),
+    evaluate: (page, rule, signal) => {
+      const acquired = auditCaseByPage.get(page);
+      if (acquired === undefined) return evaluateWithCancellation(page, rule, undefined, pluginRegistry, signal);
+      return measureRule(page, acquired.auditCase, acquired.fixedUrl, (guarded) =>
+        evaluateWithCancellation(guarded, rule, acquired.auditCase, pluginRegistry, signal));
+    },
     finalize: async (rule, ruleIndex, plan, cases, signal) => {
       if (rule.type !== "local") {
         throw new Error("finalize adapter invoked for a non-local rule");

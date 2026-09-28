@@ -21,7 +21,7 @@ import type { BoundaryResult } from "./contracts/failure";
 import type { RunResult } from "./contracts/result";
 import { parseAdHocUrl } from "./config/schema";
 import { renderJson } from "./output/json";
-import { escapeTerminal, redactUrlForTerminal, renderTerminal } from "./output/terminal";
+import { escapeTerminal, renderTerminal } from "./output/terminal";
 
 export type OutputFormat = "terminal" | "json";
 
@@ -68,15 +68,6 @@ function unsafeArgument(argument: string): boolean {
 }
 
 function diagnosticArgument(argument: string): string {
-  const redactedArgument = redactUrlForTerminal(argument);
-  if (redactedArgument !== argument) return redactedArgument;
-  const separator = argument.startsWith("-") ? argument.indexOf("=") : -1;
-  if (separator > 0) {
-    const prefix = argument.slice(0, separator + 1);
-    const value = argument.slice(separator + 1);
-    const redactedValue = redactUrlForTerminal(value);
-    return redactedValue === value ? escapeTerminal(argument) : `${prefix}${redactedValue}`;
-  }
   return escapeTerminal(argument);
 }
 

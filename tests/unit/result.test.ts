@@ -25,7 +25,7 @@ const cleanOutcome: RuleEvaluationOutcome = {
   failure: null,
 };
 
-function rule(name: string, allowZeroLabels = false): EffectiveRule {
+function rule(name: string): EffectiveRule {
   return {
     name,
     type: "tab-label-single-line",
@@ -33,12 +33,10 @@ function rule(name: string, allowZeroLabels = false): EffectiveRule {
     additionalCandidateSelectors: [],
     excludeSelectors: [],
     labelSelector: null,
-    minimumLabels: 0,
-    allowZeroLabels,
   };
 }
 
-function tableRule(name: string, allowZeroHeaders = true): EffectiveRule {
+function tableRule(name: string): EffectiveRule {
   return {
     name,
     type: "table-header-single-line",
@@ -46,8 +44,6 @@ function tableRule(name: string, allowZeroHeaders = true): EffectiveRule {
     additionalCandidateSelectors: [],
     excludeSelectors: [],
     lineTopTolerancePx: 1,
-    minimumHeaders: 0,
-    allowZeroHeaders,
   };
 }
 
@@ -301,7 +297,7 @@ describe("orchestrator result model", () => {
                 facts: { elementsInspected: 0, violations: [] },
                 failure: {
                   stage: "rule-evaluation",
-                  code: "minimum-labels-unmet",
+                  code: "minimum-inspected-unmet",
                   message: "minimum unmet",
                   target: null,
                   device: null,
@@ -350,7 +346,7 @@ describe("orchestrator result model", () => {
     expect(result.ruleFinalizations.every((item) => item.status === "not-executed")).toBe(true);
   });
 
-  test("fails the first zero-label finalization in declaration order", async () => {
+  test("accepts undeclared zero counts per case", async () => {
     const rules = [rule("empty-first"), rule("empty-later")];
     const result = await runResolvedCheck(
       plan(["a"], rules),
@@ -358,12 +354,12 @@ describe("orchestrator result model", () => {
       { toolVersion: "0.1.0" },
     );
     expect(result.cases[0]?.status).toBe("complete");
-    expect(result.ruleFinalizations.map((item) => item.status)).toEqual(["failed", "not-executed"]);
-    expect(firstFailure(result)).toMatchObject({ code: "zero-labels-global", target: null, rule: "empty-first" });
+    expect(result.ruleFinalizations.map((item) => item.status)).toEqual(["passed", "passed"]);
+    expect(result.status).toBe("clean");
   });
 
   test.each([
-    ["allow zero", plan(["a"], [rule("tabs", true)])],
+    ["unconfigured minimum", plan(["a"], [rule("tabs")])],
     ["all disabled", plan(["a"], [rule("tabs")], { a: ["tabs"] })],
   ])("passes zero-label finalization for %s", async (_name, resolved) => {
     const result = await runResolvedCheck(
@@ -585,7 +581,7 @@ describe("local rule finalization", () => {
     expect(result.ruleFinalizations.every((item) => item.status === "not-executed")).toBe(true);
   });
 
-  test("keeps built-in zero-label finalization before and after local rules", async () => {
+  test("finalizes local rules after zero-count built-ins", async () => {
     const result = await runResolvedCheck(
       plan(["a"], [rule("tabs"), localRule("spacing"), rule("tabs-later")]),
       dependencies({
@@ -595,9 +591,9 @@ describe("local rule finalization", () => {
       { toolVersion: "0.1.0" },
     );
     expect(result.ruleFinalizations.map((item) => [item.name, item.status])).toEqual([
-      ["tabs", "failed"],
-      ["spacing", "not-executed"],
-      ["tabs-later", "not-executed"],
+      ["tabs", "passed"],
+      ["spacing", "passed"],
+      ["tabs-later", "passed"],
     ]);
   });
 
@@ -767,21 +763,18 @@ describe("result contracts", () => {
     );
   });
 
-  test("fails strict global zero-header coverage and passes the default policy", async () => {
+  test("accepts zero headers when no per-case minimum is declared", async () => {
     const evaluateEmpty = () => ({
       facts: { elementsInspected: 0, violations: [] },
       failure: null,
     });
     const strict = await runResolvedCheck(
-      plan(["a"], [tableRule("strict-tables", false)]),
+      plan(["a"], [tableRule("strict-tables")]),
       dependencies({ evaluate: evaluateEmpty }),
       { toolVersion: "0.1.0" },
     );
-    expect(strict.status).toBe("incomplete");
-    expect(strict.ruleFinalizations[0]).toMatchObject({
-      status: "failed",
-      failure: { code: "zero-headers-global", rule: "strict-tables" },
-    });
+    expect(strict.status).toBe("clean");
+    expect(strict.ruleFinalizations[0]).toMatchObject({ status: "passed" });
 
     const defaultPolicy = await runResolvedCheck(
       plan(["a"], [tableRule("tables")]),
@@ -794,11 +787,43 @@ describe("result contracts", () => {
 
   test("does not count disabled table pairs toward strict global coverage", async () => {
     const result = await runResolvedCheck(
-      plan(["a"], [tableRule("tables", false)], { a: ["tables"] }),
+      plan(["a"], [tableRule("tables")], { a: ["tables"] }),
       dependencies(),
       { toolVersion: "0.1.0" },
     );
     expect(result.status).toBe("clean");
     expect(result.ruleFinalizations[0]).toMatchObject({ status: "passed", elementsInspected: 0 });
   });
+  test.each([undefined, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])("rejects an invalid enabled count %s", async (count) => {
+    const resolved = plan(["a"], [{ ...rule("tabs"), minimumInspected: 1 }]);
+    const result = await runResolvedCheck(resolved, dependencies({ evaluate: () => ({ facts: { elementsInspected: count as number, violations: [] }, failure: null }) }), { toolVersion: "test" });
+    expect(exitCodeForResult(result)).toBe(2);
+    expect(result.cases[0]?.rules[0]?.failure).toMatchObject({ code: "elements-inspected-invalid", target: "a", device: "desktop", rule: "tabs" });
+  });
+
+  test("a disabled rule with a declared minimum is not evaluated", async () => {
+    const resolved = plan(["a"], [{ ...rule("tabs"), minimumInspected: 2 }], { a: ["tabs"] });
+    const result = await runResolvedCheck(resolved, dependencies({ evaluate: () => { throw new Error("must not run"); } }), { toolVersion: "test" });
+    expect(exitCodeForResult(result)).toBe(0);
+    expect(result.cases[0]?.rules[0]?.status).toBe("disabled");
+  });
+
+  test("a local rule count below its per-case minimum fails before finalization", async () => {
+    const resolved = plan(["a"], [{ ...localRule("custom"), minimumInspected: 2 }]);
+    const result = await runResolvedCheck(resolved, dependencies({ evaluate: () => ({ facts: { elementsInspected: 1, violations: [] }, failure: null }) }), { toolVersion: "test" });
+    expect(exitCodeForResult(result)).toBe(2);
+    expect(result.cases[0]?.rules[0]?.failure?.code).toBe("minimum-inspected-unmet");
+  });
+
+  test("preserves observed layout violations when coverage is short", async () => {
+    const resolved = plan(["a"], [{ ...rule("tabs"), minimumInspected: 2 }]);
+    const result = await runResolvedCheck(resolved, dependencies({ evaluate: () => ({
+      facts: { elementsInspected: 1, violations: [{ type: "tab-label-single-line", text: "wrapped", lineCount: 2, geometry: { x: 0, y: 0, width: 1, height: 1 }, locator: "#tab" }] },
+      failure: null,
+    }) }), { toolVersion: "test" });
+    expect(exitCodeForResult(result)).toBe(2);
+    expect(result.cases[0]?.rules[0]?.violations).toHaveLength(1);
+    expect(result.summary.violations).toBe(1);
+  });
+
 });

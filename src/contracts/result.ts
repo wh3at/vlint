@@ -44,6 +44,7 @@ export interface CaseDevice {
 
 export interface CaseResult {
   readonly target: CaseTarget;
+  readonly actualUrl?: string | null;
   readonly device: CaseDevice;
   readonly locale: string;
   readonly timezoneId: string;

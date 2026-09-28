@@ -22,8 +22,6 @@ const RULE: EffectiveTabLabelSingleLineRule = {
   additionalCandidateSelectors: [],
   excludeSelectors: [],
   labelSelector: null,
-  minimumLabels: 0,
-  allowZeroLabels: false,
 };
 
 function ruleWith(over: Partial<EffectiveTabLabelSingleLineRule>): EffectiveTabLabelSingleLineRule {
@@ -195,27 +193,21 @@ describe("AE4 zero candidates", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// AE5 — minimum labels unmet is a rule-evaluation failure.
-// ---------------------------------------------------------------------------
-
-describe("AE5 minimum labels", () => {
-  test("fewer inspectable labels than minimum yields minimum-labels-unmet", async () => {
+describe("per-case inspected label count", () => {
+  test("reports one inspected label for a single tab", async () => {
     const outcome = await measureHtml(
       `<div role="tablist"><button role="tab" ${WIDE_TAB_STYLE}>Solo</button></div>`,
-      ruleWith({ minimumLabels: 2 }),
     );
-    expect(outcome.failure?.code).toBe("minimum-labels-unmet");
+    expect(outcome.failure).toBeNull();
     expect(outcome.facts.elementsInspected).toBe(1);
   });
 
-  test("meeting the minimum stays clean", async () => {
+  test("reports two inspected labels for two tabs", async () => {
     const outcome = await measureHtml(
       `<div role="tablist">
         <button role="tab" ${WIDE_TAB_STYLE}>One</button>
         <button role="tab" ${WIDE_TAB_STYLE}>Two</button>
       </div>`,
-      ruleWith({ minimumLabels: 2 }),
     );
     expect(outcome.failure).toBeNull();
     expect(outcome.facts.elementsInspected).toBe(2);

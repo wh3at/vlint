@@ -206,46 +206,30 @@ function defaultsAt(value: unknown, path: string, validateKeys = true): TargetDe
 
 function ruleOverrideAt(value: unknown, path: string, rule: RuleMetadata): RuleOverride {
   const object = objectAt(value, path);
-  if (rule.type === "local") {
-    exactKeys(object, ["enabled", "settings"], path);
-    const result: { enabled?: boolean; settings?: JsonSettings } = {};
-    if (object.enabled !== undefined) result.enabled = booleanAt(object.enabled, `${path}.enabled`);
-    if (object.settings !== undefined) {
-      result.settings = jsonSettingsAt(object.settings, `${path}.settings`);
-    }
-    return result;
-  }
-  if (rule.type === "page-horizontal-overflow") {
-    exactKeys(object, ["enabled"], path);
-    return object.enabled === undefined ? {} : { enabled: booleanAt(object.enabled, `${path}.enabled`) };
-  }
-  if (rule.type === "table-cell-text-overlap") {
-    exactKeys(object, ["enabled", "excludeSelectors"], path);
-    return {
-      ...(object.enabled === undefined ? {} : { enabled: booleanAt(object.enabled, `${path}.enabled`) }),
-      ...(object.excludeSelectors === undefined ? {} : { excludeSelectors: stringArrayAt(object.excludeSelectors, `${path}.excludeSelectors`) }),
-    };
-  }
-  if (rule.type === "table-header-single-line") {
-    exactKeys(object, ["enabled", "excludeSelectors", "minimumHeaders"], path);
-    const result: { enabled?: boolean; excludeSelectors?: readonly string[]; minimumHeaders?: number } = {};
-    if (object.enabled !== undefined) result.enabled = booleanAt(object.enabled, `${path}.enabled`);
-    if (object.excludeSelectors !== undefined) {
-      result.excludeSelectors = stringArrayAt(object.excludeSelectors, `${path}.excludeSelectors`);
-    }
-    if (object.minimumHeaders !== undefined) {
-      result.minimumHeaders = integerAt(object.minimumHeaders, `${path}.minimumHeaders`, 0, 100_000);
-    }
-    return result;
-  }
-  exactKeys(object, ["enabled", "excludeSelectors", "minimumLabels"], path);
-  const result: { enabled?: boolean; excludeSelectors?: readonly string[]; minimumLabels?: number } = {};
-  if (object.enabled !== undefined) result.enabled = booleanAt(object.enabled, `${path}.enabled`);
-  if (object.excludeSelectors !== undefined) {
-    result.excludeSelectors = stringArrayAt(object.excludeSelectors, `${path}.excludeSelectors`);
-  }
-  if (object.minimumLabels !== undefined) {
-    result.minimumLabels = integerAt(object.minimumLabels, `${path}.minimumLabels`, 0, 100_000);
+  const allowed = ["enabled", "minimumInspected", ...(rule.type === "local" ? ["settings"] : []),
+    ...(rule.type === "tab-label-single-line" || rule.type === "table-header-single-line" || rule.type === "table-cell-text-overlap" ? ["excludeSelectors"] : [])];
+  exactKeys(object, allowed, path);
+  return {
+    ...(object.enabled === undefined ? {} : { enabled: booleanAt(object.enabled, `${path}.enabled`) }),
+    ...(object.minimumInspected === undefined ? {} : { minimumInspected: minimumAt(object.minimumInspected, `${path}.minimumInspected`, rule.type) }),
+    ...(object.excludeSelectors === undefined ? {} : { excludeSelectors: stringArrayAt(object.excludeSelectors, `${path}.excludeSelectors`) }),
+    ...(object.settings === undefined ? {} : { settings: jsonSettingsAt(object.settings, `${path}.settings`) }),
+  };
+}
+
+function minimumAt(value: unknown, path: string, type: RuleType): number {
+  const minimum = integerAt(value, path, 0, 100_000);
+  if (type === "page-horizontal-overflow" && minimum > 0) issue(path, "page-wide rule cannot require elements");
+  return minimum;
+}
+
+function minimumsAt(value: unknown, path: string, rules: ReadonlyMap<string, RuleMetadata>): Record<string, number> {
+  const object = objectAt(value, path);
+  const result: Record<string, number> = Object.create(null);
+  for (const [name, raw] of Object.entries(object)) {
+    const rule = rules.get(name);
+    if (rule === undefined) issue(`${path}.${name}`, "unknown rule name");
+    result[name] = minimumAt(raw, `${path}.${name}`, rule.type);
   }
   return result;
 }
@@ -267,7 +251,7 @@ function targetAt(value: unknown, path: string, rulesByName: ReadonlyMap<string,
   const object = objectAt(value, path);
   exactKeys(
     object,
-    ["name", "url", "locale", "timezoneId", "timeoutMs", "browserState", "readyCondition", "ruleOverrides"],
+    ["name", "url", "allowedUrls", "locale", "timezoneId", "timeoutMs", "browserState", "readyCondition", "ruleOverrides", "deviceRuleMinimums"],
     path,
   );
   const base = defaultsAt(object, path, false);
@@ -276,15 +260,23 @@ function targetAt(value: unknown, path: string, rulesByName: ReadonlyMap<string,
     name: nameAt(object.name, `${path}.name`),
     url: urlAt(object.url, `${path}.url`),
   };
-  if (object.ruleOverrides === undefined) return result;
-  const overridesObject = objectAt(object.ruleOverrides, `${path}.ruleOverrides`);
-  const overrides: Record<string, RuleOverride> = {};
-  for (const [name, rawOverride] of Object.entries(overridesObject)) {
-    const rule = rulesByName.get(name);
-    if (rule === undefined) issue(`${path}.ruleOverrides.${name}`, "unknown rule name");
-    overrides[name] = ruleOverrideAt(rawOverride, `${path}.ruleOverrides.${name}`, rule);
+  const ruleOverrides: Record<string, RuleOverride> = Object.create(null);
+  if (object.ruleOverrides !== undefined) {
+    for (const [name, raw] of Object.entries(objectAt(object.ruleOverrides, `${path}.ruleOverrides`))) {
+      const rule = rulesByName.get(name);
+      if (rule === undefined) issue(`${path}.ruleOverrides.${name}`, "unknown rule name");
+      ruleOverrides[name] = ruleOverrideAt(raw, `${path}.ruleOverrides.${name}`, rule);
+    }
   }
-  return { ...result, ruleOverrides: overrides };
+  const deviceRuleMinimums: Record<string, Record<string, number>> = Object.create(null);
+  if (object.deviceRuleMinimums !== undefined) {
+    for (const [device, raw] of Object.entries(objectAt(object.deviceRuleMinimums, `${path}.deviceRuleMinimums`))) {
+      deviceRuleMinimums[device] = minimumsAt(raw, `${path}.deviceRuleMinimums.${device}`, rulesByName);
+    }
+  }
+  return { ...result, ruleOverrides, deviceRuleMinimums,
+    ...(object.allowedUrls === undefined ? {} : { allowedUrls: (Array.isArray(object.allowedUrls) ? object.allowedUrls : issue(`${path}.allowedUrls`, "expected array")).map((url: unknown, index: number) => urlAt(url, `${path}.allowedUrls[${index}]`)) }),
+  };
 }
 
 function targetsAt(
@@ -304,11 +296,11 @@ function targetsAt(
   return targets;
 }
 
-function deviceAt(value: unknown, path: string): DeviceProfile {
+function deviceAt(value: unknown, path: string, rules: ReadonlyMap<string, RuleMetadata>): DeviceProfile {
   const object = objectAt(value, path);
   exactKeys(
     object,
-    ["name", "viewport", "screen", "deviceScaleFactor", "isMobile", "hasTouch", "userAgent"],
+    ["name", "viewport", "screen", "deviceScaleFactor", "isMobile", "hasTouch", "userAgent", "ruleMinimums"],
     path,
   );
   const result: DeviceProfile = {
@@ -319,15 +311,16 @@ function deviceAt(value: unknown, path: string): DeviceProfile {
     isMobile: booleanAt(object.isMobile, `${path}.isMobile`),
     hasTouch: booleanAt(object.hasTouch, `${path}.hasTouch`),
   };
-  if (object.userAgent === undefined) return result;
+  const ruleMinimums = object.ruleMinimums === undefined ? {} : { ruleMinimums: minimumsAt(object.ruleMinimums, `${path}.ruleMinimums`, rules) };
+  if (object.userAgent === undefined) return { ...result, ...ruleMinimums };
   const userAgent = stringAt(object.userAgent, `${path}.userAgent`);
   if (userAgent.length === 0) issue(`${path}.userAgent`, "must not be empty");
-  return { ...result, userAgent };
+  return { ...result, ...ruleMinimums, userAgent };
 }
 
-function devicesAt(value: unknown, path: string): readonly DeviceProfile[] {
+function devicesAt(value: unknown, path: string, rules: ReadonlyMap<string, RuleMetadata>): readonly DeviceProfile[] {
   if (!Array.isArray(value) || value.length === 0) issue(path, "expected non-empty array");
-  const devices = value.map((item, index) => deviceAt(item, `${path}[${index}]`));
+  const devices = value.map((item, index) => deviceAt(item, `${path}[${index}]`, rules));
   const names = new Set<string>();
   for (const device of devices) {
     if (names.has(device.name)) issue(path, `duplicate device name: ${device.name}`);
@@ -338,12 +331,14 @@ function devicesAt(value: unknown, path: string): readonly DeviceProfile[] {
 
 function ruleAt(value: unknown, path: string): RuleInstance {
   const object = objectAt(value, path);
+  const minimum = object.minimumInspected === undefined ? {} : { minimumInspected: minimumAt(object.minimumInspected, `${path}.minimumInspected`, object.type as RuleType) };
   if (object.type === "local") {
-    exactKeys(object, ["name", "type", "path", "settings"], path);
+    exactKeys(object, ["name", "type", "path", "settings", "minimumInspected"], path);
     const result: LocalRuleInstance = {
       name: nameAt(object.name, `${path}.name`),
       type: "local",
       path: localRulePathAt(object.path, `${path}.path`),
+      ...minimum,
     };
     if (object.settings !== undefined) {
       return { ...result, settings: jsonSettingsAt(object.settings, `${path}.settings`) };
@@ -353,7 +348,7 @@ function ruleAt(value: unknown, path: string): RuleInstance {
   if (object.type === "tab-label-single-line") {
     exactKeys(
       object,
-      ["name", "type", "additionalCandidateSelectors", "excludeSelectors", "labelSelector", "minimumLabels", "allowZeroLabels"],
+      ["name", "type", "additionalCandidateSelectors", "excludeSelectors", "labelSelector", "minimumInspected"],
       path,
     );
     const result: {
@@ -362,11 +357,11 @@ function ruleAt(value: unknown, path: string): RuleInstance {
       additionalCandidateSelectors?: readonly string[];
       excludeSelectors?: readonly string[];
       labelSelector?: string;
-      minimumLabels?: number;
-      allowZeroLabels?: boolean;
+      minimumInspected?: number;
     } = {
       name: nameAt(object.name, `${path}.name`),
       type: "tab-label-single-line",
+      ...minimum,
     };
     if (object.additionalCandidateSelectors !== undefined) {
       result.additionalCandidateSelectors = stringArrayAt(
@@ -380,16 +375,10 @@ function ruleAt(value: unknown, path: string): RuleInstance {
     if (object.labelSelector !== undefined) {
       result.labelSelector = stringAt(object.labelSelector, `${path}.labelSelector`);
     }
-    if (object.minimumLabels !== undefined) {
-      result.minimumLabels = integerAt(object.minimumLabels, `${path}.minimumLabels`, 0, 100_000);
-    }
-    if (object.allowZeroLabels !== undefined) {
-      result.allowZeroLabels = booleanAt(object.allowZeroLabels, `${path}.allowZeroLabels`);
-    }
     return result;
   }
   if (object.type === "page-horizontal-overflow") {
-    exactKeys(object, ["name", "type", "enabled", "tolerancePx"], path);
+    exactKeys(object, ["name", "type", "enabled", "tolerancePx", "minimumInspected"], path);
     const result: {
       name: string;
       type: "page-horizontal-overflow";
@@ -398,6 +387,7 @@ function ruleAt(value: unknown, path: string): RuleInstance {
     } = {
       name: nameAt(object.name, `${path}.name`),
       type: "page-horizontal-overflow",
+      ...minimum,
     };
     if (object.enabled !== undefined) result.enabled = booleanAt(object.enabled, `${path}.enabled`);
     if (object.tolerancePx !== undefined) {
@@ -406,10 +396,11 @@ function ruleAt(value: unknown, path: string): RuleInstance {
     return result;
   }
   if (object.type === "table-cell-text-overlap") {
-    exactKeys(object, ["name", "type", "enabled", "excludeSelectors"], path);
+    exactKeys(object, ["name", "type", "enabled", "excludeSelectors", "minimumInspected"], path);
     return {
       name: nameAt(object.name, `${path}.name`),
       type: "table-cell-text-overlap",
+      ...minimum,
       ...(object.enabled === undefined ? {} : { enabled: booleanAt(object.enabled, `${path}.enabled`) }),
       ...(object.excludeSelectors === undefined ? {} : { excludeSelectors: stringArrayAt(object.excludeSelectors, `${path}.excludeSelectors`) }),
     };
@@ -417,7 +408,7 @@ function ruleAt(value: unknown, path: string): RuleInstance {
   if (object.type === "table-header-single-line") {
     exactKeys(
       object,
-      ["name", "type", "additionalCandidateSelectors", "excludeSelectors", "lineTopTolerancePx", "minimumHeaders", "allowZeroHeaders"],
+      ["name", "type", "additionalCandidateSelectors", "excludeSelectors", "lineTopTolerancePx", "minimumInspected"],
       path,
     );
     const result: {
@@ -426,11 +417,11 @@ function ruleAt(value: unknown, path: string): RuleInstance {
       additionalCandidateSelectors?: readonly string[];
       excludeSelectors?: readonly string[];
       lineTopTolerancePx?: number;
-      minimumHeaders?: number;
-      allowZeroHeaders?: boolean;
+      minimumInspected?: number;
     } = {
       name: nameAt(object.name, `${path}.name`),
       type: "table-header-single-line",
+      ...minimum,
     };
     if (object.additionalCandidateSelectors !== undefined) {
       result.additionalCandidateSelectors = stringArrayAt(
@@ -443,12 +434,6 @@ function ruleAt(value: unknown, path: string): RuleInstance {
     }
     if (object.lineTopTolerancePx !== undefined) {
       result.lineTopTolerancePx = finiteNumberAt(object.lineTopTolerancePx, `${path}.lineTopTolerancePx`, 0, 100);
-    }
-    if (object.minimumHeaders !== undefined) {
-      result.minimumHeaders = integerAt(object.minimumHeaders, `${path}.minimumHeaders`, 0, 100_000);
-    }
-    if (object.allowZeroHeaders !== undefined) {
-      result.allowZeroHeaders = booleanAt(object.allowZeroHeaders, `${path}.allowZeroHeaders`);
     }
     return result;
   }
@@ -514,7 +499,7 @@ function parseConfigBody(object: Record<string, unknown>): ParsedConfig {
   const completeRules = rulesWithBuiltins(rules);
   const rulesByName = new Map(completeRules.map((rule) => [rule.name, rule]));
   if (rulesByName.size !== completeRules.length) issue("config.rules", "duplicate rule name after default injection");
-  const devices = devicesAt(object.devices, "config.devices");
+  const devices = devicesAt(object.devices, "config.devices", rulesByName);
   const config: {
     devices: readonly DeviceProfile[];
     provider?: ProviderConfig;

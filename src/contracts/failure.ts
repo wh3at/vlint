@@ -44,8 +44,13 @@ export type FailureCode =
   | "navigation-network"
   | "navigation-http-status"
   | "navigation-timeout"
+  | "url-mismatch"
+  | "navigation-during-measurement"
   | "ready-invalid-selector"
   | "ready-timeout"
+  | "ready-lost"
+  | "minimum-inspected-unmet"
+  | "elements-inspected-invalid"
   | "font-load-failed"
   | "font-timeout"
   | "candidate-selector-invalid"
@@ -53,10 +58,6 @@ export type FailureCode =
   | "label-selector-invalid"
   | "label-selector-cardinality"
   | "label-selector-not-rendered"
-  | "minimum-labels-unmet"
-  | "minimum-headers-unmet"
-  | "zero-labels-global"
-  | "zero-headers-global"
   | "generated-content-unsupported"
   | "diagnostic-field-too-large"
   | "geometry-evaluation-failed"
@@ -110,6 +111,7 @@ export interface Failure {
   readonly target: string | null;
   readonly device: string | null;
   readonly rule: string | null;
+  readonly actualUrl?: string;
   readonly browserDiagnostic?: BrowserSetupDiagnostic;
 }
 

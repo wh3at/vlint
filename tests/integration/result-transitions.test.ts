@@ -17,7 +17,7 @@ import {
 
 /** Result-transition matrix for the case-based schema v2 orchestrator. */
 
-function rule(name: string, allowZeroLabels = false): EffectiveRule {
+function rule(name: string): EffectiveRule {
   return {
     name,
     type: "tab-label-single-line",
@@ -25,8 +25,6 @@ function rule(name: string, allowZeroLabels = false): EffectiveRule {
     additionalCandidateSelectors: [],
     excludeSelectors: [],
     labelSelector: null,
-    minimumLabels: 0,
-    allowZeroLabels,
   };
 }
 
@@ -305,7 +303,7 @@ describe("result-transition matrix reconciles and maps exit codes", () => {
     expect(evaluations).toBe(2);
   });
 
-  test("first zero-label finalization fails in declaration order; later finalizations not-executed", async () => {
+  test("undeclared zero coverage passes per case and finalization", async () => {
     const rules = [rule("empty-first"), rule("empty-later")];
     const resolved = plan(["a"], rules);
     const result = await run(resolved, {
@@ -313,8 +311,8 @@ describe("result-transition matrix reconciles and maps exit codes", () => {
     });
     reconcile(result, resolved);
     expect(result.cases[0]?.status).toBe("complete");
-    expect(result.ruleFinalizations.map((item) => item.status)).toEqual(["failed", "not-executed"]);
-    expect(allFailures(result)).toContainEqual(expect.objectContaining({ code: "zero-labels-global", rule: "empty-first" }));
+    expect(result.ruleFinalizations.map((item) => item.status)).toEqual(["passed", "passed"]);
+    expect(result.status).toBe("clean");
   });
 
   test("browser launch failure preserves the seeded matrix at not-executed", async () => {

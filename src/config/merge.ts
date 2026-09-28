@@ -99,23 +99,24 @@ export function mergeJsonSettings(base: JsonSettings, overlay: JsonSettings): Js
 export function normalizeRules(rules: readonly RuleInstance[] | undefined): readonly EffectiveRule[] {
   const complete = rulesWithBuiltins(rules);
   return complete.map((rule): EffectiveRule => {
+    const minimumInspected = rule.minimumInspected ?? null;
     switch (rule.type) {
       case "tab-label-single-line":
         return {
           name: rule.name,
           type: rule.type,
           enabled: true,
+          minimumInspected,
           additionalCandidateSelectors: rule.additionalCandidateSelectors ?? [],
           excludeSelectors: rule.excludeSelectors ?? [],
           labelSelector: rule.labelSelector ?? null,
-          minimumLabels: rule.minimumLabels ?? 0,
-          allowZeroLabels: rule.allowZeroLabels ?? false,
         };
       case "page-horizontal-overflow":
         return {
           name: rule.name,
           type: rule.type,
           enabled: rule.enabled ?? true,
+          minimumInspected,
           tolerancePx: rule.tolerancePx ?? 1,
         };
       case "table-header-single-line":
@@ -123,19 +124,19 @@ export function normalizeRules(rules: readonly RuleInstance[] | undefined): read
           name: rule.name,
           type: rule.type,
           enabled: true,
+          minimumInspected,
           additionalCandidateSelectors: rule.additionalCandidateSelectors ?? [],
           excludeSelectors: rule.excludeSelectors ?? [],
           lineTopTolerancePx: rule.lineTopTolerancePx ?? 1,
-          minimumHeaders: rule.minimumHeaders ?? 0,
-          allowZeroHeaders: rule.allowZeroHeaders ?? true,
         };
       case "table-cell-text-overlap":
-        return { name: rule.name, type: rule.type, enabled: rule.enabled ?? true, excludeSelectors: rule.excludeSelectors ?? [] };
+        return { name: rule.name, type: rule.type, enabled: rule.enabled ?? true, minimumInspected, excludeSelectors: rule.excludeSelectors ?? [] };
       case "local":
         return {
           name: rule.name,
           type: rule.type,
           enabled: true,
+          minimumInspected,
           path: rule.path,
           settings: rule.settings ?? emptySettings(),
         };
@@ -143,49 +144,27 @@ export function normalizeRules(rules: readonly RuleInstance[] | undefined): read
   });
 }
 
-function effectiveLocalRuleForTarget(
-  rule: EffectiveLocalRule,
-  target: Target,
-): EffectiveLocalRule {
-  const override = target.ruleOverrides?.[rule.name];
-  if (override === undefined) return rule;
-  return {
-    ...rule,
-    enabled: override.enabled ?? rule.enabled,
-    settings:
-      override.settings === undefined
-        ? rule.settings
-        : mergeJsonSettings(rule.settings, override.settings),
-  };
-}
-
 function effectiveRulesForTarget(
   rules: readonly EffectiveRule[],
   target: Target,
-): readonly EffectiveRuleForTarget[] {
+  device: DeviceProfile,
+ ): readonly EffectiveRuleForTarget[] {
   return rules.map((rule) => {
     const override = target.ruleOverrides?.[rule.name];
+    const combined = target.deviceRuleMinimums?.[device.name]?.[rule.name];
+    const targetMinimum = override?.minimumInspected;
+    const deviceMinimum = device.ruleMinimums?.[rule.name];
+    const minimumInspected = combined ?? targetMinimum ?? deviceMinimum ?? rule.minimumInspected;
+    const common = { ...rule, enabled: override?.enabled ?? rule.enabled, minimumInspected };
     switch (rule.type) {
       case "tab-label-single-line":
-        return {
-          ...rule,
-          enabled: override?.enabled ?? rule.enabled,
-          excludeSelectors: [...rule.excludeSelectors, ...(override?.excludeSelectors ?? [])],
-          minimumLabels: override?.minimumLabels ?? rule.minimumLabels,
-        };
-      case "page-horizontal-overflow":
-        return { ...rule, enabled: override?.enabled ?? rule.enabled };
       case "table-header-single-line":
-        return {
-          ...rule,
-          enabled: override?.enabled ?? rule.enabled,
-          excludeSelectors: [...rule.excludeSelectors, ...(override?.excludeSelectors ?? [])],
-          minimumHeaders: override?.minimumHeaders ?? rule.minimumHeaders,
-        };
       case "table-cell-text-overlap":
-        return { ...rule, enabled: override?.enabled ?? rule.enabled, excludeSelectors: [...rule.excludeSelectors, ...(override?.excludeSelectors ?? [])] };
+        return { ...common, excludeSelectors: [...rule.excludeSelectors, ...(override?.excludeSelectors ?? [])] };
+      case "page-horizontal-overflow":
+        return common;
       case "local":
-        return effectiveLocalRuleForTarget(rule, target);
+        return { ...common, settings: override?.settings === undefined ? rule.settings : mergeJsonSettings(rule.settings, override.settings) };
     }
   });
 }
@@ -224,10 +203,11 @@ export function makeEffectiveTarget(
   return {
     name: target.name,
     url: target.url,
+    allowedUrls: target.allowedUrls,
     viewport: device.viewport,
     deviceScaleFactor: device.deviceScaleFactor,
     ...resolvePresentation(target, defaults, directory),
-    rules: effectiveRulesForTarget(rules, target),
+    rules: effectiveRulesForTarget(rules, target, device),
   };
 }
 
@@ -241,6 +221,7 @@ function makeAuditCase(
   return {
     name: target.name,
     url: target.url,
+    allowedUrls: target.allowedUrls,
     deviceName: device.name,
     viewport: device.viewport,
     screen: device.screen,
@@ -249,7 +230,7 @@ function makeAuditCase(
     hasTouch: device.hasTouch,
     userAgent: device.userAgent ?? null,
     ...resolvePresentation(target, defaults, directory),
-    rules: effectiveRulesForTarget(rules, target),
+    rules: effectiveRulesForTarget(rules, target, device),
   };
 }
 
