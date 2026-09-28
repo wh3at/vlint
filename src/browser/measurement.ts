@@ -255,7 +255,10 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   verifyGuards();
   if (recheckViaPlaywright) await drain();
   if (invalid !== null || !request.execute) return { value: null, invalid, url: invalid === null ? global.location.href : invalidUrl };
+  const observationOptions = { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true };
+  const observedRoots = new Set<ReadyRoot>([global.document]);
   const observer = new global.MutationObserver((records) => {
+    if (invalid === null && guard.readyCondition !== null) observeRoots();
     for (const record of records) {
       if (invalid !== null) break;
       if (unobservableReadyLoss(record)) {
@@ -267,11 +270,15 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     }
     if (!recheckViaPlaywright) verifyGuards();
   });
-  observer.observe(global.document, { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true });
-  for (const match of snapshot) {
-    const root = match.getRootNode();
-    if (root !== global.document) observer.observe(root, { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true });
-  }
+  const observeRoots = (): void => {
+    eachRoot((root) => {
+      if (observedRoots.has(root)) return;
+      observer.observe(root, observationOptions);
+      observedRoots.add(root);
+    });
+  };
+  observer.observe(global.document, observationOptions);
+  if (guard.readyCondition !== null) observeRoots();
   const pushState = global.history.pushState;
   const replaceState = global.history.replaceState;
   global.history.pushState = function (...values: unknown[]) { const result = pushState.apply(this, values); verifyGuards(); return result; };

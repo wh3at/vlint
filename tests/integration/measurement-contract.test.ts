@@ -247,6 +247,50 @@ test("a newly matching hidden ready selector is rejected during evaluation", asy
   await opened.value.close();
 });
 
+test("a transient hidden match in an existing shadow root invalidates measurement", async () => {
+  const audit = { ...auditCase(`${server.url}/shadow-ready`), readyCondition: { selector: "#spinner", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const doc = (globalThis as any).document;
+      const spinner = doc.createElement("div");
+      spinner.id = "spinner";
+      spinner.textContent = "loading";
+      doc.querySelector("#host").shadowRoot.append(spinner);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      spinner.remove();
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a transient hidden match in a newly added shadow root invalidates measurement", async () => {
+  const audit = { ...auditCase(`${server.url}/shadow-ready`), readyCondition: { selector: "#spinner", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const doc = (globalThis as any).document;
+      const host = doc.createElement("section");
+      const shadow = host.attachShadow({ mode: "open" });
+      doc.querySelector("#host").shadowRoot.append(host);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const spinner = doc.createElement("div");
+      spinner.id = "spinner";
+      spinner.textContent = "loading";
+      shadow.append(spinner);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      spinner.remove();
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
 test("shadow-host visibility loss cannot be hidden by same-task restoration", async () => {
   const audit = auditCase(`${server.url}/shadow-ready`, { ready: "#ready" });
   const opened = await browser.acquireCase(audit);
