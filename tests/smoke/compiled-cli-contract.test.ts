@@ -125,7 +125,7 @@ describe.skipIf(!binaryPresent)(
       expect(result.stderr).toContain("error: unknown command 'bogus'");
     });
 
-    test("compiled invalid diagnostics are inert and redact URL credentials", async () => {
+    test("compiled invalid diagnostics are inert and display raw URL arguments", async () => {
       const cwd = await temporaryDirectory();
       const unsafePayloads = [
         ["\u0007", "\\u{7}"],
@@ -153,13 +153,25 @@ describe.skipIf(!binaryPresent)(
         }
       }
 
-      const credential = await execBinary([
-        "https://user:password@example.com/x?token=secret#fragment\u001b",
-      ], cwd);
-      expect(credential.exitCode).toBe(1);
-      expect(credential.stderr).not.toContain("user:password");
-      expect(credential.stderr).not.toContain("secret");
-      expect(credential.stderr).not.toContain("fragment");
+      const credentialArguments = [
+        ["https://user:password@example.com/x?token=secret#fragment"],
+        ["https://user:password@example.com/x?token=secret#fragment\u001b"],
+        ["--bogus=https://user:password@example.com/x?token=secret#fragment"],
+        ["check", "--url", "https://user:password@example.com/x?token=secret#fragment"],
+      ] as const;
+      for (const args of credentialArguments) {
+        const credential = await execBinary([...args], cwd);
+        expect(credential.exitCode).toBe(1);
+        expect(credential.stderr).toContain(
+          args[0] === "check" ? "URL userinfo is forbidden" : "token=secret#fragment",
+        );
+      }
+      const escaped = await execBinary(
+        ["https://user:password@example.com/x?token=secret#fragment\u001b"],
+        cwd,
+      );
+      expect(escaped.stderr).toContain("token=secret#fragment\\u{1b}");
+      expect(escaped.stderr).not.toContain("\u001b");
     }, 30_000);
   },
 );
