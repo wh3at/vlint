@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import type { EffectiveAuditCase, ReadyState } from "../contracts/config";
 import type { RuleEvaluationOutcome } from "../contracts/evaluation";
 import type { Failure } from "../contracts/failure";
@@ -60,7 +60,25 @@ interface GuardedValue {
 interface InspectionInput {
   readonly request: EvaluationRequest;
   readonly guard: GuardState;
+  readonly native: boolean;
+  readonly recheck: boolean;
   readonly matches?: readonly ReadyElement[];
+}
+
+const PLAYWRIGHT_ENGINE_PREFIX = /^(?:text|xpath|role|nth|id|data-testid|data-test-id|data-test|alt|label|placeholder|title|testid|aria-ref)=/;
+const PLAYWRIGHT_PSEUDO_CLASS = /:(?:has-text|text|above|below|left-of|right-of|near)\(|:visible(?![\w-])/;
+
+interface SelectorSemantics {
+  readonly native: boolean;
+  readonly recheck: boolean;
+}
+
+function selectorSemantics(raw: string | null): SelectorSemantics {
+  const css = raw !== null && raw.startsWith("css=") ? raw.slice(4) : raw;
+  const text = css !== null && css.startsWith("text=") ? css.slice(5) : null;
+  const recheck = css !== null && text === null &&
+    (css.includes(">>") || PLAYWRIGHT_ENGINE_PREFIX.test(css) || PLAYWRIGHT_PSEUDO_CLASS.test(css));
+  return { native: css !== null && text === null && !recheck, recheck };
 }
 
 async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
@@ -74,6 +92,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     history: { pushState: (...args: unknown[]) => unknown; replaceState: (...args: unknown[]) => unknown };
     addEventListener(type: string, callback: () => void): void;
     removeEventListener(type: string, callback: () => void): void;
+    __vlintReadyRecheck?: (selector: string, state: ReadyState) => Promise<boolean>;
   };
   const isVisible = (element: ReadyElement): boolean => {
     const style = global.getComputedStyle(element);
@@ -98,10 +117,8 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   const selector = rawSelector?.startsWith("css=") ? rawSelector.slice(4) : rawSelector;
   const state: ReadyState = guard.readyCondition?.state ?? "visible";
   const textQuery = selector?.startsWith("text=") ? selector.slice(5) : null;
-  const opaqueSelector = selector !== null && (textQuery !== null || selector.includes(">>") ||
-    selector.includes("xpath=") || selector.includes(":has-text(") || selector.includes(":text(") ||
-    selector.includes(":visible") || selector.includes("nth=") || selector.includes("role="));
-  const nativeSelector = selector !== null && !opaqueSelector;
+  const nativeSelector = input.native;
+  const recheckViaPlaywright = input.recheck;
   const textMatches = (element: ReadyElement): boolean => {
     if (textQuery === null) return true;
     const text = (element.textContent ?? "").replace(/\s+/g, " ").trim();
@@ -116,7 +133,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   };
   const stillMatches = (element: ReadyElement): boolean => {
     if (textQuery !== null) return textMatches(element);
-    if (!nativeSelector) return true;
+    if (selector === null || !nativeSelector) return true;
     try { return element.matches(selector); } catch { return true; }
   };
 
@@ -160,11 +177,36 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
 
   let invalid: GuardedValue["invalid"] = null;
   let invalidUrl = global.location.href;
+  const playwrightReady = async (): Promise<boolean> => {
+    if (rawSelector === null || typeof global.__vlintReadyRecheck !== "function") return true;
+    try {
+      return await global.__vlintReadyRecheck(rawSelector, state);
+    } catch {
+      return true;
+    }
+  };
+  const pending: Array<Promise<void>> = [];
+  const requestPlaywrightRecheck = (): void => {
+    if (invalid !== null) return;
+    pending.push(playwrightReady().then((ready) => {
+      if (!ready && invalid === null) {
+        invalid = "ready-lost";
+        invalidUrl = global.location.href;
+      }
+    }));
+  };
+  const drain = async (): Promise<void> => {
+    while (pending.length > 0) await Promise.all(pending.splice(0));
+  };
   const verifyGuards = (): void => {
     if (invalid !== null) return;
     if (new URL(global.location.href).href !== guard.url) {
       invalid = "url-mismatch";
       invalidUrl = global.location.href;
+      return;
+    }
+    if (recheckViaPlaywright) {
+      requestPlaywrightRecheck();
       return;
     }
     if (!readySatisfied()) {
@@ -194,12 +236,12 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     const attribute = record.attributeName;
     const oldValue = record.oldValue ?? "";
     if (state === "hidden") {
-      return nativeSelector && attribute === "id" && selector.startsWith("#") &&
+      return selector !== null && nativeSelector && attribute === "id" && selector.startsWith("#") &&
         !selector.includes(" ") && oldValue === selector.slice(1) && isVisible(element);
     }
     if (state === "visible" && attribute === "style" && touchesSnapshot(element) &&
       /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse))\b/i.test(oldValue)) return true;
-    if (!nativeSelector || !snapshot.some((match) => match.isConnected && stillMatches(match))) return false;
+    if (selector === null || !nativeSelector || !snapshot.some((match) => match.isConnected && stillMatches(match))) return false;
     if (attribute === "id" && selector.startsWith("#") && !selector.includes(" ") &&
       touchesSnapshot(element) && oldValue !== selector.slice(1)) return true;
     if (attribute === "class" && selector.startsWith(".") && !selector.includes(" ") &&
@@ -211,6 +253,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   };
 
   verifyGuards();
+  if (recheckViaPlaywright) await drain();
   if (invalid !== null || !request.execute) return { value: null, invalid, url: invalid === null ? global.location.href : invalidUrl };
   const observer = new global.MutationObserver((records) => {
     for (const record of records) {
@@ -218,9 +261,11 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
       if (unobservableReadyLoss(record)) {
         invalid = "ready-lost";
         invalidUrl = global.location.href;
+        continue;
       }
+      if (recheckViaPlaywright) requestPlaywrightRecheck();
     }
-    verifyGuards();
+    if (!recheckViaPlaywright) verifyGuards();
   });
   observer.observe(global.document, { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true });
   for (const match of snapshot) {
@@ -237,6 +282,8 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     const expression = (0, eval)(`(${request.source})`) as (arg: unknown) => unknown;
     const value = await (request.isFunction ? expression(request.argument) : expression);
     verifyGuards();
+    observer.disconnect();
+    if (recheckViaPlaywright) await drain();
     return { value, invalid, url: invalid === null ? global.location.href : invalidUrl };
   } finally {
     observer.disconnect();
@@ -247,8 +294,35 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   }
 }
 
+const recheckContexts = new WeakSet<BrowserContext>();
+
+async function readyWithPlaywright(page: Page, selector: string, state: ReadyState): Promise<boolean> {
+  const locator = page.locator(selector);
+  const count = await locator.count();
+  if (state === "attached") return count > 0;
+  for (let index = 0; index < count; index += 1) {
+    const visible = await locator.nth(index).isVisible();
+    if (state === "hidden" && visible) return false;
+    if (state === "visible" && visible) return true;
+  }
+  return state === "hidden";
+}
+
+async function ensureRecheck(page: Page): Promise<void> {
+  const context = page.context();
+  if (recheckContexts.has(context)) return;
+  recheckContexts.add(context);
+  try {
+    await context.exposeBinding("__vlintReadyRecheck", (source, selector: string, state: ReadyState) =>
+      readyWithPlaywright(source.page, selector, state));
+  } catch {
+    recheckContexts.delete(context);
+  }
+}
+
 async function evaluateObserved(page: Page, guard: GuardState, request: EvaluationRequest): Promise<GuardedValue> {
-  const input: InspectionInput = { request, guard };
+  const semantics = selectorSemantics(guard.readyCondition?.selector ?? null);
+  const input: InspectionInput = { request, guard, native: semantics.native, recheck: semantics.recheck };
   if (guard.readyCondition === null) return page.evaluate(inspectInPage, input);
   return page.locator(guard.readyCondition.selector).evaluateAll((matches, payload) => {
     const inspect = (0, eval)(`(${payload.script})`) as (value: InspectionInput) => Promise<GuardedValue>;
@@ -289,6 +363,7 @@ export async function measureRule(
   };
   page.on("framenavigated", onNavigation);
   try {
+    if (selectorSemantics(guard.readyCondition?.selector ?? null).recheck) await ensureRecheck(page);
     await check();
     const guarded = new Proxy(page, {
       get(source, property) {

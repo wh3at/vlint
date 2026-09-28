@@ -301,6 +301,84 @@ test.each([
   await opened.value.close();
 });
 
+test.each([
+  ["[role=main]", "role", "button"],
+  ["role=main", "role", "button"],
+  ["xpath=//main[@id='ready']", "id", "other"],
+])(
+  "ready selector %s is re-evaluated with Playwright semantics during an async rule",
+  async (selector, attribute, replacement) => {
+    const audit = auditCase(`${server.url}/role-ready.html`, { ready: selector });
+    const opened = await browser.acquireCase(audit);
+    if (!opened.ok) throw new Error(opened.failure.code);
+    const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(async ({ attribute, replacement }) => {
+        const element = (globalThis as any).document.querySelector("#ready");
+        const original = element.getAttribute(attribute);
+        element.setAttribute(attribute, replacement);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        element.setAttribute(attribute, original);
+        return 1;
+      }, { attribute, replacement }), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure?.code).toBe("ready-lost");
+    await opened.value.close();
+  },
+);
+
+test("a chained ready selector is re-evaluated with Playwright semantics during an async rule", async () => {
+  const audit = auditCase(`${server.url}/role-ready.html`, { ready: "main >> text=public content" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const ready = (globalThis as any).document.querySelector("#ready");
+      ready.textContent = "other";
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      ready.textContent = "public content";
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("an unrelated attribute update does not fail an opaque ready selector", async () => {
+  const audit = auditCase(`${server.url}/role-ready.html`, { ready: "role=main" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const ready = (globalThis as any).document.querySelector("#ready");
+      ready.dataset.tick = "1";
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      ready.dataset.tick = "2";
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("a newly visible opaque match invalidates hidden readiness during an async rule", async () => {
+  const audit = { ...auditCase(`${server.url}/role-hidden.html`), readyCondition: { selector: "role=main", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const main = (globalThis as any).document.createElement("main");
+      main.setAttribute("role", "main");
+      main.textContent = "ready";
+      (globalThis as any).document.body.append(main);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      main.remove();
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
 test("an unrelated clock update does not fail a hidden ready condition", async () => {
   const audit = { ...auditCase(`${server.url}/`), readyCondition: { selector: "#spinner", state: "hidden" as const } };
   const opened = await browser.acquireCase(audit);
