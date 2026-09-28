@@ -300,3 +300,235 @@ test.each([
   expect(outcome.failure?.code).toBe("ready-lost");
   await opened.value.close();
 });
+
+test("an unrelated clock update does not fail a hidden ready condition", async () => {
+  const audit = { ...auditCase(`${server.url}/`), readyCondition: { selector: "#spinner", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const doc = (globalThis as any).document;
+      const clock = doc.createElement("div");
+      clock.id = "clock";
+      doc.body.append(clock);
+      for (let tick = 0; tick < 3; tick += 1) {
+        clock.textContent = `tick ${tick}`;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("an unrelated attribute update on the ready element does not fail the rule", async () => {
+  const audit = auditCase(`${server.url}/`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const ready = (globalThis as any).document.querySelector("#ready");
+      ready.dataset.tick = "1";
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      ready.dataset.tick = "2";
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("an unrelated child update inside the ready element does not fail the rule", async () => {
+  const audit = auditCase(`${server.url}/`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const doc = (globalThis as any).document;
+      const clock = doc.createElement("span");
+      doc.querySelector("#ready").append(clock);
+      for (let tick = 0; tick < 3; tick += 1) {
+        clock.textContent = `tick ${tick}`;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("a combinator selector that transiently stops matching during an async rule fails", async () => {
+  const url = `${server.url}/`;
+  const acquired = await browser.acquireCase(auditCase(url, { ready: "#ready" }));
+  if (!acquired.ok) throw new Error(acquired.failure.code);
+  const page = acquired.value.page;
+  await page.evaluate(() => {
+    const doc = (globalThis as any).document;
+    const gate = doc.createElement("aside");
+    gate.className = "on";
+    doc.querySelector("#ready").before(gate);
+  });
+  const audit = { ...auditCase(url), readyCondition: { selector: ".on + #ready", state: "visible" as const } };
+  const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const gate = (globalThis as any).document.querySelector(".on");
+      gate.classList.remove("on");
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      gate.classList.add("on");
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await acquired.value.close();
+});
+
+test("a newly appearing visible element violates a hidden ready condition during an async rule", async () => {
+  const audit = { ...auditCase(`${server.url}/`), readyCondition: { selector: "#spinner", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const doc = (globalThis as any).document;
+      const spinner = doc.createElement("div");
+      spinner.id = "spinner";
+      spinner.textContent = "loading";
+      doc.body.append(spinner);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a ready element hidden then restored asynchronously still fails", async () => {
+  const audit = auditCase(`${server.url}/`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const ready = (globalThis as any).document.querySelector("#ready");
+      ready.style.display = "none";
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      ready.style.display = "";
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("an unrelated id change does not invalidate a hidden ready condition", async () => {
+  const audit = { ...auditCase(`${server.url}/`), readyCondition: { selector: "#spinner", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const clock = (globalThis as any).document.querySelector("#ready");
+      clock.id = "clock";
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test.each(["visible", "attached"])("an unrelated style change does not invalidate %s readiness", async (state) => {
+  const audit = { ...auditCase(`${server.url}/`), readyCondition: { selector: "#ready", state: state as "visible" | "attached" } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      (globalThis as any).document.querySelector("#ready").style.color = "red";
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("a same-task sibling selector loss is not hidden by restoration", async () => {
+  const url = `${server.url}/`;
+  const opened = await browser.acquireCase(auditCase(url));
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  await page.evaluate(() => {
+    const gate = (globalThis as any).document.createElement("aside");
+    gate.className = "on";
+    (globalThis as any).document.querySelector("#ready").before(gate);
+  });
+  const audit = { ...auditCase(url), readyCondition: { selector: ".on + #ready", state: "visible" as const } };
+  const outcome = await measureRule(page, audit, url, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const gate = (globalThis as any).document.querySelector(".on");
+      gate.classList.remove("on");
+      gate.classList.add("on");
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a Playwright css= selector fails when its element is absent before measurement", async () => {
+  const url = `${server.url}/`;
+  const opened = await browser.acquireCase(auditCase(url));
+  if (!opened.ok) throw new Error(opened.failure.code);
+  await opened.value.page.evaluate(() => (globalThis as any).document.querySelector("#ready").remove());
+  const audit = { ...auditCase(url), readyCondition: { selector: "css=#ready", state: "visible" as const } };
+  const outcome = await measureRule(opened.value.page, audit, url, async () => ({
+    facts: { elementsInspected: 1, violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a quoted Playwright text selector remains ready", async () => {
+  const audit = auditCase(`${server.url}/`, { ready: 'text="public content"' });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => 1), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("a Playwright regex text selector detects an asynchronous ready loss", async () => {
+  const audit = auditCase(`${server.url}/`, { ready: "text=/public content/" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const ready = (globalThis as any).document.querySelector("#ready");
+      ready.textContent = "other";
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      ready.textContent = "public content";
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a newly visible Playwright text match invalidates hidden readiness", async () => {
+  const audit = { ...auditCase(`${server.url}/`), readyCondition: { selector: "text=loading indicator", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(async () => {
+      const indicator = (globalThis as any).document.createElement("div");
+      indicator.textContent = "loading indicator";
+      (globalThis as any).document.body.append(indicator);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      indicator.remove();
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
