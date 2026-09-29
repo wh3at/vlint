@@ -254,7 +254,7 @@ jobs:
           fi
           ( cd "$(dirname "$MANIFEST")" && sha256sum -c SHA256SUMS )
 
-      - name: Verify tag and Release Please draft
+      - name: Verify tag and App-authored draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.provenance.outputs.tag }}
@@ -272,9 +272,9 @@ jobs:
             exit 1
           fi
           release="$(gh api "/repos/$REPO/releases/tags/$TAG")"
-          if ! printf '%s' "$release" | jq -e --arg tag "$TAG" \
-            '.tag_name == $tag and .draft == true and .author.login == "vlint-release-please[bot]" and (.body | length > 0) and (.assets | length == 0)' >/dev/null; then
-            echo "::error::release $TAG is not an untouched Release Please draft"
+          if ! printf '%s' "$release" | jq -e --arg tag "$TAG" --arg sha "$SHA" \
+            '.tag_name == $tag and .name == $tag and .target_commitish == $sha and .draft == true and .author.login == "vlint-release-please[bot]" and (.body | length > 0) and (.assets | length == 0)' >/dev/null; then
+            echo "::error::release $TAG is not an App-authored draft at $SHA with notes and no assets"
             exit 1
           fi
 
@@ -343,7 +343,7 @@ jobs:
   cleanup-on-failure:
     runs-on: ubuntu-24.04
     needs: [provenance, build, validate, publish, verify-public]
-    if: failure()
+    if: failure() && needs.provenance.result == 'success'
     permissions:
       contents: write
     steps:

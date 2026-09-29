@@ -41,9 +41,9 @@ describe("release workflow boundaries", () => {
     expect(job.if).toContain("workflow_run.event == 'push'");
     expect(job.if).toContain("workflow_run.conclusion == 'success'");
     const steps = job.steps as Array<Record<string, any>>;
-    expect(steps.at(0)?.run).toContain('test "$CI_SHA" = "$main_sha"');
-    expect(steps.at(1)?.with.repositories).toBe("vlint");
-    expect(steps.at(1)?.with["permission-contents"]).toBe("write");
+    expect(steps.at(0)?.with.repositories).toBe("vlint");
+    expect(steps.at(0)?.with["permission-contents"]).toBe("write");
+    expect(steps.at(1)?.run).toContain('test "$CI_SHA" = "$main_sha"');
     expect(steps.at(2)?.with.token).toBe("${{ steps.app.outputs.token }}");
   });
 
@@ -56,11 +56,14 @@ describe("release workflow boundaries", () => {
     const commands = steps.map(step => step.run ?? "").join("\n");
     expect(commands).toContain('.author.login == "vlint-release-please[bot]"');
     expect(commands).toContain(".draft == true");
+    expect(commands).toContain(".target_commitish == $sha");
+    expect(commands).toContain(".name == $tag");
     expect(commands).toContain("gh release upload");
     expect(commands).toContain("gh release edit");
     expect(commands).not.toContain("gh release create");
     expect(commands).not.toContain("checkout");
     expect(release.jobs["verify-public"].permissions).toEqual({});
     expect(release.jobs["cleanup-on-failure"].needs).toContain("provenance");
+    expect(release.jobs["cleanup-on-failure"].if).toContain("needs.provenance.result == 'success'");
   });
 });
