@@ -68,7 +68,7 @@ describe("release workflow boundaries", () => {
     expect(release.jobs["verify-public"].permissions).toEqual({});
     expect(release.jobs["cleanup-on-failure"].needs).toContain("provenance");
     expect(release.jobs["cleanup-on-failure"].if).toContain("needs.provenance.result == 'success'");
-    expect(release.jobs["cleanup-on-failure"].if).toContain("github.event_name != 'workflow_dispatch'");
+    expect(release.jobs["cleanup-on-failure"].if).toContain("github.event_name != 'workflow_dispatch' || needs.publish.result == 'success'");
   });
 
   test("recovers an existing tag from protected main without rebuilding from main", async () => {
@@ -77,6 +77,7 @@ describe("release workflow boundaries", () => {
     expect(release.env.TAG).toBe("${{ inputs.tag || github.ref_name }}");
     expect(release.concurrency.group).toContain("inputs.tag || github.ref_name");
     const provenance = release.jobs.provenance;
+    expect(provenance.if).toContain("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)");
     expect(provenance.outputs.sha).toBe("${{ steps.checked.outputs.sha }}");
     expect(provenance.steps.find((step: { id?: string }) => step.id === "checked")?.run).toContain('SHA="$(git rev-parse HEAD)"');
     expect(release.jobs.build.steps[0].with.ref).toBe("${{ needs.provenance.outputs.tag }}");
