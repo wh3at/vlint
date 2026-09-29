@@ -475,6 +475,135 @@ test.each([
   await opened.value.close();
 });
 
+test("shadow-piercing CSS readiness does not accept a descendant moved under a different host", async () => {
+  const audit = auditCase(`${server.url}/shadow-ready`, { ready: "#host #ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  try {
+    const page = opened.value.page;
+    await page.evaluate(() => {
+      const doc = (globalThis as any).document;
+      const other = doc.createElement("div");
+      doc.body.append(other);
+      other.attachShadow({ mode: "open" }).append(doc.querySelector("#host").shadowRoot.querySelector("#ready"));
+    });
+    expect(await page.locator("#ready").count()).toBe(1);
+    expect(await page.locator("#host #ready").count()).toBe(0);
+    let evaluated = false;
+    const outcome = await measureRule(page, audit, page.url(), async () => {
+      evaluated = true;
+      return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+    });
+    expect(evaluated).toBe(false);
+    expect(outcome.failure?.code).toBe("ready-lost");
+  } finally {
+    await opened.value.close();
+  }
+});
+
+test.each(["#host #ready", "css=#host #ready", "#host > #ready", "#host:has(#ready)"])(
+  "shadow-piercing CSS readiness %s survives steady measurement and unrelated mutations",
+  async (selector) => {
+    for (const state of ["visible", "attached"] as const) {
+      const audit = { ...auditCase(`${server.url}/shadow-ready`), readyCondition: { selector, state } };
+      const opened = await browser.acquireCase(audit);
+      if (!opened.ok) throw new Error(opened.failure.code);
+      try {
+        const page = opened.value.page;
+        const steady = await measureRule(page, audit, page.url(), async (guarded) => ({
+          facts: { elementsInspected: await guarded.evaluate(() => 1), violations: [] }, failure: null,
+        }));
+        expect(steady.failure).toBeNull();
+        expect(steady.facts.elementsInspected).toBe(1);
+        const changing = await measureRule(page, audit, page.url(), async (guarded) => ({
+          facts: { elementsInspected: await guarded.evaluate(async () => {
+            const doc = (globalThis as any).document;
+            const footer = doc.createElement("footer");
+            doc.body.append(footer);
+            footer.textContent = "tick";
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            footer.remove();
+            return 1;
+          }), violations: [] }, failure: null,
+        }));
+        expect(changing.failure).toBeNull();
+        expect(changing.facts.elementsInspected).toBe(1);
+      } finally {
+        await opened.value.close();
+      }
+    }
+  },
+);
+
+test.each(["remove", "host-id", "visibility", "stylesheet"] as const)(
+  "shadow-piercing CSS readiness detects same-task %s loss rather than trusting the acquired match",
+  async (mutation) => {
+    const audit = auditCase(`${server.url}/shadow-ready`, { ready: "#host #ready" });
+    const opened = await browser.acquireCase(audit);
+    if (!opened.ok) throw new Error(opened.failure.code);
+    try {
+      const page = opened.value.page;
+      const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+        facts: { elementsInspected: await guarded.evaluate((mutation) => {
+          const global = globalThis as any;
+          global.shadowMeasurementRan = true;
+          const host = global.document.querySelector("#host");
+          const ready = host.shadowRoot.querySelector("#ready");
+          if (mutation === "remove") {
+            ready.remove();
+            host.shadowRoot.append(ready);
+          } else if (mutation === "host-id") {
+            host.id = "other";
+            host.id = "host";
+          } else if (mutation === "visibility") {
+            ready.hidden = true;
+            ready.hidden = false;
+          } else {
+            const style = global.document.createElement("style");
+            style.textContent = "#ready { display:none }";
+            host.shadowRoot.append(style);
+            style.remove();
+          }
+          return 1;
+        }, mutation), violations: [] }, failure: null,
+      }));
+      expect(await page.evaluate(() => (globalThis as any).shadowMeasurementRan)).toBe(true);
+      expect(outcome.failure?.code).toBe("ready-lost");
+      expect(outcome.facts.elementsInspected).toBe(0);
+      expect(await page.locator("#host #ready").isVisible()).toBe(true);
+    } finally {
+      await opened.value.close();
+    }
+  },
+);
+
+test("shadow-piercing CSS hidden readiness detects visibility loss during measurement", async () => {
+  const opened = await browser.acquireCase(auditCase(`${server.url}/shadow-ready`));
+  if (!opened.ok) throw new Error(opened.failure.code);
+  try {
+    const page = opened.value.page;
+    await page.locator("#host #ready").evaluate((ready) => { (ready as HTMLElement).hidden = true; });
+    const audit = { ...auditCase(page.url()), readyCondition: { selector: "#host #ready", state: "hidden" as const } };
+    const steady = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(() => 1), violations: [] }, failure: null,
+    }));
+    expect(steady.failure).toBeNull();
+    const lost = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(async () => {
+        const ready = (globalThis as any).document.querySelector("#host").shadowRoot.querySelector("#ready");
+        ready.hidden = false;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        ready.hidden = true;
+        return 1;
+      }), violations: [] }, failure: null,
+    }));
+    expect(lost.failure?.code).toBe("ready-lost");
+    expect(lost.facts.elementsInspected).toBe(0);
+  } finally {
+    await opened.value.close();
+  }
+});
+
 test("display:contents remains visible by Playwright's ready semantics", async () => {
   const audit = auditCase(`${server.url}/`, { ready: "#ready" });
   const opened = await browser.acquireCase(audit);
@@ -1163,6 +1292,67 @@ test.each([
   }));
   expect(outcome.failure?.code ?? null).toBe(expected);
   await opened.value.close();
+});
+
+test.each(["visible", "attached"] as const)("text %s readiness survives unrelated child-list text replacements", async (state) => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`), readyCondition: { selector: "text=ready", state } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  try {
+    const page = opened.value.page;
+    const outcome = await measureRule(page, audit, opened.value.actualUrl!, async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(async () => {
+        const clock = (globalThis as any).document.querySelector("#other");
+        clock.textContent = "next";
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        clock.textContent = "later";
+        return 1;
+      }), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure).toBeNull();
+    expect(outcome.facts.elementsInspected).toBe(1);
+    expect(await page.locator("text=ready").isVisible()).toBe(true);
+  } finally {
+    await opened.value.close();
+  }
+});
+
+test.each([
+  ["visible", "/text-mutation.html", "text=ready", "#ready", "replace"],
+  ["attached", "/text-mutation.html", "text=ready", "#ready", "replace"],
+  ["visible", "/text-mutation.html", "text=ready", "#ready", "remove"],
+  ["attached", "/text-mutation.html", "text=ready", "#ready", "remove"],
+  ["visible", "/text-ancestor.html", "text=hello ready", "#ready span", "replace"],
+  ["attached", "/text-ancestor.html", "text=hello ready", "#ready span", "remove"],
+] as const)("text %s readiness detects same-task contributing child-list loss in %s (%s, %s, %s)", async (state, path, selector, target, mutation) => {
+  const audit = { ...auditCase(`${pages.url}${path}`), readyCondition: { selector, state } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  try {
+    const page = opened.value.page;
+    const outcome = await measureRule(page, audit, opened.value.actualUrl!, async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(({ target, mutation }) => {
+        const doc = (globalThis as any).document;
+        doc.querySelector("aside").textContent = "next";
+        const element = doc.querySelector(target);
+        if (mutation === "replace") {
+          const original = element.textContent;
+          element.textContent = "loading";
+          element.textContent = original;
+        } else {
+          const text = element.firstChild;
+          text.remove();
+          element.prepend(text);
+        }
+        return 1;
+      }, { target, mutation }), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure?.code).toBe("ready-lost");
+    expect(outcome.facts.elementsInspected).toBe(0);
+    expect(await page.locator(selector).isVisible()).toBe(true);
+  } finally {
+    await opened.value.close();
+  }
 });
 
 test("an ancestor text ready match survives unrelated text mutations but not same-task text loss", async () => {

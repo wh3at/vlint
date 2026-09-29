@@ -133,7 +133,10 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   const state: ReadyState = guard.readyCondition?.state ?? "visible";
   const textQuery = selector?.startsWith("text=") ? selector.slice(5) : null;
   const nativeSelector = input.native;
-  const recheckViaPlaywright = input.recheck;
+  const recheckViaPlaywright = input.recheck || (nativeSelector && selector !== null &&
+    snapshot.some((element) => {
+      try { return !element.matches(selector); } catch { return true; }
+    }));
   const skippedForText = (element: ReadyElement): boolean =>
     element.nodeName === "SCRIPT" || element.nodeName === "STYLE" || element.nodeName === "NOSCRIPT" || element.nodeName === "HEAD";
   let textOverrides: Map<ReadyNode, string> | null = null;
@@ -167,7 +170,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   };
   const stillMatches = (element: ReadyElement): boolean => {
     if (textQuery !== null) return textMatches(element);
-    if (selector === null || !nativeSelector) return true;
+    if (selector === null || !nativeSelector || recheckViaPlaywright) return true;
     try { return element.matches(selector); } catch { return true; }
   };
 
@@ -183,7 +186,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   };
 
   const queryMatching = (): readonly ReadyElement[] => {
-    if (selector === null || (!nativeSelector && textQuery === null)) return snapshot;
+    if (selector === null || recheckViaPlaywright || (!nativeSelector && textQuery === null)) return snapshot;
     const found: ReadyElement[] = [];
     eachRoot((root) => {
       if (textQuery !== null) {
@@ -305,6 +308,12 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
       changed.some((node) => elementsIn(node).some((element) => element.matches(hasScope[2]!))));
   };
   const inspectHistory = (records: readonly MutationEvidence[]): void => {
+    const unaffectedTextReady = textQuery !== null && state !== "hidden" &&
+      Array.from(state === "attached" ? readyNodes : visibleNodes).some((ready) =>
+        ready.isConnected && stillMatches(ready) && (state === "attached" || isVisible(ready)) &&
+        records.every((record) => !includesReady(ready, record.target as ReadyElement) &&
+          !(record.type === "attributes" && includesReady(record.target as ReadyNode, ready)) &&
+          !(record.type === "childList" && Array.from(record.removedNodes).some((node) => includesReady(node, ready)))));
     const textHistory = new Map<ReadyNode, string>();
     const nextText = new Map<MutationEvidence, string>();
     if (textQuery !== null) {
@@ -337,7 +346,10 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
             visibleNodes.delete(element);
           }
         }
-        if (textQuery !== null && (added.length > 0 || removedNodes.some((node) => node.nodeType === 3 || elementsIn(node).length > 0))) {
+        const unrelatedTextReplacement = unaffectedTextReady &&
+          (record.target as ReadyNode).nodeType === 1 && !skippedForText(record.target as ReadyElement) &&
+          [...addedNodes, ...removedNodes].every((node) => node.nodeType === 3);
+        if (textQuery !== null && !unrelatedTextReplacement && (added.length > 0 || removedNodes.some((node) => node.nodeType === 3 || elementsIn(node).length > 0))) {
           markLost(); break;
         }
         if (state !== "hidden" && (state === "attached" ? readyNodes.size === 0 : visibleNodes.size === 0)) markLost();
@@ -396,8 +408,8 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   const observedRoots = new Set<ReadyRoot>([global.document]);
   const observer = new global.MutationObserver((records) => {
     if (invalid === null && guard.readyCondition !== null) observeRoots();
-    if (invalid === null && guard.readyCondition !== null && !recheckViaPlaywright) inspectHistory(records);
-    if (recheckViaPlaywright) for (const record of records) {
+    if (invalid === null && guard.readyCondition !== null && !input.recheck) inspectHistory(records);
+    if (input.recheck) for (const record of records) {
       if (record.type === "attributes") {
         const target = record.target as ReadyElement;
         if (rawSelector?.includes(record.attributeName ?? "") || snapshot.some((ready) => includesReady(target, ready))) markLost();
@@ -407,7 +419,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
         [...record.addedNodes, ...record.removedNodes].some((node) => snapshot.some((ready) => includesReady(node, ready))))) markLost();
       requestPlaywrightRecheck();
     }
-    if (!recheckViaPlaywright) verifyGuards();
+    if (!input.recheck) verifyGuards();
   });
   const observeRoots = (): void => {
     eachRoot((root) => {
@@ -527,7 +539,7 @@ export async function measureRule(
   };
   page.on("framenavigated", onNavigation);
   try {
-    if (selectorSemantics(guard.readyCondition?.selector ?? null).recheck) await ensureRecheck(page);
+    if (guard.readyCondition !== null) await ensureRecheck(page);
     await check("start");
     const guarded = new Proxy(page, {
       get(source, property) {
