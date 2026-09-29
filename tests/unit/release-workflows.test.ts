@@ -8,10 +8,11 @@ async function workflow(name: string): Promise<Record<string, any>> {
 }
 
 describe("release workflow boundaries", () => {
-  test("bootstraps a single Node package from the last published version", async () => {
+  test("keeps the Node release manifest aligned with the package version", async () => {
     const config = await Bun.file(join(root, "release-please-config.json")).json();
     const manifest = await Bun.file(join(root, ".release-please-manifest.json")).json();
-    expect(manifest).toEqual({ ".": "0.8.0" });
+    const pkg = await Bun.file(join(root, "package.json")).json();
+    expect(manifest).toEqual({ ".": pkg.version });
     expect(config["bootstrap-sha"]).toBe("4b00f6ffd3216bf9690eace54719d2ab84570c3b");
     expect(config["release-type"]).toBe("node");
     expect(config.packages).toEqual({ ".": {} });
