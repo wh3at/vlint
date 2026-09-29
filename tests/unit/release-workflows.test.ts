@@ -77,7 +77,23 @@ describe("release workflow boundaries", () => {
     expect(release.env.TAG).toBe("${{ inputs.tag || github.ref_name }}");
     expect(release.concurrency.group).toContain("inputs.tag || github.ref_name");
     const provenance = release.jobs.provenance;
-    expect(provenance.if).toContain("github.ref == format('refs/heads/{0}', github.event.repository.default_branch)");
+    expect(provenance.if).toBeUndefined();
+    const guard = provenance.steps[0];
+    expect(guard.name).toBe("Require default branch for recovery");
+    expect(guard.env.DEFAULT_BRANCH).toBe("${{ github.event.repository.default_branch }}");
+    expect(provenance.steps[1].id).toBe("meta");
+    for (const [event, ref, exitCode] of [
+      ["workflow_dispatch", "refs/heads/main", 0],
+      ["workflow_dispatch", "refs/heads/feature", 1],
+      ["workflow_dispatch", "refs/tags/v0.8.1", 1],
+      ["push", "refs/tags/v0.8.1", 0],
+    ] as const) {
+      const result = Bun.spawnSync({
+        cmd: ["bash", "-e", "-c", guard.run],
+        env: { ...process.env, GITHUB_EVENT_NAME: event, GITHUB_REF: ref, DEFAULT_BRANCH: "main" },
+      });
+      expect(result.exitCode).toBe(exitCode);
+    }
     expect(provenance.outputs.sha).toBe("${{ steps.checked.outputs.sha }}");
     expect(provenance.steps.find((step: { id?: string }) => step.id === "checked")?.run).toContain('SHA="$(git rev-parse HEAD)"');
     expect(release.jobs.build.steps[0].with.ref).toBe("${{ needs.provenance.outputs.tag }}");
