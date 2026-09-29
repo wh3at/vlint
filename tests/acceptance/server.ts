@@ -24,6 +24,19 @@ const CLEAN_TABS_HTML = `<!doctype html>
 </body>
 </html>`;
 
+const SAME_URL_HISTORY_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>same URL history</title></head>
+<body>
+<main id="ready" hidden>ready</main>
+<button role="tab" aria-selected="true" style="white-space:nowrap">Overview</button>
+<script>
+setTimeout(() => history.replaceState({}, "", location.href), 30);
+setTimeout(() => document.querySelector("#ready").hidden = false, 160);
+</script>
+</body>
+</html>`;
+
 const WRAPPED_SETTINGS_HTML = `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>settings wrapped</title></head>
@@ -111,6 +124,7 @@ const SPACING_CLEAN_HTML = `<!doctype html>
 export interface AcceptanceServer {
   readonly url: string;
   readonly port: number;
+  sameUrlHistoryRequests(): number;
   /** Toggles the /settings page between wrapped (violation) and fixed (clean). */
   setSettingsWrapped(wrapped: boolean): void;
   close(): Promise<void>;
@@ -118,6 +132,7 @@ export interface AcceptanceServer {
 
 export function startAcceptanceServer(): AcceptanceServer {
   let settingsWrapped = true;
+  let historyRequests = 0;
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -126,6 +141,11 @@ export function startAcceptanceServer(): AcceptanceServer {
 
       if (pathname === "/clean") {
         return new Response(CLEAN_TABS_HTML, { headers: HTML_HEADERS });
+      }
+
+      if (pathname === "/same-url-history") {
+        historyRequests++;
+        return new Response(SAME_URL_HISTORY_HTML, { headers: HTML_HEADERS });
       }
 
       if (pathname === "/mobile-only") {
@@ -168,6 +188,7 @@ export function startAcceptanceServer(): AcceptanceServer {
   return {
     url: `http://${server.hostname}:${port}`,
     port,
+    sameUrlHistoryRequests: () => historyRequests,
     setSettingsWrapped: (wrapped) => {
       settingsWrapped = wrapped;
     },

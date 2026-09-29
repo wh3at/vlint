@@ -20,14 +20,11 @@ import type { FixtureServer } from "../fixtures/app/server";
  * stubs — against a pinned Playwright Chromium and deterministic loopback
  * fixture pages. Resources are closed in finally/afterEach; no wall-clock
  * sleeps are used (the only real timers live inside the binary under test).
- *
- * If the binary is absent (clean checkout without build:linux-x64), the
- * entire suite is skipped with an explicit dependency note.
  */
 
 const binary = join(import.meta.dir, "../../dist/vlint-linux-x64");
+if (!existsSync(binary)) throw new Error("Compiled vlint binary is missing. Run bun run build:linux-x64 before test:acceptance.");
 const pluginFixtureRoot = join(import.meta.dir, "../fixtures/plugins");
-const binaryPresent = existsSync(binary);
 const CAT = "/bin/cat";
 /** Per-test ceiling for browser-launching checks (launch + navigate + evaluate + close). */
 const CHECK_TIMEOUT = 60_000;
@@ -112,9 +109,7 @@ function firstFailure(result: RunResult): RunResult["failures"][number] | undefi
     ?? undefined;
 }
 
-describe.skipIf(!binaryPresent)(
-  "compiled vlint binary acceptance (dist/vlint-linux-x64 absent: run build:linux-x64)",
-  () => {
+describe("compiled vlint binary acceptance", () => {
     let acceptance: AcceptanceServer;
     let fixture: FixtureServer;
 
@@ -414,6 +409,22 @@ describe.skipIf(!binaryPresent)(
       expect(cmdParsed.summary.elementsInspected).toBe(staticParsed.summary.elementsInspected);
       expect(cmdParsed.cases[0]!.target.name).toBe("cmd-parity");
       expect(cmdParsed.cases[0]!.rules[0]!.status).toBe("clean");
+    }, CHECK_TIMEOUT);
+
+    test("Command Provider accepts same-URL history replacement during readiness", async () => {
+      const cwd = await tempDir();
+      const url = `${acceptance.url}/same-url-history`;
+      const before = acceptance.sameUrlHistoryRequests();
+      const targetsFile = join(cwd, "targets.json");
+      await writeFile(targetsFile, JSON.stringify({ targets: [{ name: "hydration", url, readyCondition: { selector: "#ready" } }] }));
+      await writeConfig(cwd, { provider: { type: "command", executable: CAT, args: [targetsFile] } });
+      const result = await execBinary(["check", "--format", "json"], cwd);
+      expect(result.exitCode, result.stderr).toBe(0);
+      const parsed = JSON.parse(result.stdout) as RunResult;
+      expect(parsed.status).toBe("clean");
+      expect(parsed.cases[0]).toMatchObject({ target: { name: "hydration", url }, status: "complete" });
+      expect(parsed.cases[0]!.rules[0]!.status).toBe("clean");
+      expect(acceptance.sameUrlHistoryRequests() - before).toBe(1);
     }, CHECK_TIMEOUT);
 
     test("Command Provider nonzero exit classifies provider-exit-nonzero (exit 2)", async () => {
