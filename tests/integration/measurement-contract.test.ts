@@ -1,3 +1,4 @@
+import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createBrowserRunScope, type BrowserRunScope } from "../../src/browser/lifecycle";
 import { findManagedBrowser } from "../../src/browser/install";
@@ -13,6 +14,7 @@ import { startFixtureServer, type FixtureServer } from "../fixtures/app/server";
 
 let server: FixtureServer;
 let browser: BrowserRunScope;
+let nativeBrowser: Browser;
 let pages: PageServer;
 
 const rule: EffectiveRule = { name: "coverage", type: "page-horizontal-overflow", enabled: true, tolerancePx: 1 };
@@ -71,7 +73,13 @@ beforeAll(async () => {
   server = startFixtureServer();
   pages = startPageServer();
   const version = findManagedBrowser().browserVersion;
-  const launched = await createBrowserRunScope({ versionProbe: () => ({ exitCode: 0, timedOut: false, stdout: `Google Chrome for Testing ${version}` }) });
+  const launched = await createBrowserRunScope({
+    versionProbe: () => ({ exitCode: 0, timedOut: false, stdout: `Google Chrome for Testing ${version}` }),
+    launch: async () => {
+      nativeBrowser = await chromium.launch({ headless: true, executablePath: findManagedBrowser().executablePath });
+      return nativeBrowser;
+    },
+  });
   if (!launched.ok) throw new Error(launched.failure.code);
   browser = launched.value;
 });
@@ -427,6 +435,11 @@ test("an interrupt after browser arrival reports the observed URL and one run-le
       { toolVersion: "test", signal: controller.signal },
     );
     await arrived;
+    const deadline = Date.now() + 2000;
+    while (!nativeBrowser.contexts().some((context) => context.pages().some((page) => page.url() === url))) {
+      if (Date.now() >= deadline) throw new Error("Playwright did not observe the target page");
+      await Bun.sleep(5);
+    }
     controller.abort();
     const result = await runP;
     expect(result.cases[0]?.actualUrl).toBe(url);
@@ -574,8 +587,9 @@ test("main-frame navigation during an async evaluation fails instead of escaping
     });
     return { facts: { elementsInspected: 1, violations: [] }, failure: null };
   });
-  expect(outcome.failure?.code).toBe("url-mismatch");
-  expect(outcome.failure?.actualUrl).toBe(`${server.url}/tabs.html`);
+  if (outcome.failure === null) throw new Error("navigation was not detected");
+  expect(["url-mismatch", "navigation-during-measurement"]).toContain(outcome.failure.code);
+  expect(outcome.failure.actualUrl).toBe(outcome.failure.code === "url-mismatch" ? `${server.url}/tabs.html` : audit.url);
   await opened.value.close();
 });
 

@@ -558,7 +558,7 @@ export async function measureRule(
     }
   };
   const onNavigation = (frame: import("playwright").Frame): void => {
-    if (detected === null && frame === page.mainFrame()) detected = { value: null, invalid: sameUrl(page.url(), fixedUrl) ? "navigation-during-measurement" : "url-mismatch", url: page.url() };
+    if (detected === null && frame === page.mainFrame()) detected = { value: null, invalid: sameUrl(frame.url(), fixedUrl) ? "navigation-during-measurement" : "url-mismatch", url: frame.url() };
   };
   page.on("framenavigated", onNavigation);
   try {
