@@ -489,7 +489,7 @@ async function acquireScope(
     return sameUrl(allowed.href, responseUrl.href);
   });
   const committedUrl = nav.value.committedUrl;
-  const unexpectedUrl = !allowedResponse ? nav.value.responseUrl
+  const unexpectedUrl = !allowedResponse ? committedUrl ?? nav.value.responseUrl
     : committedUrl !== null && !allowedArrival(request, committedUrl) ? committedUrl : null;
   if (unexpectedUrl !== null) {
     await closeTargetQuiet(page, context);

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { BrowserContext, Page } from "playwright";
 import type { EffectiveAuditCase, ReadyState } from "../contracts/config";
 import type { RuleEvaluationOutcome } from "../contracts/evaluation";
@@ -6,6 +7,7 @@ import type { Failure } from "../contracts/failure";
 interface GuardState {
   readonly url: string;
   readonly readyCondition: { readonly selector: string; readonly state: ReadyState } | null;
+  readonly slot: string;
 }
 
 type EvaluationRequest =
@@ -63,6 +65,11 @@ interface GuardedValue {
   readonly url: string;
 }
 
+interface RuleGuard {
+  evaluate(request: Extract<EvaluationRequest, { kind: "evaluate" }>): Promise<GuardedValue>;
+  finish(): Promise<GuardedValue>;
+}
+
 interface InspectionInput {
   readonly request: EvaluationRequest;
   readonly guard: GuardState;
@@ -99,13 +106,10 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     addEventListener(type: string, callback: () => void): void;
     removeEventListener(type: string, callback: () => void): void;
     __vlintReadyRecheck?: (selector: string, state: ReadyState) => Promise<boolean>;
-    __vlintRuleGuard?: {
-      evaluate(request: Extract<EvaluationRequest, { kind: "evaluate" }>): Promise<GuardedValue>;
-      finish(): Promise<GuardedValue>;
-    };
   };
+  const slots = globalThis as unknown as Record<string, RuleGuard | undefined>;
   if (request.kind !== "start") {
-    const active = global.__vlintRuleGuard;
+    const active = slots[guard.slot];
     if (active === undefined) throw new Error("measurement guard missing");
     return request.kind === "finish" ? active.finish() : active.evaluate(request);
   }
@@ -285,8 +289,14 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     if (!nativeSelector || selector === null) return false;
     try { return element.matches(selector); } catch { return true; }
   };
+  const matchingElementsIn = (nodes: readonly ReadyNode[]): ReadyElement[] => nodes.flatMap(elementsIn).filter(couldMatch);
   const markLost = (): void => { invalid = "ready-lost"; invalidUrl = global.location.href; };
   const complexSelector = nativeSelector && selector !== null && /[:\s>+~]/.test(selector);
+  const xpathSelector = selector !== null && (selector.startsWith("xpath=") || selector.startsWith("//") || selector.startsWith(".."));
+  const selfPredicateXPath = selector !== null &&
+    /^(?:xpath=)?\/\/[a-zA-Z_][\w-]*(?:\[@[\w-]+(?:=(?:"[^"]*"|'[^']*'))?\])*$/.test(selector);
+  const relationalSelector = selector !== null && (selector.includes(">>") ||
+    (xpathSelector && !selfPredicateXPath));
   const hasScope = selector?.match(/^([a-zA-Z][\w-]*|[.#][a-zA-Z_][\w-]*):has\(([a-zA-Z][\w-]*|[.#][a-zA-Z_][\w-]*)\)(?:\s*[>+~]?\s*[a-zA-Z#.][\w.-]*)*$/) ?? null;
   const findHasAnchors = (): ReadyElement[] => {
     const anchors: ReadyElement[] = [];
@@ -294,9 +304,12 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     return anchors;
   };
   const hasAnchors = findHasAnchors();
+  const readyDependsOnVisibility = state !== "attached";
+  const changesStylesheet = (target: ReadyNode, changed: readonly ReadyNode[]): boolean => readyDependsOnVisibility &&
+    (changed.some((node) => elementsIn(node).some((element) => element.nodeName === "STYLE" || element.nodeName === "LINK")) ||
+      (target.nodeType === 1 && ((target as ReadyElement).nodeName === "STYLE" || (target as ReadyElement).nodeName === "LINK")));
   const affectsComplexReady = (target: ReadyNode, changed: readonly ReadyNode[]): boolean => {
-    if (changed.some((node) => elementsIn(node).some((element) => element.nodeName === "STYLE" || element.nodeName === "LINK")) ||
-      (target.nodeType === 1 && ((target as ReadyElement).nodeName === "STYLE" || (target as ReadyElement).nodeName === "LINK"))) return true;
+    if (changesStylesheet(target, changed)) return true;
     if (Array.from(readyNodes).some((ready) => target === ready ||
       changed.some((node) => includesReady(node, ready)) ||
       (target === ready.parentNode && /[+~]|:nth-/.test(selector ?? "")))) return true;
@@ -330,11 +343,16 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
       if (record.type === "childList") {
         const addedNodes = Array.from(record.addedNodes);
         const removedNodes = Array.from(record.removedNodes);
-        if ([...addedNodes, ...removedNodes].some((node) => elementsIn(node).some((element) => element.shadowRoot))) { markLost(); break; }
-        if (complexSelector && affectsComplexReady(record.target as ReadyNode, [...addedNodes, ...removedNodes])) { markLost(); break; }
+        const changed = [...addedNodes, ...removedNodes];
+        if (state === "hidden" && changed.some((node) => elementsIn(node).some((element) => element.shadowRoot))) { markLost(); break; }
+        if (changesStylesheet(record.target as ReadyNode, changed)) { markLost(); break; }
+        if (complexSelector && affectsComplexReady(record.target as ReadyNode, changed)) { markLost(); break; }
         if (complexSelector) continue;
-        const added = addedNodes.flatMap(elementsIn).filter(couldMatch);
-        if (state === "hidden" && added.some((element) => !element.isConnected || isVisible(element))) { markLost(); break; }
+        const added = matchingElementsIn(addedNodes);
+        textOverrides = textHistory;
+        const insertionMatches = state === "hidden" && textQuery !== null ? matchingElementsIn(addedNodes) : added;
+        textOverrides = null;
+        if (state === "hidden" && insertionMatches.some((element) => !element.isConnected || isVisible(element))) { markLost(); break; }
         for (const element of added) {
           readyNodes.add(element);
           if (element.isConnected && isVisible(element)) visibleNodes.add(element);
@@ -412,7 +430,11 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     if (input.recheck) for (const record of records) {
       if (record.type === "attributes") {
         const target = record.target as ReadyElement;
-        if (rawSelector?.includes(record.attributeName ?? "") || snapshot.some((ready) => includesReady(target, ready))) markLost();
+        const name = record.attributeName ?? "";
+        const matchedReady = snapshot.some((ready) => includesReady(target, ready));
+        const hiddenCandidate = state === "hidden" && rawSelector?.includes(name) === true;
+        const dependencyCandidate = state !== "hidden" && relationalSelector && rawSelector?.includes(name) === true;
+        if (matchedReady || hiddenCandidate || dependencyCandidate) markLost();
       }
       if (record.type === "characterData" && rawSelector?.includes("text")) markLost();
       if (record.type === "childList" && (state === "hidden" ||
@@ -445,7 +467,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     global.removeEventListener("popstate", verifyGuards);
     global.removeEventListener("hashchange", verifyGuards);
   };
-  global.__vlintRuleGuard = {
+  slots[guard.slot] = {
     evaluate: async (execution) => {
       await verify();
       if (invalid !== null) return status(null);
@@ -462,7 +484,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
         return status(null);
       } finally {
         release();
-        delete global.__vlintRuleGuard;
+        delete slots[guard.slot];
       }
     },
   };
@@ -522,6 +544,7 @@ export async function measureRule(
   const guard: GuardState = {
     url: new URL(fixedUrl).href,
     readyCondition: auditCase.readyCondition,
+    slot: `__vlintRuleGuard_${randomBytes(16).toString("hex")}`,
   };
   let detected: GuardedValue | null = null;
   let started = false;
