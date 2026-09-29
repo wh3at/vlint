@@ -1,0 +1,50 @@
+name: release-please
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: release-please-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Verify successful CI belongs to the current main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          main_sha="$(gh api "/repos/$REPO/git/ref/heads/main" --jq '.object.sha')"
+          test "$CI_SHA" = "$main_sha"
+
+      - name: Create repository-scoped GitHub App token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.VLINT_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.VLINT_RELEASE_APP_PRIVATE_KEY }}
+          repositories: vlint
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Open a release PR or create a draft release and tag
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7
+        with:
+          token: ${{ steps.app.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

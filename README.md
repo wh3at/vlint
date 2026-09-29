@@ -479,6 +479,11 @@ bun run build:linux-x64         # dist/vlint-linux-x64
 `bun run release:validate` (Docker) exercises the archive in a clean Ubuntu 24.04 x64
 guest; `bun run test:feasibility` runs the compiled-Playwright feasibility probe.
 
+Releases use a reviewed Release Please PR for the version and changelog. PRs must have
+Conventional Commit titles; squash merges preserve those titles on `main`. See
+[Release operations](docs/operations/release.md) for classification, approval,
+publication, and recovery.
+
 ---
 
 ## Security notes

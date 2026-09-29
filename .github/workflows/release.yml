@@ -1,19 +1,3 @@
-# vlint Linux x64 release pipeline (unit U6).
-#
-# Provenance, build, and validation all run BEFORE any publication. The binary
-# that is published is produced once from a frozen checkout, digested, carried
-# forward as an immutable Actions artifact, re-verified at every boundary, and
-# only then attached to a protected tag. The publish job holds the only
-# contents:write token, never checks out repository code, and runs no
-# repository scripts. A final permissions-empty job re-downloads the published
-# asset anonymously and confirms the checksum still matches.
-#
-# Repository prerequisites (configured outside this workflow):
-#   - default branch protection with required status checks
-#   - a protected `v*` tag ruleset
-#   - a `release` GitHub Environment with required reviewers (approval gate)
-#
-# All third-party actions are pinned to immutable commit SHAs, not mutable tags.
 
 name: release
 
@@ -61,10 +45,10 @@ jobs:
       - name: Resolve tag metadata
         id: meta
         run: |
-          case "$TAG" in
-            v*) ;;
-            *) echo "::error::ref '$TAG' is not a version tag (expected v<semver>)"; exit 1 ;;
-          esac
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::ref '$TAG' is not a version tag (expected v<semver>)"
+            exit 1
+          fi
           SEMVER="${TAG#v}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "semver=$SEMVER" >> "$GITHUB_OUTPUT"
@@ -244,11 +228,6 @@ jobs:
           sh tests/release/validate.sh release \
             "$ARCHIVE" "$CHECKSUM" "$FIXTURE" "$DEB" "$INSTALLER"
 
-  # ---------------------------------------------------------------------------
-  # 4. Publish (approval-gated; the only contents:write token; no checkout).
-  #    Re-downloads the validated asset set, re-verifies the manifest and every
-  #    asset, refuses overwrite, then verifies server-side bytes before publish.
-  # ---------------------------------------------------------------------------
   publish:
     runs-on: ubuntu-24.04
     needs: [provenance, build, validate]
@@ -256,8 +235,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download validated artifact (no repository checkout)
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Download validated artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: vlint-release-${{ needs.provenance.outputs.tag }}
           path: release-artifacts
@@ -275,7 +254,7 @@ jobs:
           fi
           ( cd "$(dirname "$MANIFEST")" && sha256sum -c SHA256SUMS )
 
-      - name: Reject mutable tag and existing release
+      - name: Verify tag and Release Please draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.provenance.outputs.tag }}
@@ -283,46 +262,31 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # Pin the release to the resolved commit, never to the (mutable) tag name.
-          # Dereference both lightweight and annotated tags to the underlying commit.
           obj="$(gh api "/repos/$REPO/git/ref/tags/$TAG" --jq '.object')"
-          obj_type="$(printf '%s' "$obj" | jq -r '.type')"
-          TAG_SHA="$(printf '%s' "$obj" | jq -r '.sha')"
-          if [ "$obj_type" = "tag" ]; then
-            TAG_SHA="$(gh api "/repos/$REPO/git/tags/$TAG_SHA" --jq '.object.sha')"
+          tag_sha="$(printf '%s' "$obj" | jq -r '.sha')"
+          if [ "$(printf '%s' "$obj" | jq -r '.type')" = tag ]; then
+            tag_sha="$(gh api "/repos/$REPO/git/tags/$tag_sha" --jq '.object.sha')"
           fi
-          if [ "$TAG_SHA" != "$SHA" ]; then
-            echo "::error::tag points at commit $TAG_SHA, expected release commit $SHA"
+          if [ "$tag_sha" != "$SHA" ]; then
+            echo "::error::tag points at $tag_sha, expected $SHA"
             exit 1
           fi
-          # Refuse to clobber an already-published release.
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo "::error::release $TAG already exists; refusing to overwrite"
+          release="$(gh api "/repos/$REPO/releases/tags/$TAG")"
+          if ! printf '%s' "$release" | jq -e --arg tag "$TAG" \
+            '.tag_name == $tag and .draft == true and .author.login == "vlint-release-please[bot]" and (.body | length > 0) and (.assets | length == 0)' >/dev/null; then
+            echo "::error::release $TAG is not an untouched Release Please draft"
             exit 1
           fi
 
-      - name: Create draft release and upload assets
+      - name: Upload assets to the verified draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.provenance.outputs.tag }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.sha }}
           ASSET_DIR: release-artifacts/release
-          NOTES_DIR: release-artifacts
         run: |
           set -euo pipefail
-          printf '## vlint %s\n\nUbuntu 24.04 x64 tarball, .deb, and tag-fixed installer. See README for setup and verification.\n' \
-            "${TAG#v}" > "$NOTES_DIR/RELEASE_NOTES.md"
-          gh release create "$TAG" \
-            --repo "$REPO" \
-            --target "$SHA" \
-            --title "vlint ${TAG#v}" \
-            --notes-file "$NOTES_DIR/RELEASE_NOTES.md" \
-            --draft
-          # upload without --clobber so a name collision is a hard failure.
-          gh release upload "$TAG" \
-            --repo "$REPO" \
-            "$ASSET_DIR"/*
+          gh release upload "$TAG" --repo "$REPO" "$ASSET_DIR"/*
 
       - name: Verify server-side asset bytes, then publish
         env:
@@ -376,27 +340,35 @@ jobs:
           ( cd public-assets && sha256sum -c SHA256SUMS )
           echo "Anonymous asset set verified: $actual"
 
-  # ---------------------------------------------------------------------------
-  # 6. Failure-only cleanup.
-  #    Runs only when publish or verify failed. Deletes a partially or fully
-  #    published release so a bad artifact never stays live. No repository
-  #    checkout; only fixed GitHub API calls.
-  # ---------------------------------------------------------------------------
   cleanup-on-failure:
     runs-on: ubuntu-24.04
-    needs: [publish, verify-public]
+    needs: [provenance, build, validate, publish, verify-public]
     if: failure()
     permissions:
       contents: write
     steps:
-      - name: Delete release if it was created
+      - name: Remove incomplete Release Please release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
         run: |
-          set -x
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            gh release delete "$TAG" --repo "$REPO" --yes
-            echo "Removed release $TAG after pipeline failure"
+          set -euo pipefail
+          if ! release="$(gh api "/repos/$REPO/releases/tags/$TAG" 2>/dev/null)"; then
+            exit 0
           fi
+          if ! printf '%s' "$release" | jq -e --arg tag "$TAG" \
+            '.tag_name == $tag and .author.login == "vlint-release-please[bot]"' >/dev/null; then
+            exit 0
+          fi
+          obj="$(gh api "/repos/$REPO/git/ref/tags/$TAG" --jq '.object')"
+          tag_sha="$(printf '%s' "$obj" | jq -r '.sha')"
+          if [ "$(printf '%s' "$obj" | jq -r '.type')" = tag ]; then
+            tag_sha="$(gh api "/repos/$REPO/git/tags/$tag_sha" --jq '.object.sha')"
+          fi
+          if [ "$tag_sha" != "$SHA" ]; then
+            exit 0
+          fi
+          gh release delete "$TAG" --repo "$REPO" --yes
+          echo "Removed incomplete release $TAG; keep the tag for manual recovery"
