@@ -56,8 +56,10 @@ describe("release workflow boundaries", () => {
     const steps = publish.steps as Array<Record<string, any>>;
     const commands = steps.map(step => step.run ?? "").join("\n");
     expect(commands).toContain('.author.login == "vlint-release-please[bot]"');
-    expect(commands).toContain(".draft == true");
-    expect(commands).toContain(".target_commitish == $sha");
+    expect(commands).toContain(".isDraft == true");
+    expect(commands).toContain(".targetCommitish == $sha");
+    expect(commands).toContain('gh release view "$TAG"');
+    expect(commands).not.toContain("/releases/tags/");
     expect(commands).toContain(".name == $tag");
     expect(commands).toContain("gh release upload");
     expect(commands).toContain("gh release edit");
@@ -66,5 +68,19 @@ describe("release workflow boundaries", () => {
     expect(release.jobs["verify-public"].permissions).toEqual({});
     expect(release.jobs["cleanup-on-failure"].needs).toContain("provenance");
     expect(release.jobs["cleanup-on-failure"].if).toContain("needs.provenance.result == 'success'");
+    expect(release.jobs["cleanup-on-failure"].if).toContain("github.event_name != 'workflow_dispatch'");
+  });
+
+  test("recovers an existing tag from protected main without rebuilding from main", async () => {
+    const release = await workflow("release.yml");
+    expect(release.on.workflow_dispatch.inputs.tag.required).toBe(true);
+    expect(release.env.TAG).toBe("${{ inputs.tag || github.ref_name }}");
+    expect(release.concurrency.group).toContain("inputs.tag || github.ref_name");
+    const provenance = release.jobs.provenance;
+    expect(provenance.outputs.sha).toBe("${{ steps.checked.outputs.sha }}");
+    expect(provenance.steps.find((step: { id?: string }) => step.id === "checked")?.run).toContain('SHA="$(git rev-parse HEAD)"');
+    expect(release.jobs.build.steps[0].with.ref).toBe("${{ needs.provenance.outputs.tag }}");
+    expect(release.jobs.publish.steps.find((step: { name?: string }) => step.name === "Verify tag and App-authored draft")?.env.SHA)
+      .toBe("${{ needs.provenance.outputs.sha }}");
   });
 });
