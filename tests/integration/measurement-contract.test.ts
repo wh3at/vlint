@@ -571,7 +571,7 @@ test("a chained ready selector is re-evaluated with Playwright semantics during 
   await opened.value.close();
 });
 
-test("an unrelated attribute update does not fail an opaque ready selector", async () => {
+test("an attribute update on an opaque ready match is conservatively incomplete", async () => {
   const audit = auditCase(`${server.url}/role-ready.html`, { ready: "role=main" });
   const opened = await browser.acquireCase(audit);
   if (!opened.ok) throw new Error(opened.failure.code);
@@ -584,7 +584,7 @@ test("an unrelated attribute update does not fail an opaque ready selector", asy
       return 1;
     }), violations: [] }, failure: null,
   }));
-  expect(outcome.failure).toBeNull();
+  expect(outcome.failure?.code).toBe("ready-lost");
   await opened.value.close();
 });
 
@@ -628,7 +628,7 @@ test("an unrelated clock update does not fail a hidden ready condition", async (
   await opened.value.close();
 });
 
-test("an unrelated attribute update on the ready element does not fail the rule", async () => {
+test("an attribute change on the ready element is incomplete when visibility is uncertain", async () => {
   const audit = auditCase(`${server.url}/`, { ready: "#ready" });
   const opened = await browser.acquireCase(audit);
   if (!opened.ok) throw new Error(opened.failure.code);
@@ -641,7 +641,7 @@ test("an unrelated attribute update on the ready element does not fail the rule"
       return 1;
     }), violations: [] }, failure: null,
   }));
-  expect(outcome.failure).toBeNull();
+  expect(outcome.failure?.code).toBe("ready-lost");
   await opened.value.close();
 });
 
@@ -742,7 +742,7 @@ test("an unrelated id change does not invalidate a hidden ready condition", asyn
   await opened.value.close();
 });
 
-test.each(["visible", "attached"])("an unrelated style change does not invalidate %s readiness", async (state) => {
+test.each(["visible", "attached"])("a style change is conservatively classified for %s readiness", async (state) => {
   const audit = { ...auditCase(`${server.url}/`), readyCondition: { selector: "#ready", state: state as "visible" | "attached" } };
   const opened = await browser.acquireCase(audit);
   if (!opened.ok) throw new Error(opened.failure.code);
@@ -753,7 +753,7 @@ test.each(["visible", "attached"])("an unrelated style change does not invalidat
       return 1;
     }), violations: [] }, failure: null,
   }));
-  expect(outcome.failure).toBeNull();
+  expect(outcome.failure?.code ?? null).toBe(state === "visible" ? "ready-lost" : null);
   await opened.value.close();
 });
 
@@ -968,7 +968,7 @@ test.each([
   await opened.value.close();
 });
 
-test("an unrelated attribute change keeps an attribute ready selector ready", async () => {
+test("an attribute change on the ready element is incomplete even when the selector still matches", async () => {
   const audit = auditCase(`${pages.url}/attribute-ready.html`, { ready: "[data-ready]" });
   const opened = await browser.acquireCase(audit);
   if (!opened.ok) throw new Error(opened.failure.code);
@@ -980,7 +980,7 @@ test("an unrelated attribute change keeps an attribute ready selector ready", as
       return 1;
     }), violations: [] }, failure: null,
   }));
-  expect(outcome.failure).toBeNull();
+  expect(outcome.failure?.code).toBe("ready-lost");
   await opened.value.close();
 });
 
@@ -1016,7 +1016,7 @@ test("a same-task hiding class toggle on the ready element fails visible readine
   await opened.value.close();
 });
 
-test("a harmless class toggle on the ready element stays clean", async () => {
+test("a class toggle with uncertain visibility is incomplete without changing the page", async () => {
   const audit = auditCase(`${pages.url}/visibility.html`, { ready: "#ready" });
   const opened = await browser.acquireCase(audit);
   if (!opened.ok) throw new Error(opened.failure.code);
@@ -1028,11 +1028,11 @@ test("a harmless class toggle on the ready element stays clean", async () => {
       return 1;
     }), violations: [] }, failure: null,
   }));
-  expect(outcome.failure).toBeNull();
+  expect(outcome.failure?.code).toBe("ready-lost");
   await opened.value.close();
 });
 
-test("a CSS-overridden hidden toggle on the ready element stays clean", async () => {
+test("an overridden hidden toggle is incomplete when intermediate visibility cannot be proved", async () => {
   const audit = auditCase(`${pages.url}/hidden-override.html`, { ready: "#ready" });
   const opened = await browser.acquireCase(audit);
   if (!opened.ok) throw new Error(opened.failure.code);
@@ -1044,7 +1044,7 @@ test("a CSS-overridden hidden toggle on the ready element stays clean", async ()
       return 1;
     }), violations: [] }, failure: null,
   }));
-  expect(outcome.failure).toBeNull();
+  expect(outcome.failure?.code).toBe("ready-lost");
   await opened.value.close();
 });
 
@@ -1077,5 +1077,190 @@ test("attached readiness ignores a same-task hidden toggle on the ready element"
     }), violations: [] }, failure: null,
   }));
   expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("same-task text node changes cannot conceal a temporary ready loss", async () => {
+  const audit = auditCase(`${server.url}/`, { ready: "text=public content" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const text = (globalThis as any).document.querySelector("#ready").firstChild;
+      text.data = "loading";
+      text.data = "public content";
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  expect(await opened.value.page.locator("#ready").textContent()).toBe("public content");
+  await opened.value.close();
+});
+
+test("overlapping ready matches do not fail when visibility moves between elements", async () => {
+  const audit = auditCase(`${pages.url}/multi-ready.html`, { ready: ".ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  await opened.value.page.locator(".ready").nth(1).evaluate((element) => { (element as HTMLElement).hidden = true; });
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const [first, second] = (globalThis as any).document.querySelectorAll(".ready");
+      second.hidden = false;
+      first.hidden = true;
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  expect(await opened.value.page.locator(".ready").nth(0).isVisible()).toBe(false);
+  expect(await opened.value.page.locator(".ready").nth(1).isVisible()).toBe(true);
+  await opened.value.close();
+});
+
+test("a gap between visible ready matches is not hidden by later restoration", async () => {
+  const audit = auditCase(`${pages.url}/multi-ready.html`, { ready: ".ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  await opened.value.page.locator(".ready").nth(1).evaluate((element) => { (element as HTMLElement).hidden = true; });
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const [first, second] = (globalThis as any).document.querySelectorAll(".ready");
+      first.hidden = true;
+      second.hidden = false;
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a hidden ready selector catches a same-task insertion and removal", async () => {
+  const audit = { ...auditCase(`${server.url}/`), readyCondition: { selector: "#spinner", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const doc = (globalThis as any).document;
+      const spinner = doc.createElement("div");
+      spinner.id = "spinner";
+      spinner.textContent = "loading";
+      doc.body.append(spinner);
+      spinner.remove();
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  expect(await opened.value.page.locator("#spinner").count()).toBe(0);
+  await opened.value.close();
+});
+
+test("ready verification does not create mutations visible to application observers", async () => {
+  const audit = auditCase(`${server.url}/`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  await opened.value.page.evaluate(() => {
+    const global = globalThis as any;
+    global.auditMutations = 0;
+    new MutationObserver((records) => { global.auditMutations += records.length; }).observe(global.document.body, { childList: true, subtree: true });
+  });
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const doc = (globalThis as any).document;
+      doc.querySelector("#ready").append(doc.createElement("span"));
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  expect(await opened.value.page.evaluate(() => (globalThis as any).auditMutations)).toBe(1);
+  await opened.value.close();
+});
+
+test("attribute inspection does not create mutations visible to application observers", async () => {
+  const audit = auditCase(`${server.url}/`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  await opened.value.page.evaluate(() => {
+    const global = globalThis as any;
+    global.auditMutations = 0;
+    new MutationObserver((records) => { global.auditMutations += records.length; }).observe(global.document.body, { attributes: true, attributeOldValue: true, subtree: true });
+  });
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      (globalThis as any).document.querySelector("#ready").classList.add("marker");
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  expect(await opened.value.page.evaluate(() => (globalThis as any).auditMutations)).toBe(1);
+  await opened.value.close();
+});
+
+test("a same-task opaque selector change is incomplete", async () => {
+  const audit = auditCase(`${server.url}/role-ready.html`, { ready: "role=main" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const element = (globalThis as any).document.querySelector("#ready");
+      element.setAttribute("role", "button");
+      element.setAttribute("role", "main");
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a transient match for a relational hidden selector is incomplete", async () => {
+  const audit = { ...auditCase(`${server.url}/`), readyCondition: { selector: "main:has(.loading)", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const doc = (globalThis as any).document;
+      const child = doc.createElement("span");
+      child.className = "loading";
+      doc.querySelector("main").append(child);
+      child.remove();
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("losing two attribute-ready matches in one task is incomplete", async () => {
+  const audit = auditCase(`${pages.url}/multi-ready.html`, { ready: ".ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const nodes = (globalThis as any).document.querySelectorAll(".ready");
+      for (const node of nodes) node.classList.remove("ready");
+      for (const node of nodes) node.classList.add("ready");
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a transient relational match caused by a class toggle is incomplete", async () => {
+  const audit = { ...auditCase(`${server.url}/`), readyCondition: { selector: "main:has(.loading)", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  await opened.value.page.evaluate(() => {
+    const child = (globalThis as any).document.createElement("span");
+    child.id = "child";
+    (globalThis as any).document.querySelector("main").append(child);
+  });
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const child = (globalThis as any).document.querySelector("#child");
+      child.classList.add("loading");
+      child.classList.remove("loading");
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
   await opened.value.close();
 });

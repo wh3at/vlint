@@ -15,6 +15,7 @@ type EvaluationRequest =
 
 interface ReadyNode {
   readonly nodeType: number;
+  readonly parentNode: ReadyElement | null;
   readonly nextSibling: ReadyNode | null;
 }
 
@@ -52,8 +53,8 @@ interface MutationEvidence {
   readonly target: unknown;
   readonly attributeName?: string | null;
   readonly oldValue?: string | null;
-  readonly removedNodes: Iterable<unknown>;
-  readonly addedNodes: Iterable<unknown>;
+  readonly removedNodes: Iterable<ReadyNode>;
+  readonly addedNodes: Iterable<ReadyNode>;
 }
 
 interface GuardedValue {
@@ -236,89 +237,101 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     }
   };
 
-  const nodeContains = (node: unknown, element: ReadyElement): boolean => {
-    if (node === element) return true;
-    const container = node as { contains?: (value: unknown) => boolean };
-    if (typeof container.contains === "function" && container.contains(element)) return true;
-    const host = element.getRootNode().host;
-    if (host === undefined) return false;
-    return host === node || (typeof container.contains === "function" && container.contains(host));
+  const readyNodes = new Set(queryMatching().filter((element) => element.isConnected && stillMatches(element)));
+  const visibleNodes = new Set(Array.from(readyNodes).filter(isVisible));
+  const includesReady = (node: ReadyNode, element: ReadyElement): boolean => {
+    const container = node as ReadyElement;
+    let current = element;
+    while (true) {
+      if (node === current || container.contains?.(current)) return true;
+      const host = current.getRootNode().host;
+      if (host === undefined) return false;
+      current = host;
+    }
   };
-
-  const eachElementIn = (node: unknown, visit: (element: ReadyElement) => void): void => {
-    const visitRoot = (root: ReadyRoot): void => {
+  const elementsIn = (node: ReadyNode): ReadyElement[] => {
+    const found: ReadyElement[] = [];
+    const walk = (root: ReadyRoot): void => {
       for (const element of root.querySelectorAll("*")) {
-        visit(element);
-        const shadow = element.shadowRoot;
-        if (shadow !== undefined && shadow !== null) visitRoot(shadow);
+        found.push(element);
+        if (element.shadowRoot) walk(element.shadowRoot);
       }
     };
-    const element = node as ReadyElement;
-    if (element !== null && typeof element === "object" && element.nodeType === 1) {
-      visit(element);
-      const shadow = element.shadowRoot;
-      if (shadow !== undefined && shadow !== null) visitRoot(shadow);
+    if (node.nodeType === 1) {
+      const element = node as ReadyElement;
+      found.push(element);
+      if (element.shadowRoot) walk(element.shadowRoot);
+      walk(element);
     }
-    const container = node as { querySelectorAll?: (selector: string) => readonly ReadyElement[] };
-    if (typeof container.querySelectorAll === "function") visitRoot(container as ReadyRoot);
+    return found;
   };
-
-  const settledMatches = new Set<ReadyElement>();
-  const trackSettledMatches = (): void => {
-    for (const element of queryMatching()) {
-      if (element.isConnected && stillMatches(element)) settledMatches.add(element);
+  const couldMatch = (element: ReadyElement): boolean => {
+    if (textQuery !== null) return textMatches(element);
+    if (!nativeSelector || selector === null) return false;
+    try { return element.matches(selector); } catch { return true; }
+  };
+  const markLost = (): void => { invalid = "ready-lost"; invalidUrl = global.location.href; };
+  const complexSelector = nativeSelector && selector !== null && /[:\s>+~]/.test(selector);
+  const inspectHistory = (records: readonly MutationEvidence[]): void => {
+    for (let index = 0; index < records.length && invalid === null; index += 1) {
+      const record = records[index]!;
+      if (record.type === "childList") {
+        const addedNodes = Array.from(record.addedNodes);
+        const removedNodes = Array.from(record.removedNodes);
+        if ([...addedNodes, ...removedNodes].some((node) => elementsIn(node).some((element) => element.shadowRoot))) { markLost(); break; }
+        if (complexSelector) { markLost(); break; }
+        const added = addedNodes.flatMap(elementsIn).filter(couldMatch);
+        if (state === "hidden" && added.length > 0) { markLost(); break; }
+        for (const element of added) {
+          readyNodes.add(element);
+          if (element.isConnected && isVisible(element)) visibleNodes.add(element);
+        }
+        for (const node of removedNodes) {
+          for (const element of readyNodes) {
+            if (!includesReady(node, element)) continue;
+            readyNodes.delete(element);
+            visibleNodes.delete(element);
+          }
+        }
+        if (textQuery !== null && (added.length > 0 || removedNodes.some((node) => node.nodeType === 3 || elementsIn(node).length > 0))) {
+          markLost(); break;
+        }
+        if (state !== "hidden" && (state === "attached" ? readyNodes.size === 0 : visibleNodes.size === 0)) markLost();
+        continue;
+      }
+      if (record.type === "characterData") {
+        if (textQuery !== null) markLost();
+        continue;
+      }
+      if (record.type !== "attributes") continue;
+      const element = record.target as ReadyElement;
+      const name = record.attributeName ?? "";
+      const affectsMatch = selector !== null && (name === "id" || name === "class" || selector.includes(name));
+      const affectsReady = Array.from(readyNodes).some((ready) => includesReady(element, ready));
+      if (state === "hidden") {
+        if (affectsReady || complexSelector || (affectsMatch && (couldMatch(element) ||
+          (name === "id" && selector === `#${record.oldValue}`) ||
+          (name === "class" && record.oldValue?.split(/\s+/).some((value) => selector === `.${value}`))))) markLost();
+        continue;
+      }
+      if (!affectsReady) {
+        if (complexSelector) markLost();
+        continue;
+      }
+      if (name === "hidden" && readyNodes.has(element) && state === "visible") {
+        const next = records.slice(index + 1).find((later) => later.type === "attributes" && later.target === element && later.attributeName === name);
+        const after = next === undefined ? element.getAttribute(name) : next.oldValue ?? null;
+        if (after === null && element.isConnected && isVisible(element)) visibleNodes.add(element);
+        else visibleNodes.delete(element);
+      } else {
+        for (const ready of readyNodes) {
+          if (!includesReady(element, ready)) continue;
+          if (affectsMatch) readyNodes.delete(ready);
+          visibleNodes.delete(ready);
+        }
+      }
+      if (state === "attached" ? readyNodes.size === 0 : visibleNodes.size === 0) markLost();
     }
-  };
-  const rememberMatches = (nodes: Iterable<unknown>): void => {
-    for (const node of nodes) {
-      eachElementIn(node, (element) => {
-        if (element.isConnected && stillMatches(element)) settledMatches.add(element);
-      });
-    }
-  };
-  const forgetMatches = (nodes: Iterable<unknown>): number => {
-    const dropped = new Set<ReadyElement>();
-    for (const node of nodes) for (const element of settledMatches) if (nodeContains(node, element)) dropped.add(element);
-    for (const element of dropped) settledMatches.delete(element);
-    return dropped.size;
-  };
-  const remainingReady = (): boolean => {
-    const live = Array.from(settledMatches).filter((element) => element.isConnected && stillMatches(element));
-    return state === "attached" ? live.length > 0 : live.some((element) => isVisible(element));
-  };
-
-  const readinessAttribute = (name: string): boolean =>
-    name === "style" || name === "class" || name === "hidden" || name === "id" ||
-    (selector !== null && selector.includes(name));
-
-  const historicalReady = (element: ReadyElement, name: string, oldValue: string | null): boolean => {
-    const previous = element.getAttribute(name);
-    if (oldValue === null) element.removeAttribute(name);
-    else element.setAttribute(name, oldValue);
-    try {
-      return readySatisfied();
-    } finally {
-      if (previous === null) element.removeAttribute(name);
-      else element.setAttribute(name, previous);
-    }
-  };
-
-  const unobservableReadyLoss = (record: MutationEvidence): boolean => {
-    if (guard.readyCondition === null || recheckViaPlaywright) return false;
-    if (record.type === "childList") {
-      rememberMatches(record.addedNodes);
-      const removed = forgetMatches(record.removedNodes);
-      return state !== "hidden" && removed > 0 && !remainingReady();
-    }
-    if (record.type !== "attributes") return false;
-    const target = record.target as ReadyElement;
-    if (target === null || typeof target !== "object" || target.nodeType !== 1) return false;
-    const name = record.attributeName ?? "";
-    if (name.length === 0) return false;
-    if (target.isConnected && stillMatches(target)) settledMatches.add(target);
-    else settledMatches.delete(target);
-    if (!readinessAttribute(name)) return false;
-    return !historicalReady(target, name, record.oldValue ?? null);
   };
 
   const status = (value: unknown): GuardedValue => ({ value, invalid, url: invalid === null ? global.location.href : invalidUrl });
@@ -326,22 +339,24 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     verifyGuards();
     if (recheckViaPlaywright) await drain();
   };
-  await verify();
+  if (recheckViaPlaywright) await verify();
+  else verifyGuards();
   if (invalid !== null) return status(null);
-  const observationOptions = { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true };
+  const observationOptions = { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true, characterDataOldValue: true };
   const observedRoots = new Set<ReadyRoot>([global.document]);
   const observer = new global.MutationObserver((records) => {
     if (invalid === null && guard.readyCondition !== null) observeRoots();
-    for (const record of records) {
-      if (invalid !== null) break;
-      if (unobservableReadyLoss(record)) {
-        invalid = "ready-lost";
-        invalidUrl = global.location.href;
-        continue;
+    if (invalid === null && guard.readyCondition !== null && !recheckViaPlaywright) inspectHistory(records);
+    if (recheckViaPlaywright) for (const record of records) {
+      if (record.type === "attributes") {
+        const target = record.target as ReadyElement;
+        if (rawSelector?.includes(record.attributeName ?? "") || snapshot.some((ready) => includesReady(target, ready))) markLost();
       }
-      if (recheckViaPlaywright) requestPlaywrightRecheck();
+      if (record.type === "characterData" && rawSelector?.includes("text")) markLost();
+      if (record.type === "childList" && (state === "hidden" ||
+        [...record.addedNodes, ...record.removedNodes].some((node) => snapshot.some((ready) => includesReady(node, ready))))) markLost();
+      requestPlaywrightRecheck();
     }
-    observer.takeRecords();
     if (!recheckViaPlaywright) verifyGuards();
   });
   const observeRoots = (): void => {
@@ -353,7 +368,6 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   };
   observer.observe(global.document, observationOptions);
   if (guard.readyCondition !== null) observeRoots();
-  if (guard.readyCondition !== null && !recheckViaPlaywright) trackSettledMatches();
   const pushState = global.history.pushState;
   const replaceState = global.history.replaceState;
   global.history.pushState = function (...values: unknown[]) { const result = pushState.apply(this, values); verifyGuards(); return result; };
@@ -495,7 +509,7 @@ export async function measureRule(
     const failure: Failure = {
       stage: observed.invalid === "ready-lost" ? "ready-condition" : "navigation",
       code: observed.invalid === "ready-lost" ? "ready-lost" : observed.invalid === "url-mismatch" ? "url-mismatch" : "navigation-during-measurement",
-      message: observed.invalid === "ready-lost" ? "ready condition lost during measurement" : "page navigated during measurement",
+      message: observed.invalid === "ready-lost" ? "ready state was lost or could not be verified during measurement" : "page navigated during measurement",
       target: auditCase.name,
       device: auditCase.deviceName,
       rule: null,
