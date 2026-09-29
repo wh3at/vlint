@@ -17,6 +17,7 @@ interface ReadyNode {
   readonly nodeType: number;
   readonly parentNode: ReadyElement | null;
   readonly nextSibling: ReadyNode | null;
+  readonly textContent: string | null;
 }
 
 interface ReadyRoot {
@@ -30,7 +31,6 @@ interface ReadyElement extends ReadyNode {
   readonly firstChild: ReadyNode | null;
   readonly shadowRoot?: ReadyRoot | null;
   readonly nodeName: string;
-  readonly textContent: string | null;
   readonly value?: string;
   readonly type?: string;
   checkVisibility(): boolean;
@@ -134,15 +134,27 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   const textQuery = selector?.startsWith("text=") ? selector.slice(5) : null;
   const nativeSelector = input.native;
   const recheckViaPlaywright = input.recheck;
+  const skippedForText = (element: ReadyElement): boolean =>
+    element.nodeName === "SCRIPT" || element.nodeName === "STYLE" || element.nodeName === "NOSCRIPT" || element.nodeName === "HEAD";
+  let textOverrides: Map<ReadyNode, string> | null = null;
   const textValue = (element: ReadyElement): string => {
+    if (skippedForText(element)) return "";
     if (element.nodeName === "INPUT") {
       const type = element.type ?? "";
       if (type === "submit" || type === "button" || type === "reset") return element.value ?? "";
     }
-    return element.textContent ?? "";
+    let value = "";
+    for (let child = element.firstChild; child !== null; child = child.nextSibling) {
+      if (child.nodeType === 3) value += textOverrides?.get(child) ?? child.textContent ?? "";
+      else if (child.nodeType === 1) value += textValue(child as ReadyElement);
+    }
+    return value;
   };
   const textMatches = (element: ReadyElement): boolean => {
     if (textQuery === null) return true;
+    for (let ancestor: ReadyElement | null = element; ancestor !== null; ancestor = ancestor.parentNode) {
+      if (skippedForText(ancestor)) return false;
+    }
     const text = textValue(element).replace(/\s+/g, " ").trim();
     if (textQuery.startsWith('"') && textQuery.endsWith('"')) return text === textQuery.slice(1, -1).replace(/\s+/g, " ").trim();
     if (textQuery.startsWith("'") && textQuery.endsWith("'")) return text === textQuery.slice(1, -1).replace(/\s+/g, " ").trim();
@@ -272,16 +284,48 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   };
   const markLost = (): void => { invalid = "ready-lost"; invalidUrl = global.location.href; };
   const complexSelector = nativeSelector && selector !== null && /[:\s>+~]/.test(selector);
+  const hasScope = selector?.match(/^([a-zA-Z][\w-]*|[.#][a-zA-Z_][\w-]*):has\(([a-zA-Z][\w-]*|[.#][a-zA-Z_][\w-]*)\)(?:\s*[>+~]?\s*[a-zA-Z#.][\w.-]*)*$/) ?? null;
+  const findHasAnchors = (): ReadyElement[] => {
+    const anchors: ReadyElement[] = [];
+    if (hasScope !== null) eachRoot((root) => { for (const element of root.querySelectorAll(hasScope[1]!)) anchors.push(element); });
+    return anchors;
+  };
+  const hasAnchors = findHasAnchors();
+  const affectsComplexReady = (target: ReadyNode, changed: readonly ReadyNode[]): boolean => {
+    if (changed.some((node) => elementsIn(node).some((element) => element.nodeName === "STYLE" || element.nodeName === "LINK")) ||
+      (target.nodeType === 1 && ((target as ReadyElement).nodeName === "STYLE" || (target as ReadyElement).nodeName === "LINK"))) return true;
+    if (Array.from(readyNodes).some((ready) => target === ready ||
+      changed.some((node) => includesReady(node, ready)) ||
+      (target === ready.parentNode && /[+~]|:nth-/.test(selector ?? "")))) return true;
+    if (!selector?.includes(":has(")) return state === "hidden";
+    if (hasScope === null) return true;
+    const anchors = [...hasAnchors, ...findHasAnchors()];
+    if (changed.some((node) => elementsIn(node).some((element) => element.matches(hasScope[1]!)))) return true;
+    return anchors.some((anchor) => includesReady(anchor, target as ReadyElement) &&
+      changed.some((node) => elementsIn(node).some((element) => element.matches(hasScope[2]!))));
+  };
   const inspectHistory = (records: readonly MutationEvidence[]): void => {
+    const textHistory = new Map<ReadyNode, string>();
+    const nextText = new Map<MutationEvidence, string>();
+    if (textQuery !== null) {
+      for (let index = records.length - 1; index >= 0; index -= 1) {
+        const record = records[index]!;
+        if (record.type !== "characterData") continue;
+        const target = record.target as ReadyNode;
+        nextText.set(record, textHistory.get(target) ?? target.textContent ?? "");
+        textHistory.set(target, record.oldValue ?? "");
+      }
+    }
     for (let index = 0; index < records.length && invalid === null; index += 1) {
       const record = records[index]!;
       if (record.type === "childList") {
         const addedNodes = Array.from(record.addedNodes);
         const removedNodes = Array.from(record.removedNodes);
         if ([...addedNodes, ...removedNodes].some((node) => elementsIn(node).some((element) => element.shadowRoot))) { markLost(); break; }
-        if (complexSelector) { markLost(); break; }
+        if (complexSelector && affectsComplexReady(record.target as ReadyNode, [...addedNodes, ...removedNodes])) { markLost(); break; }
+        if (complexSelector) continue;
         const added = addedNodes.flatMap(elementsIn).filter(couldMatch);
-        if (state === "hidden" && added.length > 0) { markLost(); break; }
+        if (state === "hidden" && added.some((element) => !element.isConnected || isVisible(element))) { markLost(); break; }
         for (const element of added) {
           readyNodes.add(element);
           if (element.isConnected && isVisible(element)) visibleNodes.add(element);
@@ -300,7 +344,13 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
         continue;
       }
       if (record.type === "characterData") {
-        if (textQuery !== null) markLost();
+        if (textQuery !== null) {
+          textHistory.set(record.target as ReadyNode, nextText.get(record)!);
+          textOverrides = textHistory;
+          const satisfied = readySatisfied();
+          textOverrides = null;
+          if (!satisfied) markLost();
+        }
         continue;
       }
       if (record.type !== "attributes") continue;
@@ -370,14 +420,16 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   if (guard.readyCondition !== null) observeRoots();
   const pushState = global.history.pushState;
   const replaceState = global.history.replaceState;
-  global.history.pushState = function (...values: unknown[]) { const result = pushState.apply(this, values); verifyGuards(); return result; };
-  global.history.replaceState = function (...values: unknown[]) { const result = replaceState.apply(this, values); verifyGuards(); return result; };
+  const guardedPushState = function (this: typeof global.history, ...values: unknown[]) { const result = pushState.apply(this, values); verifyGuards(); return result; };
+  const guardedReplaceState = function (this: typeof global.history, ...values: unknown[]) { const result = replaceState.apply(this, values); verifyGuards(); return result; };
+  global.history.pushState = guardedPushState;
+  global.history.replaceState = guardedReplaceState;
   global.addEventListener("popstate", verifyGuards);
   global.addEventListener("hashchange", verifyGuards);
   const release = (): void => {
     observer.disconnect();
-    global.history.pushState = pushState;
-    global.history.replaceState = replaceState;
+    if (global.history.pushState === guardedPushState) global.history.pushState = pushState;
+    if (global.history.replaceState === guardedReplaceState) global.history.replaceState = replaceState;
     global.removeEventListener("popstate", verifyGuards);
     global.removeEventListener("hashchange", verifyGuards);
   };

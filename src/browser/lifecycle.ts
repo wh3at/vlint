@@ -367,9 +367,14 @@ export async function navigateToTarget(
   url: string,
   deadline: Deadline,
   signal: AbortSignal | undefined = undefined,
-): Promise<BoundaryResult<void>> {
+): Promise<BoundaryResult<{ responseUrl: string; committedUrl: string | null }>> {
   if (signalAborted(signal)) return boundaryFailure(interruptFailure());
   const timeout = deadline.remainingMs();
+  let committedUrl: string | null = null;
+  const onNavigation = (frame: Frame): void => {
+    if (frame === page.mainFrame() && committedUrl === null) committedUrl = frame.url();
+  };
+  page.on("framenavigated", onNavigation);
   try {
     const response = await raceAbort(signal, page.goto(url, { waitUntil: "domcontentloaded", timeout }));
     if (response === null) {
@@ -379,13 +384,15 @@ export async function navigateToTarget(
     if (status < 200 || status > 399) {
       return boundaryFailure(navFailure("navigation-http-status", "main response status is outside the accepted 200..399 range"));
     }
-    return boundarySuccess(undefined);
+    return boundarySuccess({ responseUrl: response.url(), committedUrl });
   } catch (error) {
     if (isAbortError(error)) return boundaryFailure(interruptFailure());
     if (isTimeoutError(error)) {
       return boundaryFailure(navFailure("navigation-timeout", "navigation did not complete within the target deadline"));
     }
     return boundaryFailure(navFailure("navigation-network", "navigation failed at the network layer"));
+  } finally {
+    page.off("framenavigated", onNavigation);
   }
 }
 
@@ -474,6 +481,20 @@ async function acquireScope(
     return boundaryFailure(stampIdentity(request.name, request.deviceName, actualUrl === "about:blank" ? nav.failure : { ...nav.failure, actualUrl }));
   }
 
+  const responseUrl = new URL(nav.value.responseUrl);
+  responseUrl.hash = "";
+  const allowedResponse = [request.url, ...(request.allowedUrls ?? [])].some((url) => {
+    const allowed = new URL(url);
+    allowed.hash = "";
+    return sameUrl(allowed.href, responseUrl.href);
+  });
+  const committedUrl = nav.value.committedUrl;
+  const unexpectedUrl = !allowedResponse ? nav.value.responseUrl
+    : committedUrl !== null && !allowedArrival(request, committedUrl) ? committedUrl : null;
+  if (unexpectedUrl !== null) {
+    await closeTargetQuiet(page, context);
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, { ...navFailure("url-mismatch", "page arrived at an undeclared URL"), actualUrl: unexpectedUrl }));
+  }
   const arrived = page.url();
   if (!allowedArrival(request, arrived)) {
     await closeTargetQuiet(page, context);
