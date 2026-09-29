@@ -39,7 +39,7 @@ Pick one version-pinned path. None requires Node.js, Bun, npm, or another runtim
 Installs vlint and declares all required Chromium shared libraries:
 
 ```sh
-VERSION=0.4.0
+VERSION=0.8.0
 TAG="v$VERSION"
 base="https://github.com/wh3at/vlint/releases/download/$TAG"
 curl -fsSLO "$base/vlint_${VERSION}_amd64.deb"
@@ -53,7 +53,7 @@ vlint check --url http://localhost:3000/
 ### User-local installer (no sudo)
 
 ```sh
-VERSION=v0.4.0
+VERSION=v0.8.0
 base="https://github.com/wh3at/vlint/releases/download/$VERSION"
 curl -fsSLO "$base/install-$VERSION.sh"
 sh "install-$VERSION.sh"
@@ -68,7 +68,7 @@ If the destination is not on `PATH`, the installer prints the directory to add.
 ### Manual fallback
 
 ```sh
-VERSION=v0.4.0
+VERSION=v0.8.0
 base="https://github.com/wh3at/vlint/releases/download/$VERSION"
 archive="vlint-$VERSION-linux-x64.tar.gz"
 curl -fsSLO "$base/$archive"
@@ -256,7 +256,7 @@ disagree, the combination must be explicit or configuration fails. Unknown
 device/rule names and invalid counts also fail configuration. On `--url`,
 device and rule minimums still apply, but named target overrides do not.
 
-Migration from 0.7: replace `minimumLabels` and `minimumHeaders` at rule
+Migration from 0.7 to 0.8: replace `minimumLabels` and `minimumHeaders` at rule
 or target level with `minimumInspected`; replace `allowZeroLabels: false`
 and `allowZeroHeaders: false` with explicit positive minimums on the intended
 cases. Remove the old fields entirely: they are configuration errors now.
