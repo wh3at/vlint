@@ -32,15 +32,19 @@ element, fixes the layout, and re-runs until clean.
 
 ## Install
 
-Pick one version-pinned path. None requires Node.js, Bun, npm, or another runtime.
+Pick one path to install the latest published release. None requires Node.js, Bun,
+npm, or another runtime. To pin a version (recommended for CI), replace the first
+two `TAG` lines in your chosen snippet with `TAG=vX.Y.Z` from
+[Releases](https://github.com/wh3at/vlint/releases).
 
 ### Ubuntu package (`.deb`)
 
 Installs vlint and declares all required Chromium shared libraries:
 
 ```sh
-VERSION=0.8.0
-TAG="v$VERSION"
+TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/wh3at/vlint/releases/latest)"
+TAG="${TAG##*/}"
+VERSION="${TAG#v}"
 base="https://github.com/wh3at/vlint/releases/download/$TAG"
 curl -fsSLO "$base/vlint_${VERSION}_amd64.deb"
 curl -fsSLO "$base/SHA256SUMS"
@@ -53,10 +57,11 @@ vlint check --url http://localhost:3000/
 ### User-local installer (no sudo)
 
 ```sh
-VERSION=v0.8.0
-base="https://github.com/wh3at/vlint/releases/download/$VERSION"
-curl -fsSLO "$base/install-$VERSION.sh"
-sh "install-$VERSION.sh"
+TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/wh3at/vlint/releases/latest)"
+TAG="${TAG##*/}"
+base="https://github.com/wh3at/vlint/releases/download/$TAG"
+curl -fsSLO "$base/install-$TAG.sh"
+sh "install-$TAG.sh"
 export PATH="${VLINT_INSTALL_DIR:-$HOME/.local/bin}:$PATH"
 vlint browser install --with-deps   # only Playwright's apt subprocess elevates
 vlint init
@@ -68,9 +73,10 @@ If the destination is not on `PATH`, the installer prints the directory to add.
 ### Manual fallback
 
 ```sh
-VERSION=v0.8.0
-base="https://github.com/wh3at/vlint/releases/download/$VERSION"
-archive="vlint-$VERSION-linux-x64.tar.gz"
+TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/wh3at/vlint/releases/latest)"
+TAG="${TAG##*/}"
+base="https://github.com/wh3at/vlint/releases/download/$TAG"
+archive="vlint-$TAG-linux-x64.tar.gz"
 curl -fsSLO "$base/$archive"
 curl -fsSLO "$base/SHA256SUMS"
 awk -v name="$archive" '$2 == name { print }' SHA256SUMS | sha256sum -c -
