@@ -16,6 +16,7 @@ let server: FixtureServer;
 let browser: BrowserRunScope;
 let nativeBrowser: Browser;
 let pages: PageServer;
+let sameUrlDocumentRequests = 0;
 
 const rule: EffectiveRule = { name: "coverage", type: "page-horizontal-overflow", enabled: true, tolerancePx: 1 };
 
@@ -46,6 +47,7 @@ const PAGE_DOCUMENTS: Record<string, string> = {
   "/hidden-override.html": "<!doctype html><html><head><style>[hidden]{display:block !important}</style></head><body><main id=\"ready\">public content</main></body></html>",
   "/xpath-sibling.html": "<!doctype html><html><body><aside id=\"enabled\">gate</aside><main id=\"ready\">public content</main></body></html>",
   "/xpath-child.html": "<!doctype html><html><body><main id=\"ready\">public content<aside id=\"enabled\">gate</aside></main></body></html>",
+  "/same-url-history.html": "<!doctype html><html><body><main id='ready' hidden>ready</main><script>window.initialDocument = document; setTimeout(() => history.replaceState({}, '', location.href), 30); setTimeout(() => document.querySelector('#ready').hidden = false, 160)</script></body></html>",
 };
 
 function startPageServer(): PageServer {
@@ -54,6 +56,7 @@ function startPageServer(): PageServer {
     port: 0,
     fetch(request) {
       const path = new URL(request.url).pathname;
+      if (path === "/same-url-history.html") sameUrlDocumentRequests++;
       if (path === "/redirect-back") return Response.redirect(new URL("/undeclared", request.url), 302);
       if (path === "/undeclared") return new Response(
         "<!doctype html><html><head><script>history.replaceState({}, '', '/redirect-back' + location.hash)</script></head><body>destination</body></html>",
@@ -142,6 +145,18 @@ test("a redirect to an undeclared document cannot hide behind pre-DOMContentLoad
   }
 });
 
+test("same-URL history replacement during ready wait does not lose the target page", async () => {
+  const url = `${pages.url}/same-url-history.html`;
+  const before = sameUrlDocumentRequests;
+  const opened = await browser.acquireCase(auditCase(url, { ready: "#ready" }));
+  expect(opened.ok).toBe(true);
+  if (!opened.ok) return;
+  expect(opened.value.actualUrl).toBe(url);
+  expect(await opened.value.page.evaluate(() => (globalThis as any).initialDocument === document)).toBe(true);
+  expect(sameUrlDocumentRequests - before).toBe(1);
+  await opened.value.close();
+});
+
 test("URL and ready state are checked inside asynchronous browser evaluation", async () => {
   const url = `${server.url}/`;
   const audit = auditCase(url, { ready: "#ready" });
@@ -170,6 +185,40 @@ test("URL and ready state are checked inside asynchronous browser evaluation", a
   });
   expect(moved.failure?.code).toBe("url-mismatch");
   expect(moved.failure?.actualUrl).toContain("/other?token=abc#part");
+  await opened.value.close();
+});
+
+test("same-URL history replacement during a rule does not lose the target page", async () => {
+  const audit = auditCase(`${server.url}/`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  await page.evaluate(() => { (globalThis as any).originalDocument = document; });
+  let documentResponses = 0;
+  page.on("response", (response) => { if (response.request().resourceType() === "document") documentResponses++; });
+  const outcome = await measureRule(page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => { history.replaceState({}, "", location.href); return 1; }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  expect(outcome.facts.elementsInspected).toBe(1);
+  expect(page.url()).toBe(audit.url);
+  expect(await page.evaluate(() => (globalThis as any).originalDocument === document)).toBe(true);
+  expect(documentResponses).toBe(0);
+  await opened.value.close();
+});
+
+test("same-URL document reload during a rule still invalidates the result", async () => {
+  const audit = auditCase(`${server.url}/`);
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  const outcome = await measureRule(page, audit, opened.value.actualUrl!, async (guarded) => {
+    await guarded.evaluate(() => { setTimeout(() => location.reload(), 30); return 1; });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+  });
+  expect(outcome.failure?.code).toBe("navigation-during-measurement");
+  expect(outcome.failure?.actualUrl).toBe(audit.url);
   await opened.value.close();
 });
 
