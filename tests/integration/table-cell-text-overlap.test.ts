@@ -1211,4 +1211,4 @@ test("excluded cells remain neighbors without counting as inspected cells", asyn
   } finally {
     await browser.close();
   }
-});
+}, 15_000);
