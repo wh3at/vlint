@@ -32,15 +32,19 @@ element, fixes the layout, and re-runs until clean.
 
 ## Install
 
-Pick one version-pinned path. None requires Node.js, Bun, npm, or another runtime.
+Pick one path to install the latest published release. None requires Node.js, Bun,
+npm, or another runtime. To pin a version (recommended for CI), replace the first
+two `TAG` lines in your chosen snippet with `TAG=vX.Y.Z` from
+[Releases](https://github.com/wh3at/vlint/releases).
 
 ### Ubuntu package (`.deb`)
 
 Installs vlint and declares all required Chromium shared libraries:
 
 ```sh
-VERSION=0.4.0
-TAG="v$VERSION"
+TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/wh3at/vlint/releases/latest)"
+TAG="${TAG##*/}"
+VERSION="${TAG#v}"
 base="https://github.com/wh3at/vlint/releases/download/$TAG"
 curl -fsSLO "$base/vlint_${VERSION}_amd64.deb"
 curl -fsSLO "$base/SHA256SUMS"
@@ -53,10 +57,11 @@ vlint check --url http://localhost:3000/
 ### User-local installer (no sudo)
 
 ```sh
-VERSION=v0.4.0
-base="https://github.com/wh3at/vlint/releases/download/$VERSION"
-curl -fsSLO "$base/install-$VERSION.sh"
-sh "install-$VERSION.sh"
+TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/wh3at/vlint/releases/latest)"
+TAG="${TAG##*/}"
+base="https://github.com/wh3at/vlint/releases/download/$TAG"
+curl -fsSLO "$base/install-$TAG.sh"
+sh "install-$TAG.sh"
 export PATH="${VLINT_INSTALL_DIR:-$HOME/.local/bin}:$PATH"
 vlint browser install --with-deps   # only Playwright's apt subprocess elevates
 vlint init
@@ -68,9 +73,10 @@ If the destination is not on `PATH`, the installer prints the directory to add.
 ### Manual fallback
 
 ```sh
-VERSION=v0.4.0
-base="https://github.com/wh3at/vlint/releases/download/$VERSION"
-archive="vlint-$VERSION-linux-x64.tar.gz"
+TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/wh3at/vlint/releases/latest)"
+TAG="${TAG##*/}"
+base="https://github.com/wh3at/vlint/releases/download/$TAG"
+archive="vlint-$TAG-linux-x64.tar.gz"
 curl -fsSLO "$base/$archive"
 curl -fsSLO "$base/SHA256SUMS"
 awk -v name="$archive" '$2 == name { print }' SHA256SUMS | sha256sum -c -
@@ -171,9 +177,9 @@ and iPhone 17 profiles.
 | `rules` | Built-in and local rule instances. |
 | `provider` | Optional `static` or `command` provider; required only without `--url`. |
 
-- **`tab-label-single-line`** — each rendered tab label must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `labelSelector`, `minimumLabels`, `allowZeroLabels`.
+- **`tab-label-single-line`** — each rendered tab label must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `labelSelector`.
 - **`page-horizontal-overflow`** — detects unintended root-page horizontal scroll attributed to light-DOM elements. Field: `tolerancePx` (`0`–`100`, default `1`).
-- **`table-header-single-line`** — each rendered semantic column header must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `lineTopTolerancePx`, `minimumHeaders`, `allowZeroHeaders`.
+- **`table-header-single-line`** — each rendered semantic column header must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `lineTopTolerancePx`.
 - **`table-cell-text-overlap`** — detects visible text entering an adjacent cell in the same table/grid. Fields: `enabled` (default `true`), `excludeSelectors` (default `[]`).
 - **`static`** provider — inline `targets` (`name`, `url`, defaults, optional `ruleOverrides`).
 - **`command`** provider — runs a trusted executable without a shell, reads `{"targets":[...]}` from stdout (`executable`, `args`, `timeoutMs`).
@@ -181,9 +187,8 @@ and iPhone 17 profiles.
 ### Table header single-line rule
 
 The rule is enabled by default. If no `table-header-single-line` instance is declared,
-vlint injects one named `table-header-single-line` with `lineTopTolerancePx: 1`,
-`minimumHeaders: 0`, and `allowZeroHeaders: true`. Declaring one or more named
-instances suppresses that injected default.
+vlint injects one named `table-header-single-line` with `lineTopTolerancePx: 1`.
+Declaring one or more named instances suppresses that injected default.
 
 It discovers rendered native column headers from `th[scope="col"]`,
 `th[scope="colgroup"]`, and `thead th`, plus explicit ARIA
@@ -198,8 +203,7 @@ Additional selectors extend discovery; overlapping selectors inspect an element 
   "additionalCandidateSelectors": ["[data-column-heading]"],
   "excludeSelectors": [".allow-header-wrap"],
   "lineTopTolerancePx": 1,
-  "minimumHeaders": 1,
-  "allowZeroHeaders": false
+  "minimumInspected": 1
 }
 ```
 
@@ -209,24 +213,61 @@ selector. A header with significant rendered `::before` or `::after` content is
 reported as `generated-content-unmeasured` and is not counted as inspected; other
 headers in the case are still evaluated.
 
-`minimumHeaders` is enforced for each target-device case. `allowZeroHeaders: false`
-is a separate run-wide coverage check: it makes a completed run incomplete when every
-enabled case inspected zero headers. The default `true` keeps table-free projects
-clean. A target can replace its minimum, add exclusions, or disable the named rule:
+`minimumInspected` is an optional per-target/device/rule lower bound. Without a
+declaration, zero inspected headers is valid. A target can add exclusions or disable
+the named rule with `ruleOverrides`:
 
 ```jsonc
 {
   "name": "legacy-report",
   "url": "http://localhost:3000/report",
-  "ruleOverrides": {
-    "tables": {
-      "enabled": false,
-      "excludeSelectors": [".legacy-wrap"],
-      "minimumHeaders": 0
-    }
-  }
+  "ruleOverrides": { "tables": { "enabled": false, "excludeSelectors": [".legacy-wrap"] } }
 }
 ```
+
+### URL and minimum-count contract
+
+The configured target URL must match the browser's arrival URL after standard URL
+normalization (scheme, host, default port, path, query, and fragment). An initial
+HTTP redirect may be declared as a full URL in that target's `allowedUrls`;
+only an exact normalized match is allowed. Once acquired, the arrival URL is fixed
+for every rule: a later transition, even to another allowed URL, is incomplete.
+This applies to static and command providers and `--url` (which has no allowlist).
+
+Declare positive minimums only for rules expected to inspect elements. Rules
+without a minimum may legitimately report zero. `page-horizontal-overflow` is a
+page-wide rule: positive `minimumInspected` is invalid. Local rules report their
+own count; vlint validates the report but cannot prove the plugin inspected that
+many DOM elements. Disabled rules do not count as inspected.
+
+```jsonc
+{
+  "devices": [
+    { "name": "desktop", "viewport": { "width": 1280, "height": 720 }, "screen": { "width": 1280, "height": 720 }, "deviceScaleFactor": 1, "isMobile": false, "hasTouch": false, "ruleMinimums": { "tabs": 2 } },
+    { "name": "phone", "viewport": { "width": 390, "height": 720 }, "screen": { "width": 390, "height": 720 }, "deviceScaleFactor": 1, "isMobile": true, "hasTouch": true }
+  ],
+  "rules": [{ "name": "tabs", "type": "tab-label-single-line", "minimumInspected": 1 }],
+  "provider": { "type": "static", "targets": [{
+    "name": "settings", "url": "http://localhost:3000/settings",
+    "allowedUrls": ["http://localhost:3000/settings/"],
+    "ruleOverrides": { "tabs": { "minimumInspected": 2 } },
+    "deviceRuleMinimums": { "phone": { "tabs": 3 } }
+  }] }
+}
+```
+
+Precedence is exact target/device combination, target rule override, device
+`ruleMinimums`, then rule `minimumInspected`. If target and device values
+disagree, the combination must be explicit or configuration fails. Unknown
+device/rule names and invalid counts also fail configuration. On `--url`,
+device and rule minimums still apply, but named target overrides do not.
+
+Migration from 0.7 to 0.8: replace `minimumLabels` and `minimumHeaders` at rule
+or target level with `minimumInspected`; replace `allowZeroLabels: false`
+and `allowZeroHeaders: false` with explicit positive minimums on the intended
+cases. Remove the old fields entirely: they are configuration errors now.
+The run-wide zero-count check is gone. A missing minimum can yield a clean
+result even when a case inspected zero elements.
 
 Line counts come from rendered DOM text geometry in each active viewport, not from
 the computed `white-space` value or decorative element boxes. The same header can be
@@ -347,10 +388,12 @@ solves CAPTCHAs.
 
 ## Output: terminal vs JSON
 
-`--format terminal` (default) prints a human-readable summary; untrusted text is
-sanitized (escape stripping, length caps, URL query/fragment redaction).
-`--format json` prints a structured object (see [Machine consumption](#machine-consumption-json)). JSON preserves configured URLs and rendered tab-label text exactly,
-so treat output from authenticated or untrusted pages as sensitive.
+`--format terminal` (default) prints a human-readable summary with control
+characters escaped. Both terminal and JSON print configured `target.url` and
+the per-case `actualUrl` unredacted, including query values and fragments.
+Before browser arrival, `actualUrl` is null (shown as `-` in terminal).
+A detected transition also records the offending URL on the failure.
+Do not put secrets in URLs: both formats and CI logs retain them.
 
 ---
 
@@ -358,9 +401,9 @@ so treat output from authenticated or untrusted pages as sensitive.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | All targets inspected, no violations (`clean`). |
+| `0` | Every enabled rule completed on its declared page and satisfied its declared minimum, with no layout violations (`clean`). |
 | `1` | All targets inspected with violations (`violations`), or invalid CLI usage. |
-| `2` | A valid command did not complete (config, browser, navigation, authentication, ready-condition, rule-evaluation, setup, or install failure). Observed violations are still included in JSON. |
+| `2` | Incomplete inspection: configuration, browser, URL mismatch, ready state, count, rule, or other execution failure. Observed layout violations may still be included. |
 
 A completed check with violations writes its normal result to stdout and exits `1`.
 
@@ -377,6 +420,7 @@ against. Violations live under each case, keyed by rule:
   "cases": [
     {
       "target": { "name": "settings", "url": "http://localhost:3000/settings" },
+      "actualUrl": "http://localhost:3000/settings",
       "device": { "name": "macbook-air-13-m5", "viewport": { /* … */ } },
       "status": "complete",
       "rules": [
@@ -441,6 +485,7 @@ guest; `bun run test:feasibility` runs the compiled-Playwright feasibility probe
 
 - Command Provider and local rule plugins run trusted code; even the Static Provider executes target page JavaScript. Inspect untrusted worktrees or pages in a **credential-free, disposable container**.
 - Browser state files are credentials, and JSON output may contain sensitive rendered content — keep them short-lived and do not persist output from authenticated pages.
+- Both configured and actual URLs, including query values and fragments, are logged in terminal and JSON. Never place secrets in target URLs.
 
 ---
 
@@ -449,3 +494,5 @@ guest; `bun run test:feasibility` runs the compiled-Playwright feasibility probe
 - **Ubuntu 24.04 x64 only.**
 - Inspects exactly the declared target set — no route discovery or full-site coverage.
 - No screenshot comparison, image understanding, pixel-diff, or click/input/scroll interaction.
+- A declared `readyCondition` is checked during each rule measurement. Detected URL changes and ready-state loss return `incomplete`. DOM mutation history is inspected without modifying the page; when a relevant change makes the intermediate ready state uncertain, the rule also returns `incomplete`. Even a harmless change to the ready element's attributes can therefore fail a rule. Between rules, the next measurement checks again. Without `readyCondition`, only navigation and font settling is assured, not application-specific readiness. Instantaneous CSS-only changes that leave no detectable DOM/URL trace cannot be guaranteed.
+- The caller still owns application startup, login, fixtures, route enumeration, and CI orchestration.

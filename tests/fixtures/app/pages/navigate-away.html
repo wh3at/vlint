@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>navigate away</title>
+</head>
+<body>
+  <p>this page navigates on its own while its ready condition stays unsatisfied</p>
+  <script>
+    const destination = new URLSearchParams(location.search).get("to");
+    setTimeout(() => {
+      if (destination === null) location.reload();
+      else location.href = destination;
+    }, 50);
+  </script>
+</body>
+</html>

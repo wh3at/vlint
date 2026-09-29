@@ -11,8 +11,6 @@ const RULE: EffectiveTableHeaderSingleLineRule = {
   additionalCandidateSelectors: [],
   excludeSelectors: [],
   lineTopTolerancePx: 1,
-  minimumHeaders: 0,
-  allowZeroHeaders: true,
 };
 
 let browser: Browser;
@@ -173,12 +171,11 @@ describe("table-header-single-line semantic measurement", () => {
     expect(exclusion.failure?.code).toBe("exclude-selector-invalid");
   });
 
-  test("enforces minimumHeaders after measurement", async () => {
+  test("reports header count for the per-case minimum contract", async () => {
     const outcome = await measure(
       `<table><thead><tr><th scope="col">Only</th></tr></thead></table>`,
-      { minimumHeaders: 2 },
     );
-    expect(outcome.failure?.code).toBe("minimum-headers-unmet");
+    expect(outcome.failure).toBeNull();
     expect(outcome.facts.elementsInspected).toBe(1);
   });
 

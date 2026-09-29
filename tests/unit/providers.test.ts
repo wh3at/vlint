@@ -15,8 +15,6 @@ const rules: readonly EffectiveRule[] = [
     additionalCandidateSelectors: [],
     excludeSelectors: [],
     labelSelector: null,
-    minimumLabels: 0,
-    allowZeroLabels: false,
   },
 ];
 const temporaryDirectories: string[] = [];

@@ -547,16 +547,5 @@ export async function evaluateTableHeaderSingleLine(
       ),
     };
   }
-  if (elementsInspected < rule.minimumHeaders) {
-    return {
-      facts,
-      failure: failure(
-        "minimum-headers-unmet",
-        `Inspected ${elementsInspected} header(s); minimum is ${rule.minimumHeaders}.`,
-        rule,
-        targetName,
-      ),
-    };
-  }
   return { facts, failure: null };
 }

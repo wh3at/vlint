@@ -152,7 +152,7 @@ devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
           type: "tab-label-single-line",
           additionalCandidateSelectors: [".tab"],
           excludeSelectors: [".global-exclude"],
-          minimumLabels: 2,
+          minimumInspected: 2,
         },
       ],
       provider: {
@@ -161,7 +161,7 @@ devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
           {
             name: "settings",
             url: "https://example.com/settings",
-            ruleOverrides: { tabs: { excludeSelectors: [".target-exclude"], minimumLabels: 3 } },
+            ruleOverrides: { tabs: { excludeSelectors: [".target-exclude"], minimumInspected: 3 } },
           },
         ],
       },
@@ -185,8 +185,7 @@ devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
         enabled: true,
         additionalCandidateSelectors: [".tab"],
         excludeSelectors: [".global-exclude", ".target-exclude"],
-        minimumLabels: 3,
-        allowZeroLabels: false,
+        minimumInspected: 3,
       });
     }
     expect(plan.cases[0]).toMatchObject({ deviceName: "desk", viewport: { width: 1470, height: 956 } });
@@ -384,13 +383,13 @@ devices: [DESKTOP_DEVICE],
         additionalCandidateSelectors: [],
         excludeSelectors: [],
         labelSelector: null,
-        minimumLabels: 0,
-        allowZeroLabels: false,
+        minimumInspected: null,
       },
       {
         name: "wide-page",
         type: "page-horizontal-overflow",
         enabled: true,
+        minimumInspected: null,
         tolerancePx: 4,
       },
       {
@@ -400,10 +399,9 @@ devices: [DESKTOP_DEVICE],
         additionalCandidateSelectors: [],
         excludeSelectors: [],
         lineTopTolerancePx: 1,
-        minimumHeaders: 0,
-        allowZeroHeaders: true,
+        minimumInspected: null,
       },
-      { name: "table-cell-text-overlap", type: "table-cell-text-overlap", enabled: true, excludeSelectors: [] },
+      { name: "table-cell-text-overlap", type: "table-cell-text-overlap", enabled: true, minimumInspected: null, excludeSelectors: [] },
     ]);
   });
 
@@ -698,8 +696,7 @@ devices: [DESKTOP_DEVICE],
       additionalCandidateSelectors: [],
       excludeSelectors: [],
       lineTopTolerancePx: 1,
-      minimumHeaders: 0,
-      allowZeroHeaders: true,
+      minimumInspected: null,
     });
   });
 
@@ -714,8 +711,7 @@ devices: [DESKTOP_DEVICE],
           additionalCandidateSelectors: ["[data-table-header]"],
           excludeSelectors: [".intentional-wrap"],
           lineTopTolerancePx: 2,
-          minimumHeaders: 1,
-          allowZeroHeaders: false,
+          minimumInspected: 1,
         },
       ],
     });
@@ -730,8 +726,7 @@ devices: [DESKTOP_DEVICE],
         additionalCandidateSelectors: ["[data-table-header]"],
         excludeSelectors: [".intentional-wrap"],
         lineTopTolerancePx: 2,
-        minimumHeaders: 1,
-        allowZeroHeaders: false,
+        minimumInspected: 1,
       },
       expect.objectContaining({ name: "page-horizontal-overflow" }),
       expect.objectContaining({ name: "table-cell-text-overlap" }),
@@ -760,7 +755,7 @@ devices: [DESKTOP_DEVICE],
       devices: [DESKTOP_DEVICE],
       rules: [
         { name: "primary-tables", type: "table-header-single-line" },
-        { name: "strict-tables", type: "table-header-single-line", allowZeroHeaders: false },
+        { name: "strict-tables", type: "table-header-single-line", minimumInspected: 1 },
       ],
     });
     expect(parsed.ok).toBe(true);
@@ -792,8 +787,7 @@ devices: [DESKTOP_DEVICE],
           name: "tables",
           type: "table-header-single-line",
           excludeSelectors: [".global-exclude"],
-          minimumHeaders: 1,
-          allowZeroHeaders: true,
+          minimumInspected: 1,
         },
       ],
       provider: {
@@ -802,7 +796,7 @@ devices: [DESKTOP_DEVICE],
           {
             name: "settings",
             url: "https://example.com/settings",
-            ruleOverrides: { tables: { excludeSelectors: [".target-exclude"], minimumHeaders: 3 } },
+            ruleOverrides: { tables: { excludeSelectors: [".target-exclude"], minimumInspected: 3 } },
           },
           { name: "plain", url: "https://example.com/plain" },
         ],
@@ -816,15 +810,13 @@ devices: [DESKTOP_DEVICE],
         expect(c.rules.find((rule) => rule.name === "tables")).toMatchObject({
           enabled: true,
           excludeSelectors: [".global-exclude", ".target-exclude"],
-          minimumHeaders: 3,
-          allowZeroHeaders: true,
+          minimumInspected: 3,
         });
       } else {
         expect(c.rules.find((rule) => rule.name === "tables")).toMatchObject({
           enabled: true,
           excludeSelectors: [".global-exclude"],
-          minimumHeaders: 1,
-          allowZeroHeaders: true,
+          minimumInspected: 1,
         });
       }
     }

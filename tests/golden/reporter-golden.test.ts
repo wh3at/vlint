@@ -4,29 +4,6 @@ import { isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
 import { renderJson } from "../../src/output/json";
 import { renderTerminal } from "../../src/output/terminal";
 
-/**
- * Golden reporter coverage (U4). The two canonical results below carry
- * adversarial content — OSC/hyperlink escapes and bidi overrides in names,
- * query-string secrets (including a repeated key) and a fragment in the URL,
- * CRLF/tab/bidi in violation text, a newline in a locator, and fractional
- * geometry — so that the golden fixtures lock the exact rendered bytes for
- * both output formats.
- *
- * The violations result exercises AE5: 2 logical targets × 2 devices = 4
- * ordered cases in target-major / device-minor order. The incomplete result
- * exercises AE6: one case fails while another completes in the same run.
- *
- * The assertions below guard the reporter contract:
- *
- *   - exact byte stability against the committed golden fixtures (regression lock)
- *   - render determinism (idempotent re-render)
- *   - exactly one trailing newline; JSON is a single line
- *   - JSON preserves the exact configured URL and rendered text verbatim
- *   - terminal redacts every query value, drops the fragment, and escapes
- *     every C0/C1 control and bidi formatting character to an inert literal
- *   - target and device identities are rendered as separate escaped fields
- *   - summary partitions reconcile with the underlying cases and rules
- */
 
 const MACBOOK = {
   name: "MacBook Air 13",
@@ -333,19 +310,14 @@ describe("reporter golden output", () => {
     expect(parsed.status).toBe("violations");
   });
 
-  test("terminal redacts every query value, drops the fragment, and escapes controls", () => {
+  test("terminal retains URL query and hash while escaping controls", () => {
     const rendered = renderTerminal(violations);
     expect(rendered.endsWith("\n")).toBe(true);
     expect(rendered.endsWith("\n\n")).toBe(false);
-    expect(rendered).not.toContain("token=secret");
-    expect(rendered).not.toContain("token=second");
-    expect(rendered).not.toContain("#private");
+    expect(rendered).toContain("token=secret&token=second#private");
     expect(hasRawControlOrBidi(rendered)).toBe(false);
     expect(rendered).toContain("\\u{1b}");
     expect(rendered).toContain("\\u{202e}");
-    expect(rendered).toContain("redacted");
-    // Each target URL appears in 2 cases (MacBook + iPhone), so 4 query values × 2 = 8.
-    expect(rendered.match(/redacted/g)).toHaveLength(8);
   });
 
   test("terminal renders target and device as separate escaped fields", () => {
@@ -357,8 +329,8 @@ describe("reporter golden output", () => {
 
   test("terminal preserves the URL and case failure in the incomplete matrix", () => {
     const rendered = renderTerminal(incomplete);
-    expect(rendered).toContain("case target=only device=MacBook Air 13: failed https://example.com/only viewport=1470x956@2");
-    expect(rendered).toContain("case target=only device=iPhone 17: complete https://example.com/only viewport=402x681@3");
+    expect(rendered).toContain("case target=only device=MacBook Air 13: failed url=https://example.com/only actualUrl=- viewport=1470x956@2");
+    expect(rendered).toContain("case target=only device=iPhone 17: complete url=https://example.com/only actualUrl=- viewport=402x681@3");
     expect(rendered).toContain("failure navigation/navigation-http-status target=only device=MacBook Air 13 rule=-");
     expect(hasRawControlOrBidi(rendered)).toBe(false);
   });

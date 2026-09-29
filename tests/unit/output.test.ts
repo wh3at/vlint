@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { RunResult } from "../../src/contracts/result";
 import { isLocalViolation, isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
 import { renderJson } from "../../src/output/json";
-import { escapeTerminal, redactUrlForTerminal, renderTerminal } from "../../src/output/terminal";
+import { escapeTerminal, renderTerminal } from "../../src/output/terminal";
 
 const result: RunResult = {
   status: "violations",
@@ -77,21 +77,16 @@ describe("output", () => {
     );
   });
 
-  test("redacts userinfo and every query value, and removes the fragment", () => {
-    const safe = redactUrlForTerminal("https://user:password@example.com/x?a=secret&a=second&b=third#fragment");
-    expect(safe).not.toContain("user");
-    expect(safe).not.toContain("password");
-    expect(safe).not.toContain("secret");
-    expect(safe).not.toContain("second");
-    expect(safe).not.toContain("third");
-    expect(safe).not.toContain("fragment");
-    expect(safe.match(/redacted/g)).toHaveLength(3);
+  test("prints URL query and hash unchanged while escaping controls", () => {
+    const safe = escapeTerminal("https://example.com/x?a=secret&a=second#fragment\n");
+    expect(safe).toContain("a=secret&a=second#fragment");
+    expect(safe).toContain("\\n");
   });
 
   test("renders diagnostics only through the inert terminal view", () => {
     const output = renderTerminal(result);
-    expect(output).not.toContain("secret");
-    expect(output).not.toContain("second#private");
+    expect(output).toContain("secret");
+    expect(output).toContain("second#private");
     expect(output).not.toContain("\u001b");
     expect(output).toContain("\\u{1b}");
     expect(output).toContain("first\\r\\nsecond\\u{202e}");
@@ -165,15 +160,15 @@ describe("output", () => {
         name: "tabs",
         status: "failed",
         elementsInspected: 0,
-        failure: { ...failure, code: "zero-labels-global", message: "no labels" },
+        failure: { ...failure, code: "minimum-inspected-unmet", message: "too few labels" },
       }],
     };
 
     const output = renderTerminal(failed);
     expect(output).toContain("rule-evaluation/rule-script-failed");
-    expect(output).toContain("rule-evaluation/zero-labels-global");
+    expect(output).toContain("rule-evaluation/minimum-inspected-unmet");
     expect(output).toContain("selector failed");
-    expect(output).toContain("no labels");
+    expect(output).toContain("too few labels");
   });
 
   test("renders local violations without interpreting project details", () => {

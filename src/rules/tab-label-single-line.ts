@@ -607,13 +607,6 @@ export async function evaluateTabLabelSingleLine(
     });
   }
 
-  if (elementsInspected < rule.minimumLabels) {
-    return finalize(rule, targetName, elementsInspected, violations, pending, page, {
-      code: "minimum-labels-unmet",
-      message: `Inspected ${elementsInspected} label(s); minimum is ${rule.minimumLabels}.`,
-    });
-  }
-
   return finalize(rule, targetName, elementsInspected, violations, pending, page, null);
 }
 

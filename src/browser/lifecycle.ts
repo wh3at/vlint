@@ -1,11 +1,12 @@
 import { open, stat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
-import type { Browser, BrowserContext, BrowserContextOptions, Page } from "playwright";
+import type { Browser, BrowserContext, BrowserContextOptions, Frame, Page } from "playwright";
 import { chromium } from "playwright";
 import type { EffectiveAuditCase, ReadyState, Viewport } from "../contracts/config";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../contracts/failure";
 import { resolveManagedExecutableForCheck, type VersionProbe } from "./install";
+import { allowedArrival, sameUrl } from "./measurement";
 import {
   createDeadline,
   interruptFailure,
@@ -88,6 +89,7 @@ export interface BrowserState {
 /** Owns one Page and its BrowserContext for a single target. */
 export interface BrowserTargetScope {
   readonly page: Page;
+  readonly actualUrl?: string;
   close(): Promise<BoundaryResult<void>>;
 }
 
@@ -128,6 +130,7 @@ interface AcquisitionRequest extends DeviceContextSource {
   readonly name: string;
   readonly deviceName: string | null;
   readonly url: string;
+  readonly allowedUrls?: readonly string[] | undefined;
   readonly timeoutMs: number;
   readonly browserState: string | null;
   readonly readyCondition: {
@@ -168,6 +171,17 @@ async function settleClose(task: Promise<unknown>, timeoutMs: number): Promise<b
   } catch {
     return false;
   }
+}
+
+type NavigationRace<T> =
+  | { readonly navigated: true }
+  | { readonly navigated: false; readonly result: T };
+
+async function raceNavigation<T>(wait: Promise<T>, navigated: Promise<void>): Promise<NavigationRace<T>> {
+  return Promise.race([
+    wait.then((result): NavigationRace<T> => ({ navigated: false, result })),
+    navigated.then((): NavigationRace<T> => ({ navigated: true })),
+  ]);
 }
 
 async function defaultLaunch(executablePath: string, timeoutMs: number): Promise<Browser> {
@@ -353,9 +367,14 @@ export async function navigateToTarget(
   url: string,
   deadline: Deadline,
   signal: AbortSignal | undefined = undefined,
-): Promise<BoundaryResult<void>> {
+): Promise<BoundaryResult<{ responseUrl: string; committedUrl: string | null }>> {
   if (signalAborted(signal)) return boundaryFailure(interruptFailure());
   const timeout = deadline.remainingMs();
+  let committedUrl: string | null = null;
+  const onNavigation = (frame: Frame): void => {
+    if (frame === page.mainFrame() && committedUrl === null) committedUrl = frame.url();
+  };
+  page.on("framenavigated", onNavigation);
   try {
     const response = await raceAbort(signal, page.goto(url, { waitUntil: "domcontentloaded", timeout }));
     if (response === null) {
@@ -365,13 +384,15 @@ export async function navigateToTarget(
     if (status < 200 || status > 399) {
       return boundaryFailure(navFailure("navigation-http-status", "main response status is outside the accepted 200..399 range"));
     }
-    return boundarySuccess(undefined);
+    return boundarySuccess({ responseUrl: response.url(), committedUrl });
   } catch (error) {
     if (isAbortError(error)) return boundaryFailure(interruptFailure());
     if (isTimeoutError(error)) {
       return boundaryFailure(navFailure("navigation-timeout", "navigation did not complete within the target deadline"));
     }
     return boundaryFailure(navFailure("navigation-network", "navigation failed at the network layer"));
+  } finally {
+    page.off("framenavigated", onNavigation);
   }
 }
 
@@ -455,31 +476,68 @@ async function acquireScope(
 
   const nav = await navigateToTarget(page, request.url, deadline, signal);
   if (!nav.ok) {
+    const actualUrl = page.url();
     await closeTargetQuiet(page, context);
-    return boundaryFailure(stampIdentity(request.name, request.deviceName, nav.failure));
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, actualUrl === "about:blank" ? nav.failure : { ...nav.failure, actualUrl }));
   }
 
+  const responseUrl = new URL(nav.value.responseUrl);
+  responseUrl.hash = "";
+  const allowedResponse = [request.url, ...(request.allowedUrls ?? [])].some((url) => {
+    const allowed = new URL(url);
+    allowed.hash = "";
+    return sameUrl(allowed.href, responseUrl.href);
+  });
+  const committedUrl = nav.value.committedUrl;
+  const unexpectedUrl = !allowedResponse ? committedUrl ?? nav.value.responseUrl
+    : committedUrl !== null && !allowedArrival(request, committedUrl) ? committedUrl : null;
+  if (unexpectedUrl !== null) {
+    await closeTargetQuiet(page, context);
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, { ...navFailure("url-mismatch", "page arrived at an undeclared URL"), actualUrl: unexpectedUrl }));
+  }
+  const arrived = page.url();
+  if (!allowedArrival(request, arrived)) {
+    await closeTargetQuiet(page, context);
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, { ...navFailure("url-mismatch", "page arrived at an undeclared URL"), actualUrl: arrived }));
+  }
+  let movedUrl: string | null = null;
+  const { promise: navigated, resolve: resolveNavigated } = Promise.withResolvers<void>();
+  const onNavigation = (frame: Frame): void => {
+    if (frame !== page.mainFrame()) return;
+    if (movedUrl === null) movedUrl = page.url();
+    resolveNavigated();
+  };
+  page.on("framenavigated", onNavigation);
+  const failAfterArrival = async (reason: Failure): Promise<BoundaryResult<BrowserTargetScope>> => {
+    page.off("framenavigated", onNavigation);
+    const failure = movedUrl === null
+      ? { ...reason, actualUrl: arrived }
+      : { ...navFailure(sameUrl(movedUrl, arrived) ? "navigation-during-measurement" : "url-mismatch", "page navigated during acquisition"), actualUrl: movedUrl };
+    await closeTargetQuiet(page, context);
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, failure));
+  };
+  const failOnNavigation = (): Promise<BoundaryResult<BrowserTargetScope>> =>
+    failAfterArrival(navFailure("navigation-during-measurement", "page navigated during acquisition"));
   if (request.readyCondition !== null) {
-    const ready = await waitForReadyCondition(
-      page,
-      request.readyCondition.selector,
-      request.readyCondition.state,
-      deadline,
-      signal,
+    const ready = await raceNavigation(
+      waitForReadyCondition(page, request.readyCondition.selector, request.readyCondition.state, deadline, signal),
+      navigated,
     );
-    if (!ready.ok) {
-      await closeTargetQuiet(page, context);
-      return boundaryFailure(stampIdentity(request.name, request.deviceName, ready.failure));
-    }
+    if (ready.navigated) return failOnNavigation();
+    if (!ready.result.ok) return failAfterArrival(ready.result.failure);
   }
 
-  const fonts = await waitForFonts(page, deadline, signal);
-  if (!fonts.ok) {
+  const fonts = await raceNavigation(waitForFonts(page, deadline, signal), navigated);
+  if (fonts.navigated) return failOnNavigation();
+  if (!fonts.result.ok) return failAfterArrival(fonts.result.failure);
+
+  page.off("framenavigated", onNavigation);
+  if (movedUrl !== null || !sameUrl(page.url(), arrived)) {
+    const actualUrl = movedUrl ?? page.url();
     await closeTargetQuiet(page, context);
-    return boundaryFailure(stampIdentity(request.name, request.deviceName, fonts.failure));
+    return boundaryFailure(stampIdentity(request.name, request.deviceName, { ...navFailure(sameUrl(actualUrl, arrived) ? "navigation-during-measurement" : "url-mismatch", "page navigated during acquisition"), actualUrl }));
   }
-
-  return boundarySuccess(makeTargetScope(page, context, request.name, request.deviceName));
+  return boundarySuccess({ ...makeTargetScope(page, context, request.name, request.deviceName), actualUrl: arrived });
 }
 
 /** Device-aware acquisition from a resolved audit case (the scheduler's input). */
@@ -494,6 +552,7 @@ async function acquireCaseScope(
       name: auditCase.name,
       deviceName: auditCase.deviceName,
       url: auditCase.url,
+      allowedUrls: auditCase.allowedUrls,
       viewport: auditCase.viewport,
       screen: auditCase.screen,
       deviceScaleFactor: auditCase.deviceScaleFactor,

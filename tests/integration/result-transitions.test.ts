@@ -17,7 +17,7 @@ import {
 
 /** Result-transition matrix for the case-based schema v2 orchestrator. */
 
-function rule(name: string, allowZeroLabels = false): EffectiveRule {
+function rule(name: string): EffectiveRule {
   return {
     name,
     type: "tab-label-single-line",
@@ -25,8 +25,6 @@ function rule(name: string, allowZeroLabels = false): EffectiveRule {
     additionalCandidateSelectors: [],
     excludeSelectors: [],
     labelSelector: null,
-    minimumLabels: 0,
-    allowZeroLabels,
   };
 }
 
@@ -305,7 +303,7 @@ describe("result-transition matrix reconciles and maps exit codes", () => {
     expect(evaluations).toBe(2);
   });
 
-  test("first zero-label finalization fails in declaration order; later finalizations not-executed", async () => {
+  test("undeclared zero coverage passes per case and finalization", async () => {
     const rules = [rule("empty-first"), rule("empty-later")];
     const resolved = plan(["a"], rules);
     const result = await run(resolved, {
@@ -313,8 +311,8 @@ describe("result-transition matrix reconciles and maps exit codes", () => {
     });
     reconcile(result, resolved);
     expect(result.cases[0]?.status).toBe("complete");
-    expect(result.ruleFinalizations.map((item) => item.status)).toEqual(["failed", "not-executed"]);
-    expect(allFailures(result)).toContainEqual(expect.objectContaining({ code: "zero-labels-global", rule: "empty-first" }));
+    expect(result.ruleFinalizations.map((item) => item.status)).toEqual(["passed", "passed"]);
+    expect(result.status).toBe("clean");
   });
 
   test("browser launch failure preserves the seeded matrix at not-executed", async () => {
@@ -722,5 +720,30 @@ describe("bounded collect-all orchestration", () => {
     expect(result.cases.map((item) => item.status)).toEqual(["not-executed", "not-executed"]);
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0]?.code).toBe("signal-interrupt");
+  });
+
+  test("an acquisition interrupt after arrival keeps the observed case URL", async () => {
+    const resolved = plan(["interrupted"], [rule("tabs")]);
+    const observed = "https://example.com/interrupted?token=observed#fragment";
+    const result = await run(resolved, {
+      openFailure: {
+        interrupted: {
+          stage: "interrupt",
+          code: "signal-interrupt",
+          message: "operation cancelled",
+          target: null,
+          device: null,
+          rule: null,
+          actualUrl: observed,
+        },
+      },
+    });
+    reconcile(result, resolved);
+    expect(result.cases[0]?.status).toBe("failed");
+    expect(result.cases[0]?.actualUrl).toBe(observed);
+    expect(result.cases[0]?.failures).toHaveLength(0);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]?.code).toBe("signal-interrupt");
+    expect(exitCodeForResult(result)).toBe(2);
   });
 });
