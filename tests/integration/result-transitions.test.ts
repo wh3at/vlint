@@ -721,4 +721,29 @@ describe("bounded collect-all orchestration", () => {
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0]?.code).toBe("signal-interrupt");
   });
+
+  test("an acquisition interrupt after arrival keeps the observed case URL", async () => {
+    const resolved = plan(["interrupted"], [rule("tabs")]);
+    const observed = "https://example.com/interrupted?token=observed#fragment";
+    const result = await run(resolved, {
+      openFailure: {
+        interrupted: {
+          stage: "interrupt",
+          code: "signal-interrupt",
+          message: "operation cancelled",
+          target: null,
+          device: null,
+          rule: null,
+          actualUrl: observed,
+        },
+      },
+    });
+    reconcile(result, resolved);
+    expect(result.cases[0]?.status).toBe("failed");
+    expect(result.cases[0]?.actualUrl).toBe(observed);
+    expect(result.cases[0]?.failures).toHaveLength(0);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]?.code).toBe("signal-interrupt");
+    expect(exitCodeForResult(result)).toBe(2);
+  });
 });

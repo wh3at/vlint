@@ -327,13 +327,13 @@ export async function runResolvedCheck<PageHandle>(
         );
       }
       if (!opened.ok) {
+        caseResult.actualUrl = opened.failure.actualUrl ?? null;
         if (opened.failure.code === "signal-interrupt") {
           recordInterrupt();
           caseResult.status = "failed";
         } else {
           caseResult.status = "failed";
           caseResult.failures.push(scopeFailure(opened.failure, auditCase.name, auditCase.deviceName, null));
-          caseResult.actualUrl = opened.failure.actualUrl ?? null;
         }
         return;
       }

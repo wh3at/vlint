@@ -167,6 +167,55 @@ test("live browser counts below a per-case minimum produce incomplete exit 2", a
   expect(result.cases[0]?.actualUrl).toBe(`${server.url}/`);
 });
 
+test("an interrupt after browser arrival reports the observed URL and one run-level signal", async () => {
+  const { promise: arrived, resolve: resolveArrived } = Promise.withResolvers<void>();
+  const arrivalServer = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      if (new URL(request.url).pathname === "/arrived") {
+        resolveArrived();
+        return new Response("ok");
+      }
+      return new Response(
+        "<!doctype html><html><body><p>no ready element</p><script>addEventListener('load', () => fetch('/arrived'))</script></body></html>",
+        { headers: { "content-type": "text/html; charset=utf-8" } },
+      );
+    },
+  });
+  const arrivalPort = arrivalServer.port;
+  if (arrivalPort === undefined) throw new Error("arrival fixture server did not bind a port");
+  const url = `http://127.0.0.1:${arrivalPort}/never-ready`;
+  const audit = { ...auditCase(url, { ready: "#never" }), timeoutMs: 10_000 };
+  const controller = new AbortController();
+  try {
+    const runP = runResolvedCheck(
+      { targets: [audit], cases: [audit], rules: audit.rules },
+      {
+        launch: async () => boundarySuccess({
+          browserVersion: browser.browserVersion,
+          openCase: async (item, signal) => browser.acquireCase(item, signal),
+          close: async () => boundarySuccess(undefined),
+        }),
+        evaluate: async (page) => measureRule(page, audit, page.url(), (guarded) => evaluatePageHorizontalOverflow(guarded, rule, audit.name)),
+      },
+      { toolVersion: "test", signal: controller.signal },
+    );
+    await arrived;
+    controller.abort();
+    const result = await runP;
+    expect(result.cases[0]?.actualUrl).toBe(url);
+    expect(result.cases[0]?.status).toBe("failed");
+    expect(result.cases[0]?.failures).toHaveLength(0);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]?.code).toBe("signal-interrupt");
+    expect(exitCodeForResult(result)).toBe(2);
+  } finally {
+    controller.abort();
+    await arrivalServer.stop(true);
+  }
+});
+
 test("built-in and local evaluators use the guarded browser boundary", async () => {
   const audit = auditCase(`${server.url}/tabs.html`);
   const opened = await browser.acquireCase(audit);
