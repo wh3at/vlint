@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { BrowserContext, Page } from "playwright";
+import type { BrowserContext, Frame, Page, Request } from "playwright";
 import type { EffectiveAuditCase, ReadyState } from "../contracts/config";
 import type { RuleEvaluationOutcome } from "../contracts/evaluation";
 import type { Failure } from "../contracts/failure";
@@ -722,6 +722,31 @@ export function sameUrl(left: string, right: string): boolean {
   return new URL(left).href === new URL(right).href;
 }
 
+export function observeMainFrameNavigation(
+  page: Page,
+  fixedUrl: string,
+  onNavigation: (url: string) => void,
+): { stop(): void; hasDocumentNavigation(): boolean } {
+  let documentNavigation = false;
+  const onRequest = (request: Request): void => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) documentNavigation = true;
+  };
+  const onFrameNavigated = (frame: Frame): void => {
+    if (frame !== page.mainFrame()) return;
+    const url = frame.url();
+    if (documentNavigation || !sameUrl(url, fixedUrl)) onNavigation(url);
+  };
+  page.on("request", onRequest);
+  page.on("framenavigated", onFrameNavigated);
+  return {
+    hasDocumentNavigation: () => documentNavigation,
+    stop: () => {
+      page.off("request", onRequest);
+      page.off("framenavigated", onFrameNavigated);
+    },
+  };
+}
+
 export function allowedArrival(auditCase: Pick<EffectiveAuditCase, "url" | "allowedUrls">, url: string): boolean {
   return [auditCase.url, ...(auditCase.allowedUrls ?? [])].some((allowed) => sameUrl(allowed, url));
 }
@@ -750,10 +775,9 @@ export async function measureRule(
       if (detected === null) detected = { value: null, invalid: !sameUrl(page.url(), fixedUrl) ? "url-mismatch" : guard.readyCondition === null ? "navigation-during-measurement" : "ready-lost", url: page.url() };
     }
   };
-  const onNavigation = (frame: import("playwright").Frame): void => {
-    if (detected === null && frame === page.mainFrame()) detected = { value: null, invalid: sameUrl(frame.url(), fixedUrl) ? "navigation-during-measurement" : "url-mismatch", url: frame.url() };
-  };
-  page.on("framenavigated", onNavigation);
+  const navigation = observeMainFrameNavigation(page, fixedUrl, (url) => {
+    if (detected === null) detected = { value: null, invalid: sameUrl(url, fixedUrl) ? "navigation-during-measurement" : "url-mismatch", url };
+  });
   try {
     await check("start");
     const guarded = new Proxy(page, {
@@ -796,6 +820,6 @@ export async function measureRule(
     };
     return { facts: { elementsInspected: 0, violations: [] }, failure };
   } finally {
-    page.off("framenavigated", onNavigation);
+    navigation.stop();
   }
 }
