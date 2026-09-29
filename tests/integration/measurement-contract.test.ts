@@ -223,6 +223,53 @@ test("a loading page without its ready condition stays incomplete with its obser
   }
 });
 
+test("a cross-URL navigation while the ready wait is pending fails with url-mismatch before the deadline", async () => {
+  const url = `${server.url}/navigate-away.html?to=%2Ftabs.html`;
+  const audit = { ...auditCase(url, { ready: "#never" }), timeoutMs: 10_000 };
+  const start = Date.now();
+  const opened = await browser.acquireCase(audit);
+  const elapsed = Date.now() - start;
+  expect(opened.ok).toBe(false);
+  if (!opened.ok) {
+    expect(opened.failure.code).toBe("url-mismatch");
+    expect(opened.failure.actualUrl).toBe(`${server.url}/tabs.html`);
+    expect(opened.failure.target).toBe("page");
+    expect(opened.failure.device).toBe("desktop");
+  }
+  expect(elapsed).toBeLessThan(5000);
+  const next = await browser.acquireCase(auditCase(`${server.url}/index.html`));
+  expect(next.ok).toBe(true);
+  if (next.ok) await next.value.close();
+});
+
+test("a same-URL navigation while the ready wait is pending fails with navigation-during-measurement before the deadline", async () => {
+  const url = `${server.url}/navigate-away.html`;
+  const audit = { ...auditCase(url, { ready: "#never" }), timeoutMs: 10_000 };
+  const start = Date.now();
+  const opened = await browser.acquireCase(audit);
+  const elapsed = Date.now() - start;
+  expect(opened.ok).toBe(false);
+  if (!opened.ok) {
+    expect(opened.failure.code).toBe("navigation-during-measurement");
+    expect(opened.failure.actualUrl).toBe(url);
+  }
+  expect(elapsed).toBeLessThan(5000);
+});
+
+test("a navigation while the font wait is pending fails before the deadline", async () => {
+  const url = `${server.url}/navigate-during-fonts.html`;
+  const audit = { ...auditCase(url, { ready: "#ready" }), timeoutMs: 10_000 };
+  const start = Date.now();
+  const opened = await browser.acquireCase(audit);
+  const elapsed = Date.now() - start;
+  expect(opened.ok).toBe(false);
+  if (!opened.ok) {
+    expect(opened.failure.code).toBe("navigation-during-measurement");
+    expect(opened.failure.actualUrl).toBe(url);
+  }
+  expect(elapsed).toBeLessThan(5000);
+});
+
 test("HTTP errors retain the observed browser URL", async () => {
   const url = `${server.url}/status?code=500`;
   const opened = await browser.acquireCase(auditCase(url));

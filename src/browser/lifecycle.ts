@@ -1,7 +1,7 @@
 import { open, stat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
-import type { Browser, BrowserContext, BrowserContextOptions, Page } from "playwright";
+import type { Browser, BrowserContext, BrowserContextOptions, Frame, Page } from "playwright";
 import { chromium } from "playwright";
 import type { EffectiveAuditCase, ReadyState, Viewport } from "../contracts/config";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../contracts/failure";
@@ -171,6 +171,17 @@ async function settleClose(task: Promise<unknown>, timeoutMs: number): Promise<b
   } catch {
     return false;
   }
+}
+
+type NavigationRace<T> =
+  | { readonly navigated: true }
+  | { readonly navigated: false; readonly result: T };
+
+async function raceNavigation<T>(wait: Promise<T>, navigated: Promise<void>): Promise<NavigationRace<T>> {
+  return Promise.race([
+    wait.then((result): NavigationRace<T> => ({ navigated: false, result })),
+    navigated.then((): NavigationRace<T> => ({ navigated: true })),
+  ]);
 }
 
 async function defaultLaunch(executablePath: string, timeoutMs: number): Promise<Browser> {
@@ -469,27 +480,35 @@ async function acquireScope(
     return boundaryFailure(stampIdentity(request.name, request.deviceName, { ...navFailure("url-mismatch", "page arrived at an undeclared URL"), actualUrl: arrived }));
   }
   let movedUrl: string | null = null;
-  const onNavigation = (frame: import("playwright").Frame): void => { if (frame === page.mainFrame() && movedUrl === null) movedUrl = page.url(); };
+  const { promise: navigated, resolve: resolveNavigated } = Promise.withResolvers<void>();
+  const onNavigation = (frame: Frame): void => {
+    if (frame !== page.mainFrame()) return;
+    if (movedUrl === null) movedUrl = page.url();
+    resolveNavigated();
+  };
   page.on("framenavigated", onNavigation);
   const failAfterArrival = async (reason: Failure): Promise<BoundaryResult<BrowserTargetScope>> => {
     page.off("framenavigated", onNavigation);
-    const failure = movedUrl === null ? { ...reason, actualUrl: arrived } : { ...navFailure("navigation-during-measurement", "page navigated during acquisition"), actualUrl: movedUrl };
+    const failure = movedUrl === null
+      ? { ...reason, actualUrl: arrived }
+      : { ...navFailure(sameUrl(movedUrl, arrived) ? "navigation-during-measurement" : "url-mismatch", "page navigated during acquisition"), actualUrl: movedUrl };
     await closeTargetQuiet(page, context);
     return boundaryFailure(stampIdentity(request.name, request.deviceName, failure));
   };
+  const failOnNavigation = (): Promise<BoundaryResult<BrowserTargetScope>> =>
+    failAfterArrival(navFailure("navigation-during-measurement", "page navigated during acquisition"));
   if (request.readyCondition !== null) {
-    const ready = await waitForReadyCondition(
-      page,
-      request.readyCondition.selector,
-      request.readyCondition.state,
-      deadline,
-      signal,
+    const ready = await raceNavigation(
+      waitForReadyCondition(page, request.readyCondition.selector, request.readyCondition.state, deadline, signal),
+      navigated,
     );
-    if (!ready.ok) return failAfterArrival(ready.failure);
+    if (ready.navigated) return failOnNavigation();
+    if (!ready.result.ok) return failAfterArrival(ready.result.failure);
   }
 
-  const fonts = await waitForFonts(page, deadline, signal);
-  if (!fonts.ok) return failAfterArrival(fonts.failure);
+  const fonts = await raceNavigation(waitForFonts(page, deadline, signal), navigated);
+  if (fonts.navigated) return failOnNavigation();
+  if (!fonts.result.ok) return failAfterArrival(fonts.result.failure);
 
   page.off("framenavigated", onNavigation);
   if (movedUrl !== null || !sameUrl(page.url(), arrived)) {
