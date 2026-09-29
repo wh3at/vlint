@@ -13,6 +13,7 @@ import { startFixtureServer, type FixtureServer } from "../fixtures/app/server";
 
 let server: FixtureServer;
 let browser: BrowserRunScope;
+let pages: PageServer;
 
 const rule: EffectiveRule = { name: "coverage", type: "page-horizontal-overflow", enabled: true, tolerancePx: 1 };
 
@@ -27,8 +28,37 @@ function auditCase(url: string, options: { allowedUrls?: readonly string[]; read
   };
 }
 
+interface PageServer {
+  readonly url: string;
+  close(): Promise<void>;
+}
+
+const PAGE_DOCUMENTS: Record<string, string> = {
+  "/inputs.html": "<!doctype html><html><body><input id=\"save\" type=\"submit\" value=\"Save\"></body></html>",
+  "/multi-ready.html": "<!doctype html><html><body><main class=\"ready\">one</main><main class=\"ready\">two</main></body></html>",
+  "/attribute-ready.html": "<!doctype html><html><body><main id=\"ready\" data-ready>public content</main></body></html>",
+  "/visibility.html": "<!doctype html><html><head><style>.hiding{display:none}</style></head><body><main id=\"ready\">public content</main></body></html>",
+  "/hidden-override.html": "<!doctype html><html><head><style>[hidden]{display:block !important}</style></head><body><main id=\"ready\">public content</main></body></html>",
+};
+
+function startPageServer(): PageServer {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const document = PAGE_DOCUMENTS[new URL(request.url).pathname];
+      if (document === undefined) return new Response("not found", { status: 404 });
+      return new Response(document, { headers: { "content-type": "text/html; charset=utf-8" } });
+    },
+  });
+  const port = server.port;
+  if (port === undefined) throw new Error("page server did not bind a port");
+  return { url: `http://${server.hostname}:${port}`, close: () => server.stop(true) };
+}
+
 beforeAll(async () => {
   server = startFixtureServer();
+  pages = startPageServer();
   const version = findManagedBrowser().browserVersion;
   const launched = await createBrowserRunScope({ versionProbe: () => ({ exitCode: 0, timedOut: false, stdout: `Google Chrome for Testing ${version}` }) });
   if (!launched.ok) throw new Error(launched.failure.code);
@@ -37,6 +67,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await browser.close();
+  await pages.close();
   await server.close();
 });
 
@@ -805,5 +836,246 @@ test("a newly visible Playwright text match invalidates hidden readiness", async
     }), violations: [] }, failure: null,
   }));
   expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a ready text selector satisfied by a submit input value stays ready", async () => {
+  const audit = auditCase(`${pages.url}/inputs.html`, { ready: "text=Save" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => 1), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("losing a submit input value fails an input-value ready selector", async () => {
+  const audit = auditCase(`${pages.url}/inputs.html`, { ready: "text=Save" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      (globalThis as any).document.querySelector("#save").value = "Discard";
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a newly matching submit input value invalidates hidden readiness", async () => {
+  const audit = { ...auditCase(`${pages.url}/inputs.html`), readyCondition: { selector: "text=Discard", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      (globalThis as any).document.querySelector("#save").value = "Discard";
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test.each(["visible", "attached"])("an atomic ready replacement keeps %s readiness", async (state) => {
+  const audit = { ...auditCase(`${server.url}/`), readyCondition: { selector: "#ready", state: state as "visible" | "attached" } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const doc = (globalThis as any).document;
+      const replacement = doc.createElement("main");
+      replacement.id = "ready";
+      replacement.textContent = "public content";
+      doc.querySelector("#ready").replaceWith(replacement);
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("removing and restoring every ready match fails multi-match readiness", async () => {
+  const audit = auditCase(`${pages.url}/multi-ready.html`, { ready: ".ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const doc = (globalThis as any).document;
+      const nodes = Array.from(doc.querySelectorAll(".ready")) as any[];
+      for (const node of nodes) node.remove();
+      for (const node of nodes) doc.body.append(node);
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a continuously remaining ready match keeps multi-match readiness", async () => {
+  const audit = auditCase(`${pages.url}/multi-ready.html`, { ready: ".ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const doc = (globalThis as any).document;
+      doc.querySelector(".ready")!.remove();
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("overlapping replacements of ready matches keep readiness", async () => {
+  const audit = auditCase(`${pages.url}/multi-ready.html`, { ready: ".ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const doc = (globalThis as any).document;
+      for (const node of Array.from(doc.querySelectorAll(".ready")) as any[]) {
+        const replacement = doc.createElement("main");
+        replacement.className = "ready";
+        replacement.textContent = "ready";
+        node.replaceWith(replacement);
+      }
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test.each([
+  ["[data-ready]"],
+  ["main[data-ready]"],
+  ["body > [data-ready]"],
+])("removing and restoring a matching attribute fails %s readiness", async (ready) => {
+  const audit = auditCase(`${pages.url}/attribute-ready.html`, { ready });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const readyElement = (globalThis as any).document.querySelector("#ready");
+      readyElement.removeAttribute("data-ready");
+      readyElement.setAttribute("data-ready", "");
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("an unrelated attribute change keeps an attribute ready selector ready", async () => {
+  const audit = auditCase(`${pages.url}/attribute-ready.html`, { ready: "[data-ready]" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const readyElement = (globalThis as any).document.querySelector("#ready");
+      readyElement.dataset.tick = "1";
+      readyElement.dataset.tick = "2";
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("a same-task hidden attribute toggle on the ready element fails visible readiness", async () => {
+  const audit = auditCase(`${server.url}/`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const readyElement = (globalThis as any).document.querySelector("#ready");
+      readyElement.hidden = true;
+      readyElement.hidden = false;
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a same-task hiding class toggle on the ready element fails visible readiness", async () => {
+  const audit = auditCase(`${pages.url}/visibility.html`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const readyElement = (globalThis as any).document.querySelector("#ready");
+      readyElement.classList.add("hiding");
+      readyElement.classList.remove("hiding");
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure?.code).toBe("ready-lost");
+  await opened.value.close();
+});
+
+test("a harmless class toggle on the ready element stays clean", async () => {
+  const audit = auditCase(`${pages.url}/visibility.html`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const readyElement = (globalThis as any).document.querySelector("#ready");
+      readyElement.classList.add("marker");
+      readyElement.classList.remove("marker");
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("a CSS-overridden hidden toggle on the ready element stays clean", async () => {
+  const audit = auditCase(`${pages.url}/hidden-override.html`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const readyElement = (globalThis as any).document.querySelector("#ready");
+      readyElement.hidden = true;
+      readyElement.hidden = false;
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("a hidden toggle on one ready match keeps readiness through another visible match", async () => {
+  const audit = auditCase(`${pages.url}/multi-ready.html`, { ready: ".ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const first = (globalThis as any).document.querySelector(".ready");
+      first.hidden = true;
+      first.hidden = false;
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("attached readiness ignores a same-task hidden toggle on the ready element", async () => {
+  const audit = { ...auditCase(`${server.url}/`), readyCondition: { selector: "#ready", state: "attached" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const outcome = await measureRule(opened.value.page, audit, opened.value.actualUrl!, async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => {
+      const readyElement = (globalThis as any).document.querySelector("#ready");
+      readyElement.hidden = true;
+      readyElement.hidden = false;
+      return 1;
+    }), violations: [] }, failure: null,
+  }));
+  expect(outcome.failure).toBeNull();
   await opened.value.close();
 });

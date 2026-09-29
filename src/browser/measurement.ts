@@ -28,13 +28,19 @@ interface ReadyElement extends ReadyNode {
   readonly previousElementSibling: ReadyElement | null;
   readonly firstChild: ReadyNode | null;
   readonly shadowRoot?: ReadyRoot | null;
+  readonly nodeName: string;
   readonly textContent: string | null;
+  readonly value?: string;
+  readonly type?: string;
   checkVisibility(): boolean;
   getBoundingClientRect(): { width: number; height: number };
   contains(node: unknown): boolean;
   getRootNode(): ReadyRoot;
   matches(selector: string): boolean;
   querySelectorAll(selector: string): readonly ReadyElement[];
+  getAttribute(name: string): string | null;
+  setAttribute(name: string, value: string): void;
+  removeAttribute(name: string): void;
 }
 
 interface GuardedDocument extends ReadyRoot {
@@ -47,6 +53,7 @@ interface MutationEvidence {
   readonly attributeName?: string | null;
   readonly oldValue?: string | null;
   readonly removedNodes: Iterable<unknown>;
+  readonly addedNodes: Iterable<unknown>;
 }
 
 interface GuardedValue {
@@ -86,7 +93,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     location: { href: string };
     document: GuardedDocument;
     getComputedStyle(element: unknown): { visibility: string; display: string };
-    MutationObserver: new (callback: (records: readonly MutationEvidence[]) => void) => { observe(root: unknown, options: unknown): void; disconnect(): void };
+    MutationObserver: new (callback: (records: readonly MutationEvidence[]) => void) => { observe(root: unknown, options: unknown): void; disconnect(): void; takeRecords(): readonly MutationEvidence[] };
     history: { pushState: (...args: unknown[]) => unknown; replaceState: (...args: unknown[]) => unknown };
     addEventListener(type: string, callback: () => void): void;
     removeEventListener(type: string, callback: () => void): void;
@@ -126,9 +133,16 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   const textQuery = selector?.startsWith("text=") ? selector.slice(5) : null;
   const nativeSelector = input.native;
   const recheckViaPlaywright = input.recheck;
+  const textValue = (element: ReadyElement): string => {
+    if (element.nodeName === "INPUT") {
+      const type = element.type ?? "";
+      if (type === "submit" || type === "button" || type === "reset") return element.value ?? "";
+    }
+    return element.textContent ?? "";
+  };
   const textMatches = (element: ReadyElement): boolean => {
     if (textQuery === null) return true;
-    const text = (element.textContent ?? "").replace(/\s+/g, " ").trim();
+    const text = textValue(element).replace(/\s+/g, " ").trim();
     if (textQuery.startsWith('"') && textQuery.endsWith('"')) return text === textQuery.slice(1, -1).replace(/\s+/g, " ").trim();
     if (textQuery.startsWith("'") && textQuery.endsWith("'")) return text === textQuery.slice(1, -1).replace(/\s+/g, " ").trim();
     if (textQuery.startsWith("/")) {
@@ -176,8 +190,8 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
 
   const readySatisfied = (): boolean => {
     if (guard.readyCondition === null) return true;
-    if (state === "hidden") return !queryMatching().some((element) => element.isConnected && textMatches(element) && isVisible(element));
-    const live = snapshot.filter((element) => element.isConnected && stillMatches(element));
+    const live = queryMatching().filter((element) => element.isConnected && stillMatches(element));
+    if (state === "hidden") return !live.some((element) => isVisible(element));
     if (state === "attached") return live.length > 0;
     return live.some((element) => isVisible(element));
   };
@@ -222,41 +236,89 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     }
   };
 
-  const touchesSnapshot = (node: unknown): boolean => snapshot.some((element) => {
+  const nodeContains = (node: unknown, element: ReadyElement): boolean => {
     if (node === element) return true;
     const container = node as { contains?: (value: unknown) => boolean };
     if (typeof container.contains === "function" && container.contains(element)) return true;
     const host = element.getRootNode().host;
-    return host !== undefined && (node === host || (typeof container.contains === "function" && container.contains(host)));
-  });
+    if (host === undefined) return false;
+    return host === node || (typeof container.contains === "function" && container.contains(host));
+  };
 
-  const removalTouchesSnapshot = (removedNodes: Iterable<unknown>): boolean => {
-    for (const node of removedNodes) if (touchesSnapshot(node)) return true;
-    return false;
+  const eachElementIn = (node: unknown, visit: (element: ReadyElement) => void): void => {
+    const visitRoot = (root: ReadyRoot): void => {
+      for (const element of root.querySelectorAll("*")) {
+        visit(element);
+        const shadow = element.shadowRoot;
+        if (shadow !== undefined && shadow !== null) visitRoot(shadow);
+      }
+    };
+    const element = node as ReadyElement;
+    if (element !== null && typeof element === "object" && element.nodeType === 1) {
+      visit(element);
+      const shadow = element.shadowRoot;
+      if (shadow !== undefined && shadow !== null) visitRoot(shadow);
+    }
+    const container = node as { querySelectorAll?: (selector: string) => readonly ReadyElement[] };
+    if (typeof container.querySelectorAll === "function") visitRoot(container as ReadyRoot);
+  };
+
+  const settledMatches = new Set<ReadyElement>();
+  const trackSettledMatches = (): void => {
+    for (const element of queryMatching()) {
+      if (element.isConnected && stillMatches(element)) settledMatches.add(element);
+    }
+  };
+  const rememberMatches = (nodes: Iterable<unknown>): void => {
+    for (const node of nodes) {
+      eachElementIn(node, (element) => {
+        if (element.isConnected && stillMatches(element)) settledMatches.add(element);
+      });
+    }
+  };
+  const forgetMatches = (nodes: Iterable<unknown>): number => {
+    const dropped = new Set<ReadyElement>();
+    for (const node of nodes) for (const element of settledMatches) if (nodeContains(node, element)) dropped.add(element);
+    for (const element of dropped) settledMatches.delete(element);
+    return dropped.size;
+  };
+  const remainingReady = (): boolean => {
+    const live = Array.from(settledMatches).filter((element) => element.isConnected && stillMatches(element));
+    return state === "attached" ? live.length > 0 : live.some((element) => isVisible(element));
+  };
+
+  const readinessAttribute = (name: string): boolean =>
+    name === "style" || name === "class" || name === "hidden" || name === "id" ||
+    (selector !== null && selector.includes(name));
+
+  const historicalReady = (element: ReadyElement, name: string, oldValue: string | null): boolean => {
+    const previous = element.getAttribute(name);
+    if (oldValue === null) element.removeAttribute(name);
+    else element.setAttribute(name, oldValue);
+    try {
+      return readySatisfied();
+    } finally {
+      if (previous === null) element.removeAttribute(name);
+      else element.setAttribute(name, previous);
+    }
   };
 
   const unobservableReadyLoss = (record: MutationEvidence): boolean => {
-    if (guard.readyCondition === null) return false;
-    if (record.type === "childList" && state !== "hidden" && snapshot.length === 1 && removalTouchesSnapshot(record.removedNodes)) return true;
-    if (record.type !== "attributes") return false;
-    const element = record.target as ReadyElement;
-    const attribute = record.attributeName;
-    const oldValue = record.oldValue ?? "";
-    if (state === "hidden") {
-      return selector !== null && nativeSelector && attribute === "id" && selector.startsWith("#") &&
-        !selector.includes(" ") && oldValue === selector.slice(1) && isVisible(element);
+    if (guard.readyCondition === null || recheckViaPlaywright) return false;
+    if (record.type === "childList") {
+      rememberMatches(record.addedNodes);
+      const removed = forgetMatches(record.removedNodes);
+      return state !== "hidden" && removed > 0 && !remainingReady();
     }
-    if (state === "visible" && attribute === "style" && touchesSnapshot(element) &&
-      /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse))\b/i.test(oldValue)) return true;
-    if (selector === null || !nativeSelector || !snapshot.some((match) => match.isConnected && stillMatches(match))) return false;
-    if (attribute === "id" && selector.startsWith("#") && !selector.includes(" ") &&
-      touchesSnapshot(element) && oldValue !== selector.slice(1)) return true;
-    if (attribute === "class" && selector.startsWith(".") && !selector.includes(" ") &&
-      touchesSnapshot(element) && !oldValue.split(/\s+/).includes(selector.slice(1))) return true;
-    const sibling = selector.match(/^\.([\w-]+)\s*\+\s*#[\w-]+$/);
-    return attribute === "class" && sibling !== null &&
-      snapshot.some((match) => match.previousElementSibling === element &&
-        !oldValue.split(/\s+/).includes(sibling[1]!));
+    if (record.type !== "attributes") return false;
+    const target = record.target as ReadyElement;
+    if (target === null || typeof target !== "object" || target.nodeType !== 1) return false;
+    const name = record.attributeName ?? "";
+    if (name.length === 0) return false;
+    if (target.isConnected && stillMatches(target)) settledMatches.add(target);
+    else settledMatches.delete(target);
+    if (!readinessAttribute(name)) return false;
+    return !historicalReady(target, name, record.oldValue ?? null);
   };
 
   const status = (value: unknown): GuardedValue => ({ value, invalid, url: invalid === null ? global.location.href : invalidUrl });
@@ -279,6 +341,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
       }
       if (recheckViaPlaywright) requestPlaywrightRecheck();
     }
+    observer.takeRecords();
     if (!recheckViaPlaywright) verifyGuards();
   });
   const observeRoots = (): void => {
@@ -290,6 +353,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   };
   observer.observe(global.document, observationOptions);
   if (guard.readyCondition !== null) observeRoots();
+  if (guard.readyCondition !== null && !recheckViaPlaywright) trackSettledMatches();
   const pushState = global.history.pushState;
   const replaceState = global.history.replaceState;
   global.history.pushState = function (...values: unknown[]) { const result = pushState.apply(this, values); verifyGuards(); return result; };
