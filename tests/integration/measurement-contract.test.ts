@@ -87,6 +87,63 @@ test("URL and ready state are checked inside asynchronous browser evaluation", a
   await opened.value.close();
 });
 
+test("ready loss between browser evaluations cannot be hidden by restoration", async () => {
+  const audit = auditCase(`${server.url}/`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  const outcome = await measureRule(page, audit, page.url(), async (guarded) => {
+    await guarded.evaluate(() => {
+      const ready = (globalThis as any).document.querySelector("#ready");
+      setTimeout(() => {
+        ready.remove();
+        setTimeout(() => (globalThis as any).document.body.append(ready), 0);
+      }, 20);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return { facts: { elementsInspected: await guarded.evaluate(() => 1), violations: [] }, failure: null };
+  });
+  expect(outcome.failure?.code).toBe("ready-lost");
+  const next = await measureRule(page, audit, page.url(), async (guarded) => ({
+    facts: { elementsInspected: await guarded.evaluate(() => 1), violations: [] }, failure: null,
+  }));
+  expect(next.failure).toBeNull();
+  await opened.value.close();
+});
+
+test("temporary history changes between browser evaluations invalidate the rule", async () => {
+  const audit = auditCase(`${server.url}/`);
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  const outcome = await measureRule(page, audit, page.url(), async (guarded) => {
+    await guarded.evaluate(() => {
+      setTimeout(() => {
+        (globalThis as any).history.pushState({}, "", "/other");
+        setTimeout(() => (globalThis as any).history.replaceState({}, "", "/"), 0);
+      }, 20);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return { facts: { elementsInspected: await guarded.evaluate(() => 1), violations: [] }, failure: null };
+  });
+  expect(outcome.failure?.code).toBe("url-mismatch");
+  expect(outcome.failure?.actualUrl).toBe(`${server.url}/other`);
+  await opened.value.close();
+});
+
+test("an evaluator error releases the rule guard", async () => {
+  const audit = auditCase(`${server.url}/`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  await page.evaluate(() => { (globalThis as any).originalPushState = (globalThis as any).history.pushState; });
+  await expect(measureRule(page, audit, page.url(), async () => {
+    throw new Error("evaluation failed");
+  })).rejects.toThrow("evaluation failed");
+  expect(await page.evaluate(() => (globalThis as any).history.pushState === (globalThis as any).originalPushState)).toBe(true);
+  await opened.value.close();
+});
+
 test("live browser counts below a per-case minimum produce incomplete exit 2", async () => {
   const audit = { ...auditCase(`${server.url}/`), rules: [{ name: "tabs", type: "tab-label-single-line" as const, enabled: true, additionalCandidateSelectors: [], excludeSelectors: [], labelSelector: null, minimumInspected: 2 }] };
   const result = await runResolvedCheck(

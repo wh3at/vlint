@@ -8,12 +8,10 @@ interface GuardState {
   readonly readyCondition: { readonly selector: string; readonly state: ReadyState } | null;
 }
 
-interface EvaluationRequest {
-  readonly source: string;
-  readonly isFunction: boolean;
-  readonly argument: unknown;
-  readonly execute: boolean;
-}
+type EvaluationRequest =
+  | { readonly kind: "start" }
+  | { readonly kind: "finish" }
+  | { readonly kind: "evaluate"; readonly source: string; readonly isFunction: boolean; readonly argument: unknown };
 
 interface ReadyNode {
   readonly nodeType: number;
@@ -93,7 +91,16 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     addEventListener(type: string, callback: () => void): void;
     removeEventListener(type: string, callback: () => void): void;
     __vlintReadyRecheck?: (selector: string, state: ReadyState) => Promise<boolean>;
+    __vlintRuleGuard?: {
+      evaluate(request: Extract<EvaluationRequest, { kind: "evaluate" }>): Promise<GuardedValue>;
+      finish(): Promise<GuardedValue>;
+    };
   };
+  if (request.kind !== "start") {
+    const active = global.__vlintRuleGuard;
+    if (active === undefined) throw new Error("measurement guard missing");
+    return request.kind === "finish" ? active.finish() : active.evaluate(request);
+  }
   const isVisible = (element: ReadyElement): boolean => {
     const style = global.getComputedStyle(element);
     if (style.display === "contents") {
@@ -252,9 +259,13 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
         !oldValue.split(/\s+/).includes(sibling[1]!));
   };
 
-  verifyGuards();
-  if (recheckViaPlaywright) await drain();
-  if (invalid !== null || !request.execute) return { value: null, invalid, url: invalid === null ? global.location.href : invalidUrl };
+  const status = (value: unknown): GuardedValue => ({ value, invalid, url: invalid === null ? global.location.href : invalidUrl });
+  const verify = async (): Promise<void> => {
+    verifyGuards();
+    if (recheckViaPlaywright) await drain();
+  };
+  await verify();
+  if (invalid !== null) return status(null);
   const observationOptions = { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true };
   const observedRoots = new Set<ReadyRoot>([global.document]);
   const observer = new global.MutationObserver((records) => {
@@ -285,20 +296,35 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   global.history.replaceState = function (...values: unknown[]) { const result = replaceState.apply(this, values); verifyGuards(); return result; };
   global.addEventListener("popstate", verifyGuards);
   global.addEventListener("hashchange", verifyGuards);
-  try {
-    const expression = (0, eval)(`(${request.source})`) as (arg: unknown) => unknown;
-    const value = await (request.isFunction ? expression(request.argument) : expression);
-    verifyGuards();
-    observer.disconnect();
-    if (recheckViaPlaywright) await drain();
-    return { value, invalid, url: invalid === null ? global.location.href : invalidUrl };
-  } finally {
+  const release = (): void => {
     observer.disconnect();
     global.history.pushState = pushState;
     global.history.replaceState = replaceState;
     global.removeEventListener("popstate", verifyGuards);
     global.removeEventListener("hashchange", verifyGuards);
-  }
+  };
+  global.__vlintRuleGuard = {
+    evaluate: async (execution) => {
+      await verify();
+      if (invalid !== null) return status(null);
+      const expression = (0, eval)(`(${execution.source})`) as (arg: unknown) => unknown;
+      const value = await (execution.isFunction ? expression(execution.argument) : expression);
+      await verify();
+      return status(value);
+    },
+    finish: async () => {
+      try {
+        verifyGuards();
+        observer.disconnect();
+        if (recheckViaPlaywright) await drain();
+        return status(null);
+      } finally {
+        release();
+        delete global.__vlintRuleGuard;
+      }
+    },
+  };
+  return status(null);
 }
 
 const recheckContexts = new WeakSet<BrowserContext>();
@@ -330,7 +356,7 @@ async function ensureRecheck(page: Page): Promise<void> {
 async function evaluateObserved(page: Page, guard: GuardState, request: EvaluationRequest): Promise<GuardedValue> {
   const semantics = selectorSemantics(guard.readyCondition?.selector ?? null);
   const input: InspectionInput = { request, guard, native: semantics.native, recheck: semantics.recheck };
-  if (guard.readyCondition === null) return page.evaluate(inspectInPage, input);
+  if (request.kind !== "start" || guard.readyCondition === null) return page.evaluate(inspectInPage, input);
   return page.locator(guard.readyCondition.selector).evaluateAll((matches, payload) => {
     const inspect = (0, eval)(`(${payload.script})`) as (value: InspectionInput) => Promise<GuardedValue>;
     return inspect({ ...payload.input, matches: matches as unknown as readonly ReadyElement[] });
@@ -356,10 +382,11 @@ export async function measureRule(
     readyCondition: auditCase.readyCondition,
   };
   let detected: GuardedValue | null = null;
-  const check = async (): Promise<void> => {
-    if (detected !== null) return;
+  let started = false;
+  const check = async (kind: "start" | "finish"): Promise<void> => {
     try {
-      const result = await evaluateObserved(page, guard, { source: "null", isFunction: false, argument: null, execute: false });
+      const result = await evaluateObserved(page, guard, { kind });
+      if (kind === "start" && result.invalid === null) started = true;
       if (result.invalid !== null && detected === null) detected = result;
     } catch {
       if (detected === null) detected = { value: null, invalid: !sameUrl(page.url(), fixedUrl) ? "url-mismatch" : guard.readyCondition === null ? "navigation-during-measurement" : "ready-lost", url: page.url() };
@@ -371,16 +398,16 @@ export async function measureRule(
   page.on("framenavigated", onNavigation);
   try {
     if (selectorSemantics(guard.readyCondition?.selector ?? null).recheck) await ensureRecheck(page);
-    await check();
+    await check("start");
     const guarded = new Proxy(page, {
       get(source, property) {
         if (property !== "evaluate") return Reflect.get(source, property, source);
         return async (fn: unknown, argument?: unknown): Promise<unknown> => {
           const result = await evaluateObserved(source, guard, {
+            kind: "evaluate",
             source: typeof fn === "string" ? fn : (fn as Function).toString(),
             isFunction: typeof fn !== "string",
             argument,
-            execute: true,
           });
           if (result.invalid !== null && detected === null) detected = result;
           return result.value;
@@ -393,8 +420,9 @@ export async function measureRule(
       if (detected === null) outcome = await evaluate(guarded);
     } catch (error) {
       evaluationError = error;
+    } finally {
+      if (started) await check("finish");
     }
-    await check();
     const observed = detected as GuardedValue | null;
     if (observed === null) {
       if (evaluationError !== null) throw evaluationError;
