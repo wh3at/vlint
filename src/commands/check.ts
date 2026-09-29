@@ -32,11 +32,14 @@ function validateMinimums(
   targets: readonly Target[],
   devices: readonly DeviceProfile[],
   rules: readonly EffectiveRule[],
+  source: "config" | "provider",
 ): BoundaryResult<void> {
+  const failureStage: Failure["stage"] = source;
+  const failureCode: Failure["code"] = source === "config" ? "config-schema-invalid" : "provider-output-invalid";
   const names = new Set(devices.map((device) => device.name));
   for (const target of targets) {
     for (const device of Object.keys(target.deviceRuleMinimums ?? {})) {
-      if (!names.has(device)) return boundaryFailure({ stage: "config", code: "config-schema-invalid", message: `unknown device minimum: ${device}`, target: target.name, device, rule: null });
+      if (!names.has(device)) return boundaryFailure({ stage: failureStage, code: failureCode, message: `unknown device minimum: ${device}`, target: target.name, device, rule: null });
     }
   }
   for (const target of targets) {
@@ -46,7 +49,7 @@ function validateMinimums(
         const deviceMinimum = device.ruleMinimums?.[rule.name];
         if (targetMinimum !== undefined && deviceMinimum !== undefined && targetMinimum !== deviceMinimum && target.deviceRuleMinimums?.[device.name]?.[rule.name] === undefined) {
           return boundaryFailure({
-            stage: "config", code: "config-schema-invalid",
+            stage: failureStage, code: failureCode,
             message: "target and device minimums conflict; specify deviceRuleMinimums",
             target: target.name, device: device.name, rule: rule.name,
           });
@@ -67,9 +70,11 @@ export async function resolveCheckPlan(
   if (!loaded.ok) return boundaryFailure(loaded.failure);
   let plan: ResolvedCheckPlan;
   let targetsForMinimums: readonly Target[];
+  let minimumsSource: "config" | "provider";
   if (url !== null) {
     plan = resolveAdHocTarget(loaded.value, url);
-    targetsForMinimums = [{ name: "adhoc", url }];
+    targetsForMinimums = loaded.value.provider?.type === "static" ? loaded.value.provider.targets : [];
+    minimumsSource = "config";
   } else if (loaded.value.provider === undefined) {
     return boundaryFailure({
       stage: "config",
@@ -93,8 +98,9 @@ export async function resolveCheckPlan(
     if (!targets.ok) return boundaryFailure(targets.failure);
     plan = resolveTargets(loaded.value, targets.value);
     targetsForMinimums = targets.value;
+    minimumsSource = loaded.value.provider.type === "static" ? "config" : "provider";
   }
-  const minimums = validateMinimums(targetsForMinimums, loaded.value.devices, loaded.value.rules);
+  const minimums = validateMinimums(targetsForMinimums, loaded.value.devices, loaded.value.rules, minimumsSource);
   if (!minimums.ok) return boundaryFailure(minimums.failure);
   const plugins = await loadLocalPluginsForConfig(
     loaded.value,

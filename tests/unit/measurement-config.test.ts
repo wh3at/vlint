@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parseConfig } from "../../src/config/schema";
@@ -59,4 +59,42 @@ test.each([
 test("accepts local rule minimums and disabled target overrides", () => {
   const parsed = parseConfig({ devices: [device], rules: [{ name: "custom", type: "local", path: "rules/custom.ts", minimumInspected: 1 }], provider: { type: "static", targets: [{ ...target, ruleOverrides: { custom: { enabled: false, minimumInspected: 2 } } }] } });
   expect(parsed.ok).toBe(true);
+});
+
+async function commandConfig(base: Record<string, unknown>, targets: unknown): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "vlint-minimums-"));
+  directories.push(directory);
+  const executable = join(directory, "provider.sh");
+  await writeFile(executable, `#!/bin/sh\necho '${JSON.stringify({ targets })}'\n`);
+  await chmod(executable, 0o755);
+  await writeFile(join(directory, "vlint.config.json"), JSON.stringify({ ...base, provider: { type: "command", executable } }));
+  return directory;
+}
+
+test("validates static target device minimums during ad-hoc runs", async () => {
+  const directory = await config({
+    devices: [device],
+    rules: [{ name: "tabs", type: "tab-label-single-line" }],
+    provider: { type: "static", targets: [{ ...target, deviceRuleMinimums: { tablet: { tabs: 2 } } }] },
+  });
+  const adHoc = await resolveCheckPlan(directory, "https://example.com/adhoc", {});
+  const configured = await resolveCheckPlan(directory, null, {});
+  expect(adHoc.ok ? null : adHoc.failure).toMatchObject({ stage: "config", code: "config-schema-invalid", target: "home", device: "tablet" });
+  expect(configured.ok ? null : configured.failure).toMatchObject({ stage: "config", code: "config-schema-invalid", target: "home", device: "tablet" });
+});
+
+test("classifies invalid command provider minimums as provider output invalid", async () => {
+  const unknownDevice = await commandConfig(
+    { devices: [device], rules: [{ name: "tabs", type: "tab-label-single-line" }] },
+    [{ ...target, deviceRuleMinimums: { tablet: { tabs: 2 } } }],
+  );
+  const unresolvedDevice = await resolveCheckPlan(unknownDevice, null, {});
+  expect(unresolvedDevice.ok ? null : unresolvedDevice.failure).toMatchObject({ stage: "provider", code: "provider-output-invalid", target: "home", device: "tablet" });
+
+  const conflict = await commandConfig(
+    { devices: [{ ...device, ruleMinimums: { tabs: 3 } }], rules: [{ name: "tabs", type: "tab-label-single-line" }] },
+    [{ ...target, ruleOverrides: { tabs: { minimumInspected: 2 } } }],
+  );
+  const unresolvedConflict = await resolveCheckPlan(conflict, null, {});
+  expect(unresolvedConflict.ok ? null : unresolvedConflict.failure).toMatchObject({ stage: "provider", code: "provider-output-invalid", target: "home", device: "desktop", rule: "tabs" });
 });
