@@ -514,12 +514,14 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
 
   const bareRole = selector?.match(/^role=(progressbar|main|button)$/)?.[1] ?? null;
   const namedRole = selector?.match(/^role=([a-z][\w-]*)\[name=(["'])(.*?)\2\]$/) ?? null;
+  const candidateRole = bareRole ?? namedRole?.[1] ?? null;
   const roleCandidate = (element: ReadyElement): boolean => {
     const explicit = element.getAttribute("role");
-    if (explicit?.toLowerCase().split(/\s+/).includes(bareRole ?? "")) return true;
-    return (bareRole === "progressbar" && element.nodeName === "PROGRESS") ||
-      (bareRole === "main" && element.nodeName === "MAIN") ||
-      (bareRole === "button" && (element.nodeName === "BUTTON" || element.nodeName === "SUMMARY" ||
+    if (candidateRole !== null && explicit?.toLowerCase().split(/\s+/).includes(candidateRole)) return true;
+    return (candidateRole === "progressbar" && element.nodeName === "PROGRESS") ||
+      (candidateRole === "main" && element.nodeName === "MAIN") ||
+      (candidateRole === "heading" && /^H[1-6]$/.test(element.nodeName)) ||
+      (candidateRole === "button" && (element.nodeName === "BUTTON" || element.nodeName === "SUMMARY" ||
         (element.nodeName === "INPUT" && /^(button|submit|reset|image)$/.test(element.type ?? ""))));
   };
   const roleAncestor = (node: ReadyNode): boolean => {
@@ -528,6 +530,12 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
       if (roleCandidate(element)) return true;
     }
     return false;
+  };
+  const nameSources = (ready: ReadyElement): ReadyElement[] => {
+    const references = ready.getAttribute("aria-labelledby")?.split(/\s+/).flatMap((id) =>
+      Array.from(ready.getRootNode().querySelectorAll("[id]")).filter((element) => element.getAttribute("id") === id)) ?? [];
+    const label = ready.getAttribute("aria-label");
+    return references.length > 0 ? references : label?.trim() ? [] : [ready];
   };
   const inspectNamedRoleTextHistory = (records: readonly MutationEvidence[]): void => {
     if (namedRole === null) return;
@@ -547,10 +555,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
       history.set(record.target as ReadyNode, next.get(record)!);
       textOverrides = history;
       const matching = Array.from(candidates).filter((ready) => {
-        const references = ready.getAttribute("aria-labelledby")?.split(/\s+/).flatMap((id) =>
-          Array.from(ready.getRootNode().querySelectorAll("[id]")).filter((element) => element.getAttribute("id") === id)) ?? [];
-        const label = ready.getAttribute("aria-label");
-        const sources = references.length > 0 ? references : label?.trim() ? [] : [ready];
+        const sources = nameSources(ready);
         if (!sources.some((source) => Array.from(history.keys()).some((node) => includesReady(source, node as ReadyElement)))) return snapshot.includes(ready);
         if (sources.some((source) => source.shadowRoot || source.querySelectorAll("*").length > 0)) return false;
         const name = sources.map(textValue).join(" ");
@@ -594,13 +599,15 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
       }
       if (record.type === "characterData" && (rawSelector?.includes("text") ||
         (rawSelector?.startsWith("role=") && rawSelector.includes("[name=") && namedRole === null) ||
-        (state === "hidden" && bareRole !== null && roleAncestor(record.target as ReadyNode)))) markLost();
+        (state === "hidden" && candidateRole !== null && roleAncestor(record.target as ReadyNode)))) markLost();
       if (record.type === "childList") {
         const changed = [...record.addedNodes, ...record.removedNodes];
-        const hiddenCandidate = state === "hidden" && (bareRole === null || changed.flatMap(elementsIn).some((element) =>
+        const nameSourceChanged = namedRole !== null && [...snapshot, ...input.nameCandidates ?? []].some((ready) =>
+          nameSources(ready).some((source) => includesReady(source, record.target as ReadyElement)));
+        const hiddenCandidate = state === "hidden" && (candidateRole === null || changed.flatMap(elementsIn).some((element) =>
           roleCandidate(element) || (element.shadowRoot && !observedRoots.has(element.shadowRoot))) ||
           roleAncestor(record.target as ReadyNode) || changesStylesheet(record.target as ReadyNode, changed) || stylesheetStructuralDependency());
-        if (hiddenCandidate || changed.some((node) => snapshot.some((ready) => includesReady(node, ready)))) markLost();
+        if (hiddenCandidate || nameSourceChanged || changed.some((node) => snapshot.some((ready) => includesReady(node, ready)))) markLost();
       }
       requestPlaywrightRecheck();
     }

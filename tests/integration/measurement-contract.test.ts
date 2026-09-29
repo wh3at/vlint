@@ -2900,3 +2900,44 @@ test.each(["clock", "heading"] as const)("named heading readiness ignores unrela
     expect(outcome.failure?.code ?? null).toBe(scenario === "clock" ? null : "ready-lost");
   } finally { await opened.value.close(); }
 });
+
+test("named heading text replacement and restoration cannot conceal ready loss", async () => {
+  const opened = await browser.acquireCase(auditCase(`${pages.url}/text-mutation.html`));
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    await page.evaluate(() => { document.body.innerHTML = "<h1 id='ready'>Ready</h1>"; });
+    const audit = auditCase(page.url(), { ready: 'role=heading[name="Ready"]' });
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(() => {
+        const heading = document.querySelector("#ready")!;
+        heading.textContent = "Busy";
+        heading.textContent = "Ready";
+        return 1;
+      }), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure?.code).toBe("ready-lost");
+  } finally { await opened.value.close(); }
+});
+
+test.each(["footer", "clock", "heading"] as const)("hidden named heading readiness filters %s mutations", async (scenario) => {
+  const opened = await browser.acquireCase(auditCase(`${pages.url}/text-mutation.html`));
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    const audit = { ...auditCase(page.url()), readyCondition: { selector: 'role=heading[name="Ready"]', state: "hidden" as const } };
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate((scenario) => {
+        if (scenario === "clock") document.querySelector("#other")!.textContent = "tock";
+        else {
+          const element = document.createElement(scenario === "footer" ? "footer" : "h1");
+          element.textContent = scenario === "footer" ? "unrelated" : "Ready";
+          document.body.append(element);
+          element.remove();
+        }
+        return 1;
+      }, scenario), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure?.code ?? null).toBe(scenario === "heading" ? "ready-lost" : null);
+  } finally { await opened.value.close(); }
+});
