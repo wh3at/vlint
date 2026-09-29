@@ -2841,3 +2841,62 @@ for (const state of ["visible", "attached"] as const) {
     } finally { await opened.value.close(); }
   });
 }
+
+test("font loading between rules invalidates selector-free readiness", async () => {
+  const audit = auditCase(`${pages.url}/text-mutation.html`);
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    const first = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(() => 1), violations: [] }, failure: null,
+    }));
+    expect(first.failure).toBeNull();
+    await page.evaluate(() => Object.defineProperty(document.fonts, "status", { configurable: true, value: "loading" }));
+    let evaluated = false;
+    const second = await measureRule(page, audit, page.url(), async () => {
+      evaluated = true;
+      return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+    });
+    expect(evaluated).toBe(false);
+    expect(second.failure?.code).toBe("ready-lost");
+  } finally { await opened.value.close(); }
+});
+
+test("transient font loading during a rule invalidates selector-free readiness", async () => {
+  const audit = auditCase(`${pages.url}/text-mutation.html`);
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(async () => {
+        Object.defineProperty(document.fonts, "status", { configurable: true, value: "loading" });
+        document.fonts.dispatchEvent(new Event("loading"));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        Object.defineProperty(document.fonts, "status", { configurable: true, value: "loaded" });
+        return 1;
+      }), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure?.code).toBe("ready-lost");
+  } finally { await opened.value.close(); }
+});
+
+test.each(["clock", "heading"] as const)("named heading readiness ignores unrelated text but detects %s changes", async (scenario) => {
+  const opened = await browser.acquireCase(auditCase(`${pages.url}/text-mutation.html`));
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    await page.evaluate(() => { document.body.innerHTML = "<h1 id='ready'>Ready</h1><aside id='clock'>tick</aside>"; });
+    const audit = auditCase(page.url(), { ready: 'role=heading[name="Ready"]' });
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate((scenario) => {
+        const target = document.querySelector(scenario === "clock" ? "#clock" : "#ready")!.firstChild!;
+        target.textContent = "Busy";
+        target.textContent = scenario === "clock" ? "tick" : "Ready";
+        return 1;
+      }, scenario), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure?.code ?? null).toBe(scenario === "clock" ? null : "ready-lost");
+  } finally { await opened.value.close(); }
+});

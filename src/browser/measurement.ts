@@ -50,6 +50,7 @@ interface ReadyElement extends ReadyNode {
 interface GuardedDocument extends ReadyRoot {
   createRange(): { selectNode(node: ReadyNode): void; getBoundingClientRect(): { width: number; height: number } };
   readonly implementation: { createHTMLDocument(): { importNode(node: ReadyElement, deep: boolean): ReadyElement } };
+  readonly fonts: { readonly status: string; addEventListener(type: string, callback: () => void): void; removeEventListener(type: string, callback: () => void): void };
 }
 
 interface MutationEvidence {
@@ -78,7 +79,7 @@ interface InspectionInput {
   readonly native: boolean;
   readonly recheck: boolean;
   readonly matches?: readonly ReadyElement[];
-  readonly buttonCandidates?: readonly ReadyElement[];
+  readonly nameCandidates?: readonly ReadyElement[];
 }
 
 const PLAYWRIGHT_ENGINE_PREFIX = /^(?:text|xpath|role|nth|id|data-testid|data-test-id|data-test|alt|label|placeholder|title|testid|aria-ref)=/;
@@ -248,6 +249,11 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     if (invalid !== null) return;
     if (new URL(global.location.href).href !== guard.url) {
       invalid = "url-mismatch";
+      invalidUrl = global.location.href;
+      return;
+    }
+    if (global.document.fonts.status !== "loaded") {
+      invalid = "ready-lost";
       invalidUrl = global.location.href;
       return;
     }
@@ -507,7 +513,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   };
 
   const bareRole = selector?.match(/^role=(progressbar|main|button)$/)?.[1] ?? null;
-  const namedButton = selector?.match(/^role=button\[name=(["'])(.*?)\1\]$/)?.[2] ?? null;
+  const namedRole = selector?.match(/^role=([a-z][\w-]*)\[name=(["'])(.*?)\2\]$/) ?? null;
   const roleCandidate = (element: ReadyElement): boolean => {
     const explicit = element.getAttribute("role");
     if (explicit?.toLowerCase().split(/\s+/).includes(bareRole ?? "")) return true;
@@ -523,8 +529,8 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     }
     return false;
   };
-  const inspectButtonTextHistory = (records: readonly MutationEvidence[]): void => {
-    if (namedButton === null) return;
+  const inspectNamedRoleTextHistory = (records: readonly MutationEvidence[]): void => {
+    if (namedRole === null) return;
     const history = new Map<ReadyNode, string>();
     const next = new Map<MutationEvidence, string>();
     for (let index = records.length - 1; index >= 0; index -= 1) {
@@ -535,7 +541,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
       history.set(node, record.oldValue ?? "");
     }
     const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
-    const candidates = new Set([...snapshot, ...input.buttonCandidates ?? []]);
+    const candidates = new Set([...snapshot, ...input.nameCandidates ?? []]);
     for (const record of records) {
       if (record.type !== "characterData") continue;
       history.set(record.target as ReadyNode, next.get(record)!);
@@ -548,7 +554,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
         if (!sources.some((source) => Array.from(history.keys()).some((node) => includesReady(source, node as ReadyElement)))) return snapshot.includes(ready);
         if (sources.some((source) => source.shadowRoot || source.querySelectorAll("*").length > 0)) return false;
         const name = sources.map(textValue).join(" ");
-        return normalize(name) === normalize(namedButton);
+        return normalize(name) === normalize(namedRole[3]!);
       });
       textOverrides = null;
       const satisfied = state === "hidden" ? !matching.some(isVisible) :
@@ -562,14 +568,18 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     verifyGuards();
     if (recheckViaPlaywright) await drain();
   };
+  global.document.fonts.addEventListener("loading", markLost);
   if (recheckViaPlaywright) await verify();
   else verifyGuards();
-  if (invalid !== null) return status(null);
+  if (invalid !== null) {
+    global.document.fonts.removeEventListener("loading", markLost);
+    return status(null);
+  }
   const observationOptions = { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true, characterDataOldValue: true };
   const observedRoots = new Set<ReadyRoot>([global.document]);
   const observer = new global.MutationObserver((records) => {
     if (invalid === null && guard.readyCondition !== null && !input.recheck) inspectHistory(records);
-    if (input.recheck) inspectButtonTextHistory(records);
+    if (input.recheck) inspectNamedRoleTextHistory(records);
     if (input.recheck) for (const record of records) {
       if (record.type === "attributes") {
         const target = record.target as ReadyElement;
@@ -583,7 +593,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
         if (matchedReady || hiddenCandidate || dependencyCandidate) markLost();
       }
       if (record.type === "characterData" && (rawSelector?.includes("text") ||
-        (rawSelector?.startsWith("role=") && rawSelector.includes("[name=") && namedButton === null) ||
+        (rawSelector?.startsWith("role=") && rawSelector.includes("[name=") && namedRole === null) ||
         (state === "hidden" && bareRole !== null && roleAncestor(record.target as ReadyNode)))) markLost();
       if (record.type === "childList") {
         const changed = [...record.addedNodes, ...record.removedNodes];
@@ -627,6 +637,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   global.addEventListener("hashchange", verifyGuards);
   const release = (): void => {
     active = false;
+    global.document.fonts.removeEventListener("loading", markLost);
     if (global.Element.prototype.attachShadow === guardedAttachShadow) global.Element.prototype.attachShadow = attachShadow;
     observer.disconnect();
     if (global.history.pushState === guardedPushState) global.history.pushState = pushState;
@@ -688,15 +699,15 @@ async function evaluateObserved(page: Page, guard: GuardState, request: Evaluati
   const semantics = selectorSemantics(guard.readyCondition?.selector ?? null);
   const input: InspectionInput = { request, guard, native: semantics.native, recheck: semantics.recheck };
   if (request.kind !== "start" || guard.readyCondition === null) return page.evaluate(inspectInPage, input);
-  const buttonCandidates = /^(?:css=)?role=button\[name=(["'])(.*?)\1\]$/.test(guard.readyCondition.selector) ?
-    await page.locator("role=button").elementHandles() : [];
+  const namedRole = guard.readyCondition.selector.match(/^(?:css=)?role=([a-z][\w-]*)\[name=(["'])(.*?)\2\]$/);
+  const nameCandidates = namedRole === null ? [] : await page.locator(`role=${namedRole[1]}`).elementHandles();
   try {
     return await page.locator(guard.readyCondition.selector).evaluateAll((matches, payload) => {
       const inspect = (0, eval)(`(${payload.script})`) as (value: InspectionInput) => Promise<GuardedValue>;
-      return inspect({ ...payload.input, matches: matches as unknown as readonly ReadyElement[], buttonCandidates: payload.buttonCandidates as unknown as readonly ReadyElement[] });
-    }, { input, script: inspectInPage.toString(), buttonCandidates });
+      return inspect({ ...payload.input, matches: matches as unknown as readonly ReadyElement[], nameCandidates: payload.nameCandidates as unknown as readonly ReadyElement[] });
+    }, { input, script: inspectInPage.toString(), nameCandidates });
   } finally {
-    await Promise.all(buttonCandidates.map((candidate) => candidate.dispose()));
+    await Promise.all(nameCandidates.map((candidate) => candidate.dispose()));
   }
 }
 
