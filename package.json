@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "check:architecture": "bun run scripts/check-architecture.ts",
     "test:unit": "bun test tests/unit tests/golden",
-    "test:integration": "bun test tests/integration/browser-install.test.ts tests/integration/cli-acceptance.test.ts tests/integration/result-transitions.test.ts && bun test tests/integration/browser-lifecycle.test.ts && bun test tests/integration/readiness.test.ts && bun test tests/integration/measurement-contract.test.ts && bun test tests/integration/local-rules.test.ts && bun test tests/integration/tab-label-single-line.test.ts && bun test tests/integration/table-header-single-line.test.ts && bun test tests/integration/page-horizontal-overflow.test.ts && bun test tests/integration/table-cell-text-overlap.test.ts",
+    "test:integration": "bun test tests/integration/browser-install.test.ts tests/integration/cli-acceptance.test.ts tests/integration/result-transitions.test.ts && bun test tests/integration/browser-lifecycle.test.ts && bun test tests/integration/readiness.test.ts && bun test tests/integration/measurement-contract.test.ts && bun test tests/integration/local-rules.test.ts && bun test tests/integration/tab-label-single-line.test.ts && bun test tests/integration/table-header-single-line.test.ts && bun test tests/integration/page-horizontal-overflow.test.ts && bun test tests/integration/table-cell-text-overlap.test.ts && bun test tests/integration/table-cell-excluded-neighbors.test.ts",
     "test:acceptance": "bun test tests/acceptance",
     "test:all": "bun run typecheck && bun run check:architecture && bun run test:unit && bun run build:linux-x64 && bun run test:integration && bun run test:acceptance",
     "build:linux-x64": "bun run scripts/build.ts linux-x64",
