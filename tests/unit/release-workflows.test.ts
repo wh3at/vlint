@@ -95,9 +95,25 @@ describe("release workflow boundaries", () => {
       expect(result.exitCode).toBe(exitCode);
     }
     expect(provenance.outputs.sha).toBe("${{ steps.checked.outputs.sha }}");
-    expect(provenance.steps.find((step: { id?: string }) => step.id === "checked")?.run).toContain('SHA="$(git rev-parse HEAD)"');
-    expect(release.jobs.build.steps[0].with.ref).toBe("${{ needs.provenance.outputs.tag }}");
+    expect(provenance.steps.find((step: { id?: string }) => step.id === "checked")?.run).toContain('SHA="$CHECKED_SHA"');
+    expect(release.jobs.build.steps[0].with.ref).toBe("${{ needs.provenance.outputs.sha }}");
     expect(release.jobs.publish.steps.find((step: { name?: string }) => step.name === "Verify tag and App-authored draft")?.env.SHA)
       .toBe("${{ needs.provenance.outputs.sha }}");
+  });
+
+  test("keeps tag-push releases bound to the event SHA when the tag moves", async () => {
+    const release = await workflow("release.yml");
+    const provenance = release.jobs.provenance;
+    const checked = provenance.steps.find((step: { id?: string }) => step.id === "checked");
+    expect(provenance.steps.find((step: { name?: string }) => step.name === "Checkout tag commit (full history for ancestry check)")?.with.ref)
+      .toBe("${{ github.event_name == 'push' && github.sha || steps.meta.outputs.tag }}");
+    expect(checked.run).toContain('SHA="$GITHUB_SHA"');
+    expect(checked.run).toContain('if [ "$CHECKED_SHA" != "$SHA" ]; then');
+    expect(release.jobs.build.steps[0].with.ref).toBe("${{ needs.provenance.outputs.sha }}");
+    expect(release.jobs.validate.steps[0].with.ref).toBe("${{ needs.provenance.outputs.sha }}");
+    const cleanup = release.jobs["cleanup-on-failure"].steps[0].run as string;
+    expect(cleanup).toContain("--json author,tagName,targetCommitish");
+    expect(cleanup).toContain(".targetCommitish == $sha");
+    expect(cleanup).toContain('if [ "$tag_sha" != "$SHA" ]; then');
   });
 });

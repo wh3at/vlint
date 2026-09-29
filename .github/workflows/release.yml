@@ -72,7 +72,7 @@ jobs:
       - name: Checkout tag commit (full history for ancestry check)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ steps.meta.outputs.tag }}
+          ref: ${{ github.event_name == 'push' && github.sha || steps.meta.outputs.tag }}
           fetch-depth: 0
 
       - name: Verify default-branch provenance, required checks, and version
@@ -84,7 +84,16 @@ jobs:
           SEMVER: ${{ steps.meta.outputs.semver }}
         run: |
           set -euo pipefail
-          SHA="$(git rev-parse HEAD)"
+          CHECKED_SHA="$(git rev-parse HEAD)"
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            SHA="$GITHUB_SHA"
+            if [ "$CHECKED_SHA" != "$SHA" ]; then
+              echo "::error::checkout $CHECKED_SHA != event commit $SHA"
+              exit 1
+            fi
+          else
+            SHA="$CHECKED_SHA"
+          fi
 
           # (a) Embedded version must match the tag.
           PKG_VERSION="$(jq -r '.version' package.json)"
@@ -148,7 +157,7 @@ jobs:
       - name: Checkout tag commit (frozen build inputs)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ needs.provenance.outputs.tag }}
+          ref: ${{ needs.provenance.outputs.sha }}
 
       - name: Setup Bun (pinned)
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -208,7 +217,7 @@ jobs:
       - name: Checkout validator scripts only
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ needs.provenance.outputs.tag }}
+          ref: ${{ needs.provenance.outputs.sha }}
 
       - name: Download immutable artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -370,11 +379,11 @@ jobs:
           SHA: ${{ needs.provenance.outputs.sha }}
         run: |
           set -euo pipefail
-          if ! release="$(gh release view "$TAG" --repo "$REPO" --json author,tagName 2>/dev/null)"; then
+          if ! release="$(gh release view "$TAG" --repo "$REPO" --json author,tagName,targetCommitish 2>/dev/null)"; then
             exit 0
           fi
-          if ! printf '%s' "$release" | jq -e --arg tag "$TAG" \
-            '.tagName == $tag and .author.login == "vlint-release-please[bot]"' >/dev/null; then
+          if ! printf '%s' "$release" | jq -e --arg tag "$TAG" --arg sha "$SHA" \
+            '.tagName == $tag and .targetCommitish == $sha and .author.login == "vlint-release-please[bot]"' >/dev/null; then
             exit 0
           fi
           obj="$(gh api "/repos/$REPO/git/ref/tags/$TAG" --jq '.object')"
