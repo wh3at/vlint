@@ -2410,3 +2410,434 @@ test("a transient relational match caused by a class toggle is incomplete", asyn
   expect(outcome.failure?.code).toBe("ready-lost");
   await opened.value.close();
 });
+
+test.each(["same-task", "pending", "empty", "unrelated", "closed"] as const)("late attachShadow on a connected host: %s", async (scenario) => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`), readyCondition: { selector: "#spinner", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    await page.evaluate(() => {
+      const global = globalThis as any;
+      global.originalAttachShadow = global.Element.prototype.attachShadow;
+      global.document.body.insertAdjacentHTML("beforeend", "<div id='host'></div>");
+    });
+    const measurement = measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(async (scenario) => {
+        const global = globalThis as any;
+        const root = global.document.querySelector("#host").attachShadow({ mode: scenario === "closed" ? "closed" : "open" });
+        if (scenario !== "empty") root.innerHTML = `<div id='${scenario === "unrelated" ? "clock" : "spinner"}' style='width:20px;height:20px'>loading</div>`;
+        if (scenario === "pending") await new Promise<void>((resolve) => { global.releaseSpinner = resolve; });
+        root.replaceChildren();
+        return 1;
+      }, scenario), violations: [] }, failure: null,
+    }));
+    if (scenario === "pending") {
+      await page.waitForFunction(() => typeof (globalThis as any).releaseSpinner === "function");
+      expect(await page.locator("#spinner").isVisible()).toBe(true);
+      await page.evaluate(() => (globalThis as any).releaseSpinner());
+    }
+    const outcome = await measurement;
+    const lost = scenario === "same-task" || scenario === "pending";
+    expect(outcome.failure?.code ?? null).toBe(lost ? "ready-lost" : null);
+    expect(outcome.facts.elementsInspected).toBe(lost ? 0 : 1);
+    expect(await page.evaluate(() => (globalThis as any).Element.prototype.attachShadow === (globalThis as any).originalAttachShadow)).toBe(true);
+  } finally { await opened.value.close(); }
+});
+
+test("attachShadow release preserves and deactivates an application wrapper", async () => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`), readyCondition: { selector: "#spinner", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(() => {
+        const global = globalThis as any;
+        const previous = global.Element.prototype.attachShadow;
+        global.appAttachShadow = function (this: any, ...args: any[]) { return previous.apply(this, args); };
+        global.Element.prototype.attachShadow = global.appAttachShadow;
+        const host = global.document.createElement("div");
+        global.document.body.append(host);
+        const options = { get mode() { global.modeReads = (global.modeReads ?? 0) + 1; return "open"; } };
+        const root = host.attachShadow(options);
+        global.rootReturned = root === host.shadowRoot;
+        try { host.attachShadow({ mode: "open" }); } catch (error) { global.shadowError = (error as Error).name; }
+        return 1;
+      }), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure).toBeNull();
+    expect(await page.evaluate(() => {
+      const global = globalThis as any;
+      const preserved = global.Element.prototype.attachShadow === global.appAttachShadow;
+      const host = global.document.createElement("div");
+      global.document.body.append(host);
+      host.attachShadow({ mode: "open" }).innerHTML = "<div id='spinner'>loading</div>";
+      return { preserved, reads: global.modeReads, returned: global.rootReturned, error: global.shadowError };
+    })).toEqual({ preserved: true, reads: 1, returned: true, error: "NotSupportedError" });
+  } finally { await opened.value.close(); }
+});
+
+for (const state of ["visible", "attached"] as const) {
+  test.each(["overlap", "gap", "hidden-replacement"] as const)(`attribute membership handoff (${state}): %s`, async (scenario) => {
+    const audit = { ...auditCase(`${pages.url}/multi-ready.html`), readyCondition: { selector: ".ready", state } };
+    const opened = await browser.acquireCase(audit);
+    if (!opened.ok) throw new Error(opened.failure.code);
+    const page = opened.value.page;
+    try {
+      await page.evaluate((scenario) => {
+        const second = (globalThis as any).document.querySelectorAll("main")[1];
+        second.className = "";
+        second.hidden = scenario === "hidden-replacement";
+      }, scenario);
+      const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+        facts: { elementsInspected: await guarded.evaluate((scenario) => {
+          const [first, second] = (globalThis as any).document.querySelectorAll("main");
+          if (scenario === "gap") first.classList.remove("ready");
+          second.classList.add("ready");
+          if (scenario !== "gap") first.classList.remove("ready");
+          second.hidden = false;
+          return 1;
+        }, scenario), violations: [] }, failure: null,
+      }));
+      const lost = scenario === "gap" || (state === "visible" && scenario === "hidden-replacement");
+      expect(outcome.failure?.code ?? null).toBe(lost ? "ready-lost" : null);
+      expect(outcome.facts.elementsInspected).toBe(lost ? 0 : 1);
+      expect(await page.locator(".ready").isVisible()).toBe(true);
+    } finally { await opened.value.close(); }
+  });
+}
+
+test.each(["unrelated", "sibling", "has", "stylesheet"] as const)("complex CSS attribute dependency: %s", async (scenario) => {
+  const opened = await browser.acquireCase(auditCase(`${pages.url}/text-mutation.html`));
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    await page.evaluate((scenario) => {
+      const doc = (globalThis as any).document;
+      doc.body.innerHTML = "<main><aside class='gate'>gate</aside><div id='ready'>content</div></main><footer>clock</footer>";
+      if (scenario === "stylesheet") doc.head.insertAdjacentHTML("beforeend", "<style>.gate + #ready{display:none}</style>");
+      if (scenario === "stylesheet") doc.querySelector("aside").className = "";
+    }, scenario);
+    const selector = scenario === "sibling" ? ".gate + #ready" : scenario === "has" ? "main:has(.gate) #ready" : "main #ready";
+    const audit = auditCase(page.url(), { ready: selector });
+    expect(await page.locator(selector).isVisible()).toBe(true);
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate((scenario) => {
+        const doc = (globalThis as any).document;
+        const target = doc.querySelector(scenario === "unrelated" ? "footer" : "aside");
+        const original = target.className;
+        target.className = scenario === "stylesheet" ? "gate" : "tick";
+        target.className = scenario === "unrelated" ? "tock" : original;
+        return 1;
+      }, scenario), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure?.code ?? null).toBe(scenario === "unrelated" ? null : "ready-lost");
+    expect(outcome.facts.elementsInspected).toBe(scenario === "unrelated" ? 1 : 0);
+    expect(await page.locator(selector).isVisible()).toBe(true);
+  } finally { await opened.value.close(); }
+});
+
+for (const writable of [true, false]) {
+  test.each(["stable", "transient", "missing"] as const)(`application-owned ready recheck binding (writable=${writable}): %s`, async (scenario) => {
+    const audit = auditCase(`${server.url}/role-ready.html`, { ready: "role=main" });
+    const opened = await browser.acquireCase(audit);
+    if (!opened.ok) throw new Error(opened.failure.code);
+    const page = opened.value.page;
+    try {
+      await page.evaluate(({ writable, scenario }) => {
+        const global = globalThis as any;
+        global.appRecheckCalls = 0;
+        global.appRecheck = () => { global.appRecheckCalls += 1; return scenario === "missing"; };
+        Object.defineProperty(global, "__vlintReadyRecheck", { value: global.appRecheck, writable, configurable: false });
+        if (scenario === "missing") global.document.querySelector("#ready").remove();
+      }, { writable, scenario });
+      const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+        facts: { elementsInspected: await guarded.evaluate((scenario) => {
+          const doc = (globalThis as any).document;
+          if (scenario === "transient") {
+            doc.querySelector("#ready").setAttribute("role", "button");
+            doc.querySelector("#ready").setAttribute("role", "main");
+          } else {
+            const footer = doc.createElement("footer");
+            doc.body.append(footer);
+            footer.textContent = "tick";
+            footer.remove();
+          }
+          return 1;
+        }, scenario), violations: [] }, failure: null,
+      }));
+      expect(outcome.failure?.code ?? null).toBe(scenario === "stable" ? null : "ready-lost");
+      expect(outcome.facts.elementsInspected).toBe(scenario === "stable" ? 1 : 0);
+      expect(await page.evaluate(() => {
+        const global = globalThis as any;
+        return { preserved: global.__vlintReadyRecheck === global.appRecheck, calls: global.appRecheckCalls };
+      })).toEqual({ preserved: true, calls: 0 });
+    } finally { await opened.value.close(); }
+  });
+}
+
+test.each(["clock", "explicit", "implicit", "shadow", "aria-hidden"] as const)("hidden bare role mutation history: %s", async (scenario) => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`), readyCondition: { selector: "role=progressbar", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    if (scenario === "aria-hidden") await page.evaluate(() => {
+      (globalThis as any).document.body.insertAdjacentHTML("beforeend", "<progress aria-hidden='true'></progress>");
+    });
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate((scenario) => {
+        const doc = (globalThis as any).document;
+        if (scenario === "aria-hidden") {
+          const progress = doc.querySelector("progress");
+          progress.removeAttribute("aria-hidden");
+          progress.setAttribute("aria-hidden", "true");
+        } else {
+          const element = doc.createElement(scenario === "implicit" ? "progress" : scenario === "clock" ? "footer" : "div");
+          if (scenario === "explicit") element.setAttribute("role", "progressbar");
+          if (scenario === "shadow") element.attachShadow({ mode: "open" }).innerHTML = "<progress></progress>";
+          element.style.cssText = "width:20px;height:20px";
+          doc.body.append(element);
+          element.append("tick");
+          element.firstChild.data = "tock";
+          element.textContent = "next";
+          element.remove();
+        }
+        return 1;
+      }, scenario), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure?.code ?? null).toBe(scenario === "clock" ? null : "ready-lost");
+    expect(outcome.facts.elementsInspected).toBe(scenario === "clock" ? 1 : 0);
+    expect(await page.locator("role=progressbar").count()).toBe(0);
+  } finally { await opened.value.close(); }
+});
+
+for (const state of ["visible", "attached"] as const) {
+  test.each(["loss", "case-change", "substring", "clock", "aria-label", "labelledby-stable", "labelledby-loss", "second-match", "both-matches", "explicit-role"] as const)(`role button accessible-name history (${state}): %s`, async (scenario) => {
+    const opened = await browser.acquireCase(auditCase(`${pages.url}/text-mutation.html`));
+    if (!opened.ok) throw new Error(opened.failure.code);
+    const page = opened.value.page;
+    try {
+      await page.evaluate((scenario) => {
+        const doc = (globalThis as any).document;
+        doc.body.innerHTML = "<button id='ready'>Ready</button><aside id='clock'>tick</aside><span id='label'>Ready</span>";
+        if (scenario === "aria-label") doc.querySelector("button").setAttribute("aria-label", "Ready");
+        if (scenario.startsWith("labelledby")) doc.querySelector("button").setAttribute("aria-labelledby", "label");
+        if (scenario === "second-match" || scenario === "both-matches") doc.body.insertAdjacentHTML("beforeend", "<button id='second'>Ready</button>");
+        if (scenario === "explicit-role") doc.querySelector("button").outerHTML = "<div role='button' id='ready'>Ready</div>";
+      }, scenario);
+      const audit = { ...auditCase(page.url()), readyCondition: { selector: 'role=button[name="Ready"]', state } };
+      expect(await page.locator(audit.readyCondition.selector).count()).toBeGreaterThan(0);
+      const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+        facts: { elementsInspected: await guarded.evaluate((scenario) => {
+          const doc = (globalThis as any).document;
+          const text = doc.querySelector(scenario === "clock" ? "#clock" : scenario === "labelledby-loss" ? "#label" : "#ready").firstChild;
+          const original = text.data;
+          text.data = scenario === "case-change" ? "ready" : scenario === "substring" ? "Not Ready" : "Busy";
+          if (scenario === "both-matches") doc.querySelector("#second").firstChild.data = "Busy";
+          text.data = original;
+          if (scenario === "both-matches") doc.querySelector("#second").firstChild.data = "Ready";
+          return 1;
+        }, scenario), violations: [] }, failure: null,
+      }));
+      const lost = ["loss", "case-change", "substring", "labelledby-loss", "both-matches", "explicit-role"].includes(scenario);
+      expect(outcome.failure?.code ?? null).toBe(lost ? "ready-lost" : null);
+      expect(outcome.facts.elementsInspected).toBe(lost ? 0 : 1);
+      expect(await page.locator(audit.readyCondition.selector).first().isVisible()).toBe(true);
+    } finally { await opened.value.close(); }
+  });
+}
+
+test.each(["installation", "invocation"] as const)("an unavailable readiness recheck is incomplete: %s", async (scenario) => {
+  const audit = auditCase(`${server.url}/role-ready.html`, { ready: "role=main" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  const context = page.context();
+  const exposeBinding = context.exposeBinding;
+  try {
+    if (scenario === "installation") context.exposeBinding = async () => { throw new Error("binding unavailable"); };
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(() => {
+        const global = globalThis as any;
+        for (const name of Object.getOwnPropertyNames(global)) if (name.startsWith("__vlintReadyRecheck_")) global[name] = undefined;
+        return 1;
+      }), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure?.code).toBe("ready-lost");
+    expect(outcome.facts.elementsInspected).toBe(0);
+  } finally { context.exposeBinding = exposeBinding; await opened.value.close(); }
+});
+
+test("attribute history uses inert copies without constructing application custom elements", async () => {
+  const opened = await browser.acquireCase(auditCase(`${pages.url}/multi-ready.html`));
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    await page.evaluate(() => {
+      const global = globalThis as any;
+      global.constructed = 0;
+      global.customElements.define("ready-view", class extends global.HTMLElement {
+        constructor() { super(); global.constructed += 1; }
+      });
+      global.document.body.innerHTML = "<ready-view class='ready' style='display:block'>one</ready-view><ready-view style='display:block'>two</ready-view>";
+    });
+    const audit = auditCase(page.url(), { ready: ".ready" });
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(() => {
+        const [first, second] = (globalThis as any).document.querySelectorAll("ready-view");
+        second.className = "ready";
+        first.className = "";
+        return 1;
+      }), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure).toBeNull();
+    expect(outcome.facts.elementsInspected).toBe(1);
+    expect(await page.evaluate(() => (globalThis as any).constructed)).toBe(2);
+  } finally { await opened.value.close(); }
+});
+
+test.each(["empty-role", "invalid-role", "initially-hidden"] as const)("hidden progressbar candidates excluded by initial snapshot: %s", async (scenario) => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`), readyCondition: { selector: "role=progressbar", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    if (scenario === "initially-hidden") await page.evaluate(() => {
+      (globalThis as any).document.body.insertAdjacentHTML("beforeend", "<progress hidden></progress>");
+    });
+    expect(await page.locator("role=progressbar").count()).toBe(0);
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate((scenario) => {
+        const doc = (globalThis as any).document;
+        if (scenario === "initially-hidden") {
+          const progress = doc.querySelector("progress");
+          progress.hidden = false;
+          progress.hidden = true;
+        } else {
+          const progress = doc.createElement("progress");
+          progress.setAttribute("role", scenario === "empty-role" ? "" : "invalid-role");
+          doc.body.append(progress);
+          progress.remove();
+        }
+        return 1;
+      }, scenario), violations: [] }, failure: null,
+    }));
+    expect(outcome.failure?.code).toBe("ready-lost");
+    expect(outcome.facts.elementsInspected).toBe(0);
+  } finally { await opened.value.close(); }
+});
+
+test.each(["detached-match", "detached-ancestor", "connected-overlap"] as const)("attached attribute membership tracks historical attachment: %s", async (scenario) => {
+  const audit = { ...auditCase(`${pages.url}/multi-ready.html`), readyCondition: { selector: ".ready", state: "attached" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    await page.evaluate(() => {
+      const doc = (globalThis as any).document;
+      doc.body.innerHTML = "<main class='ready'>one</main><section><main>two</main></section>";
+    });
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate((scenario) => {
+        const [first, second] = (globalThis as any).document.querySelectorAll("main");
+        const removed = scenario === "detached-ancestor" ? second.parentNode : second;
+        if (scenario !== "connected-overlap") removed.remove();
+        second.className = "ready";
+        first.className = "";
+        first.className = "ready";
+        if (scenario === "connected-overlap") removed.remove();
+        return 1;
+      }, scenario), violations: [] }, failure: null,
+    }));
+    const lost = scenario !== "connected-overlap";
+    expect(outcome.failure?.code ?? null).toBe(lost ? "ready-lost" : null);
+    expect(outcome.facts.elementsInspected).toBe(lost ? 0 : 1);
+    expect(await page.locator(".ready").count()).toBe(1);
+  } finally { await opened.value.close(); }
+});
+
+test("hidden bare role detects structural stylesheet visibility changes", async () => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`), readyCondition: { selector: "role=progressbar", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    await page.evaluate(() => {
+      const doc = (globalThis as any).document;
+      doc.head.insertAdjacentHTML("beforeend", "<style>progress{display:none} body:has(footer .tick) progress{display:block}</style>");
+      doc.body.innerHTML = "<progress></progress><footer></footer>";
+    });
+    expect(await page.locator("progress").isVisible()).toBe(false);
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate(() => {
+        const global = globalThis as any;
+        const tick = global.document.createElement("span");
+        tick.className = "tick";
+        global.document.querySelector("footer").append(tick);
+        const progress = global.document.querySelector("progress");
+        global.progressWasVisible = progress.checkVisibility() && progress.getBoundingClientRect().width > 0 && progress.getBoundingClientRect().height > 0;
+        tick.remove();
+        return 1;
+      }), violations: [] }, failure: null,
+    }));
+    expect(await page.evaluate(() => (globalThis as any).progressWasVisible)).toBe(true);
+    expect(await page.locator("progress").isVisible()).toBe(false);
+    expect(outcome.failure?.code).toBe("ready-lost");
+    expect(outcome.facts.elementsInspected).toBe(0);
+  } finally { await opened.value.close(); }
+});
+
+test.each(["never-connected", "connected-transient"] as const)("hidden readiness distinguishes detached shadow construction: %s", async (scenario) => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`), readyCondition: { selector: "#spinner", state: "hidden" as const } };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const page = opened.value.page;
+  try {
+    const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+      facts: { elementsInspected: await guarded.evaluate((scenario) => {
+        const doc = (globalThis as any).document;
+        const host = doc.createElement("div");
+        const root = host.attachShadow({ mode: "open" });
+        root.innerHTML = "<div id='spinner'>loading</div>";
+        if (scenario === "connected-transient") {
+          doc.body.append(host);
+          root.replaceChildren();
+          host.remove();
+        }
+        return 1;
+      }, scenario), violations: [] }, failure: null,
+    }));
+    const lost = scenario === "connected-transient";
+    expect(outcome.failure?.code ?? null).toBe(lost ? "ready-lost" : null);
+    expect(outcome.facts.elementsInspected).toBe(lost ? 0 : 1);
+  } finally { await opened.value.close(); }
+});
+
+for (const state of ["visible", "attached"] as const) {
+  test.each(["overlap", "gap"] as const)(`role button newly matching accessible-name handoff (${state}): %s`, async (scenario) => {
+    const opened = await browser.acquireCase(auditCase(`${pages.url}/text-mutation.html`));
+    if (!opened.ok) throw new Error(opened.failure.code);
+    const page = opened.value.page;
+    try {
+      await page.evaluate(() => {
+        (globalThis as any).document.body.innerHTML = "<button id='first'>Ready</button><button id='second'>Busy</button>";
+      });
+      const audit = { ...auditCase(page.url()), readyCondition: { selector: 'role=button[name="Ready"]', state } };
+      const outcome = await measureRule(page, audit, page.url(), async (guarded) => ({
+        facts: { elementsInspected: await guarded.evaluate((scenario) => {
+          const doc = (globalThis as any).document;
+          if (scenario === "gap") doc.querySelector("#first").firstChild.data = "Busy";
+          doc.querySelector("#second").firstChild.data = "Ready";
+          if (scenario === "overlap") doc.querySelector("#first").firstChild.data = "Busy";
+          return 1;
+        }, scenario), violations: [] }, failure: null,
+      }));
+      const lost = scenario === "gap";
+      expect(outcome.failure?.code ?? null).toBe(lost ? "ready-lost" : null);
+      expect(outcome.facts.elementsInspected).toBe(lost ? 0 : 1);
+      expect(await page.locator(audit.readyCondition.selector).isVisible()).toBe(true);
+    } finally { await opened.value.close(); }
+  });
+}

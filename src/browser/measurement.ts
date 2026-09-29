@@ -8,6 +8,7 @@ interface GuardState {
   readonly url: string;
   readonly readyCondition: { readonly selector: string; readonly state: ReadyState } | null;
   readonly slot: string;
+  recheckBinding: string | null;
 }
 
 type EvaluationRequest =
@@ -48,6 +49,7 @@ interface ReadyElement extends ReadyNode {
 
 interface GuardedDocument extends ReadyRoot {
   createRange(): { selectNode(node: ReadyNode): void; getBoundingClientRect(): { width: number; height: number } };
+  readonly implementation: { createHTMLDocument(): { importNode(node: ReadyElement, deep: boolean): ReadyElement } };
 }
 
 interface MutationEvidence {
@@ -76,6 +78,7 @@ interface InspectionInput {
   readonly native: boolean;
   readonly recheck: boolean;
   readonly matches?: readonly ReadyElement[];
+  readonly buttonCandidates?: readonly ReadyElement[];
 }
 
 const PLAYWRIGHT_ENGINE_PREFIX = /^(?:text|xpath|role|nth|id|data-testid|data-test-id|data-test|alt|label|placeholder|title|testid|aria-ref)=/;
@@ -105,7 +108,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     history: { pushState: (...args: unknown[]) => unknown; replaceState: (...args: unknown[]) => unknown };
     addEventListener(type: string, callback: () => void): void;
     removeEventListener(type: string, callback: () => void): void;
-    __vlintReadyRecheck?: (selector: string, state: ReadyState) => Promise<boolean>;
+    Element: { prototype: { attachShadow: (this: ReadyElement, options: { mode: string }) => ReadyRoot } };
   };
   const slots = globalThis as unknown as Record<string, RuleGuard | undefined>;
   if (request.kind !== "start") {
@@ -219,11 +222,13 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   let invalid: GuardedValue["invalid"] = null;
   let invalidUrl = global.location.href;
   const playwrightReady = async (): Promise<boolean> => {
-    if (rawSelector === null || typeof global.__vlintReadyRecheck !== "function") return true;
+    if (rawSelector === null) return true;
+    const binding = guard.recheckBinding === null ? undefined : (globalThis as unknown as Record<string, unknown>)[guard.recheckBinding];
+    if (typeof binding !== "function") return false;
     try {
-      return await global.__vlintReadyRecheck(rawSelector, state);
+      return await binding(rawSelector, state);
     } catch {
-      return true;
+      return false;
     }
   };
   const pending: Array<Promise<void>> = [];
@@ -320,7 +325,71 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     return anchors.some((anchor) => includesReady(anchor, target as ReadyElement) &&
       changed.some((node) => elementsIn(node).some((element) => element.matches(hasScope[2]!))));
   };
+  const attributeDependency = (css: string, name: string, before: string | null, after: string | null): boolean => {
+    if (css.includes("\\") || css.includes("/*") || css.includes("|") || css.includes("@import") || /:(?!has\(|is\(|where\(|not\()[\w-]+/.test(css)) return true;
+    const attributes = Array.from(css.matchAll(/\[\s*([-\w:]+)/g));
+    if ((css.includes("[") && attributes.length === 0) || attributes.some((match) => match[1]!.toLowerCase() === name.toLowerCase())) return true;
+    const values = `${before ?? ""} ${after ?? ""}`.split(/\s+/).filter(Boolean);
+    if (name === "class") return values.some((value) => css.toLowerCase().includes(`.${value.toLowerCase()}`));
+    if (name === "id") return values.some((value) => css.toLowerCase().includes(`#${value.toLowerCase()}`));
+    return false;
+  };
+  const stylesheetDependency = (dependsOn: (css: string) => boolean): boolean => {
+    if (!readyDependsOnVisibility) return false;
+    let dependent = false;
+    eachRoot((root) => {
+      const sheets = root as unknown as { styleSheets?: Iterable<{ cssRules: Iterable<{ cssText: string }> }>; adoptedStyleSheets?: Iterable<{ cssRules: Iterable<{ cssText: string }> }> };
+      try {
+        for (const sheet of [...sheets.styleSheets ?? [], ...sheets.adoptedStyleSheets ?? []]) {
+          for (const rule of sheet.cssRules) if (dependsOn(rule.cssText)) dependent = true;
+        }
+      } catch { dependent = true; }
+    });
+    return dependent;
+  };
+  const stylesheetAttributeDependency = (name: string, before: string | null, after: string | null): boolean =>
+    stylesheetDependency((css) => attributeDependency(css, name, before, after));
+  const stylesheetStructuralDependency = (): boolean => stylesheetDependency((css) =>
+    css.includes("@") || Array.from(css.matchAll(/([^{}]+)\{/g)).some((match) => /[:+~]/.test(match[1]!)));
   const inspectHistory = (records: readonly MutationEvidence[]): void => {
+    const attributeCopies = new Map<ReadyElement, ReadyElement>();
+    const historicalParents = new Map<ReadyNode, ReadyNode | null>();
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      const record = records[index]!;
+      if (record.type !== "childList") continue;
+      for (const node of record.addedNodes) historicalParents.set(node, null);
+      for (const node of record.removedNodes) historicalParents.set(node, record.target as ReadyNode);
+    }
+    const historicallyAttached = (element: ReadyElement): boolean => {
+      for (let node: ReadyNode | null = element; node !== null;) {
+        if (node === global.document as unknown as ReadyNode) return true;
+        node = historicalParents.has(node) ? historicalParents.get(node)! :
+          node.parentNode ?? (node as unknown as ReadyRoot).host ?? null;
+      }
+      return false;
+    };
+    const nextAttribute = new Map<MutationEvidence, string | null>();
+    const attributeDocument = records.some((record) => record.type === "attributes") ? global.document.implementation.createHTMLDocument() : null;
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      const record = records[index]!;
+      if (record.type !== "attributes") continue;
+      const target = record.target as ReadyElement;
+      let copy = attributeCopies.get(target);
+      if (copy === undefined) { copy = attributeDocument!.importNode(target, false); attributeCopies.set(target, copy); }
+      const name = record.attributeName!;
+      nextAttribute.set(record, copy.getAttribute(name));
+      if (record.oldValue == null) copy.removeAttribute(name);
+      else copy.setAttribute(name, record.oldValue);
+    }
+    const historicallyVisible = (element: ReadyElement): boolean => {
+      for (let ancestor: ReadyElement | null = element; ancestor !== null; ancestor = ancestor.parentNode?.nodeType === 1 ? ancestor.parentNode : ancestor.getRootNode().host ?? null) {
+        if (ancestor.nodeType !== 1) break;
+        const copy = attributeCopies.get(ancestor);
+        if (copy?.getAttribute("hidden") != null) return false;
+        if (copy !== undefined && copy.getAttribute("style") !== ancestor.getAttribute("style")) return false;
+      }
+      return visibleNodes.has(element) || isVisible(element);
+    };
     const unaffectedTextReady = textQuery !== null && state !== "hidden" &&
       Array.from(state === "attached" ? readyNodes : visibleNodes).some((ready) =>
         ready.isConnected && stillMatches(ready) && (state === "attached" || isVisible(ready)) &&
@@ -343,8 +412,10 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
       if (record.type === "childList") {
         const addedNodes = Array.from(record.addedNodes);
         const removedNodes = Array.from(record.removedNodes);
+        for (const node of removedNodes) historicalParents.set(node, null);
+        for (const node of addedNodes) historicalParents.set(node, record.target as ReadyNode);
         const changed = [...addedNodes, ...removedNodes];
-        if (state === "hidden" && changed.some((node) => elementsIn(node).some((element) => element.shadowRoot))) { markLost(); break; }
+        if (state === "hidden" && changed.some((node) => elementsIn(node).some((element) => element.shadowRoot && !observedRoots.has(element.shadowRoot)))) { markLost(); break; }
         if (changesStylesheet(record.target as ReadyNode, changed)) { markLost(); break; }
         if (complexSelector && affectsComplexReady(record.target as ReadyNode, changed)) { markLost(); break; }
         if (complexSelector) continue;
@@ -388,6 +459,27 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
       const name = record.attributeName ?? "";
       const affectsMatch = selector !== null && (name === "id" || name === "class" || selector.includes(name));
       const affectsReady = Array.from(readyNodes).some((ready) => includesReady(element, ready));
+      const copy = attributeCopies.get(element)!;
+      const before = copy.getAttribute(name);
+      const after = nextAttribute.get(record) ?? null;
+      if (after === null) copy.removeAttribute(name);
+      else copy.setAttribute(name, after);
+      const selectorDependency = attributeDependency(selector ?? "", name, before, after);
+      const styleDependency = stylesheetAttributeDependency(name, before, after);
+      if (complexSelector && !affectsReady && !selectorDependency && !styleDependency && (name === "id" || name === "class")) continue;
+      if (nativeSelector && !recheckViaPlaywright && !complexSelector && selectorDependency && !styleDependency && state !== "hidden") {
+        if (historicallyAttached(element) && copy.matches(selector!)) {
+          readyNodes.add(element);
+          if (historicallyVisible(element)) visibleNodes.add(element);
+          else visibleNodes.delete(element);
+        } else {
+          readyNodes.delete(element);
+          visibleNodes.delete(element);
+        }
+        if (state === "attached" ? readyNodes.size === 0 : visibleNodes.size === 0) markLost();
+        continue;
+      }
+      if (styleDependency && readyDependsOnVisibility) { markLost(); continue; }
       if (state === "hidden") {
         if (affectsReady || complexSelector || (affectsMatch && (couldMatch(element) ||
           (name === "id" && selector === `#${record.oldValue}`) ||
@@ -414,6 +506,57 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
     }
   };
 
+  const bareRole = selector?.match(/^role=(progressbar|main|button)$/)?.[1] ?? null;
+  const namedButton = selector?.match(/^role=button\[name=(["'])(.*?)\1\]$/)?.[2] ?? null;
+  const roleCandidate = (element: ReadyElement): boolean => {
+    const explicit = element.getAttribute("role");
+    if (explicit?.toLowerCase().split(/\s+/).includes(bareRole ?? "")) return true;
+    return (bareRole === "progressbar" && element.nodeName === "PROGRESS") ||
+      (bareRole === "main" && element.nodeName === "MAIN") ||
+      (bareRole === "button" && (element.nodeName === "BUTTON" || element.nodeName === "SUMMARY" ||
+        (element.nodeName === "INPUT" && /^(button|submit|reset|image)$/.test(element.type ?? ""))));
+  };
+  const roleAncestor = (node: ReadyNode): boolean => {
+    for (let element = node.nodeType === 1 ? node as ReadyElement : (node as unknown as ReadyRoot).host ?? node.parentNode; element !== null; element = element.parentNode?.nodeType === 1 ? element.parentNode : element.getRootNode().host ?? null) {
+      if (element.nodeType !== 1) break;
+      if (roleCandidate(element)) return true;
+    }
+    return false;
+  };
+  const inspectButtonTextHistory = (records: readonly MutationEvidence[]): void => {
+    if (namedButton === null) return;
+    const history = new Map<ReadyNode, string>();
+    const next = new Map<MutationEvidence, string>();
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      const record = records[index]!;
+      if (record.type !== "characterData") continue;
+      const node = record.target as ReadyNode;
+      next.set(record, history.get(node) ?? node.textContent ?? "");
+      history.set(node, record.oldValue ?? "");
+    }
+    const normalize = (value: string): string => value.replace(/\s+/g, " ").trim();
+    const candidates = new Set([...snapshot, ...input.buttonCandidates ?? []]);
+    for (const record of records) {
+      if (record.type !== "characterData") continue;
+      history.set(record.target as ReadyNode, next.get(record)!);
+      textOverrides = history;
+      const matching = Array.from(candidates).filter((ready) => {
+        const references = ready.getAttribute("aria-labelledby")?.split(/\s+/).flatMap((id) =>
+          Array.from(ready.getRootNode().querySelectorAll("[id]")).filter((element) => element.getAttribute("id") === id)) ?? [];
+        const label = ready.getAttribute("aria-label");
+        const sources = references.length > 0 ? references : label?.trim() ? [] : [ready];
+        if (!sources.some((source) => Array.from(history.keys()).some((node) => includesReady(source, node as ReadyElement)))) return snapshot.includes(ready);
+        if (sources.some((source) => source.shadowRoot || source.querySelectorAll("*").length > 0)) return false;
+        const name = sources.map(textValue).join(" ");
+        return normalize(name) === normalize(namedButton);
+      });
+      textOverrides = null;
+      const satisfied = state === "hidden" ? !matching.some(isVisible) :
+        matching.some((ready) => ready.isConnected && (state === "attached" || isVisible(ready)));
+      if (!satisfied) { markLost(); break; }
+    }
+  };
+
   const status = (value: unknown): GuardedValue => ({ value, invalid, url: invalid === null ? global.location.href : invalidUrl });
   const verify = async (): Promise<void> => {
     verifyGuards();
@@ -425,22 +568,33 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   const observationOptions = { subtree: true, childList: true, attributes: true, attributeOldValue: true, characterData: true, characterDataOldValue: true };
   const observedRoots = new Set<ReadyRoot>([global.document]);
   const observer = new global.MutationObserver((records) => {
-    if (invalid === null && guard.readyCondition !== null) observeRoots();
     if (invalid === null && guard.readyCondition !== null && !input.recheck) inspectHistory(records);
+    if (input.recheck) inspectButtonTextHistory(records);
     if (input.recheck) for (const record of records) {
       if (record.type === "attributes") {
         const target = record.target as ReadyElement;
         const name = record.attributeName ?? "";
         const matchedReady = snapshot.some((ready) => includesReady(target, ready));
-        const hiddenCandidate = state === "hidden" && rawSelector?.includes(name) === true;
+        const hiddenCandidate = state === "hidden" && (bareRole === null ? rawSelector?.includes(name) === true :
+          (name === "role" && record.oldValue?.split(/\s+/).includes(bareRole)) ||
+          elementsIn(target).some(roleCandidate) || roleAncestor(target) ||
+          stylesheetAttributeDependency(name, record.oldValue ?? null, target.getAttribute(name)));
         const dependencyCandidate = state !== "hidden" && relationalSelector && rawSelector?.includes(name) === true;
         if (matchedReady || hiddenCandidate || dependencyCandidate) markLost();
       }
-      if (record.type === "characterData" && rawSelector?.includes("text")) markLost();
-      if (record.type === "childList" && (state === "hidden" ||
-        [...record.addedNodes, ...record.removedNodes].some((node) => snapshot.some((ready) => includesReady(node, ready))))) markLost();
+      if (record.type === "characterData" && (rawSelector?.includes("text") ||
+        (rawSelector?.startsWith("role=") && rawSelector.includes("[name=") && namedButton === null) ||
+        (state === "hidden" && bareRole !== null && roleAncestor(record.target as ReadyNode)))) markLost();
+      if (record.type === "childList") {
+        const changed = [...record.addedNodes, ...record.removedNodes];
+        const hiddenCandidate = state === "hidden" && (bareRole === null || changed.flatMap(elementsIn).some((element) =>
+          roleCandidate(element) || (element.shadowRoot && !observedRoots.has(element.shadowRoot))) ||
+          roleAncestor(record.target as ReadyNode) || changesStylesheet(record.target as ReadyNode, changed) || stylesheetStructuralDependency());
+        if (hiddenCandidate || changed.some((node) => snapshot.some((ready) => includesReady(node, ready)))) markLost();
+      }
       requestPlaywrightRecheck();
     }
+    if (invalid === null && guard.readyCondition !== null) observeRoots();
     if (!input.recheck) verifyGuards();
   });
   const observeRoots = (): void => {
@@ -452,6 +606,17 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   };
   observer.observe(global.document, observationOptions);
   if (guard.readyCondition !== null) observeRoots();
+  const attachShadow = global.Element.prototype.attachShadow;
+  let active = true;
+  const guardedAttachShadow = function (this: ReadyElement, ...args: Parameters<typeof attachShadow>): ReadyRoot {
+    const root = attachShadow.apply(this, args);
+    if (active && guard.readyCondition !== null && this.isConnected && this.shadowRoot === root) {
+      observer.observe(root, observationOptions);
+      observedRoots.add(root);
+    }
+    return root;
+  };
+  if (guard.readyCondition !== null) global.Element.prototype.attachShadow = guardedAttachShadow;
   const pushState = global.history.pushState;
   const replaceState = global.history.replaceState;
   const guardedPushState = function (this: typeof global.history, ...values: unknown[]) { const result = pushState.apply(this, values); verifyGuards(); return result; };
@@ -461,6 +626,8 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   global.addEventListener("popstate", verifyGuards);
   global.addEventListener("hashchange", verifyGuards);
   const release = (): void => {
+    active = false;
+    if (global.Element.prototype.attachShadow === guardedAttachShadow) global.Element.prototype.attachShadow = attachShadow;
     observer.disconnect();
     if (global.history.pushState === guardedPushState) global.history.pushState = pushState;
     if (global.history.replaceState === guardedReplaceState) global.history.replaceState = replaceState;
@@ -491,7 +658,7 @@ async function inspectInPage(input: InspectionInput): Promise<GuardedValue> {
   return status(null);
 }
 
-const recheckContexts = new WeakSet<BrowserContext>();
+const recheckContexts = new WeakMap<BrowserContext, Promise<string>>();
 
 async function readyWithPlaywright(page: Page, selector: string, state: ReadyState): Promise<boolean> {
   const locator = page.locator(selector);
@@ -505,26 +672,32 @@ async function readyWithPlaywright(page: Page, selector: string, state: ReadySta
   return state === "hidden";
 }
 
-async function ensureRecheck(page: Page): Promise<void> {
+function ensureRecheck(page: Page): Promise<string> {
   const context = page.context();
-  if (recheckContexts.has(context)) return;
-  recheckContexts.add(context);
-  try {
-    await context.exposeBinding("__vlintReadyRecheck", (source, selector: string, state: ReadyState) =>
-      readyWithPlaywright(source.page, selector, state));
-  } catch {
-    recheckContexts.delete(context);
+  let installation = recheckContexts.get(context);
+  if (installation === undefined) {
+    const name = `__vlintReadyRecheck_${randomBytes(16).toString("hex")}`;
+    installation = context.exposeBinding(name, (source, selector: string, state: ReadyState) =>
+      readyWithPlaywright(source.page, selector, state)).then(() => name);
+    recheckContexts.set(context, installation);
   }
+  return installation;
 }
 
 async function evaluateObserved(page: Page, guard: GuardState, request: EvaluationRequest): Promise<GuardedValue> {
   const semantics = selectorSemantics(guard.readyCondition?.selector ?? null);
   const input: InspectionInput = { request, guard, native: semantics.native, recheck: semantics.recheck };
   if (request.kind !== "start" || guard.readyCondition === null) return page.evaluate(inspectInPage, input);
-  return page.locator(guard.readyCondition.selector).evaluateAll((matches, payload) => {
-    const inspect = (0, eval)(`(${payload.script})`) as (value: InspectionInput) => Promise<GuardedValue>;
-    return inspect({ ...payload.input, matches: matches as unknown as readonly ReadyElement[] });
-  }, { input, script: inspectInPage.toString() });
+  const buttonCandidates = /^(?:css=)?role=button\[name=(["'])(.*?)\1\]$/.test(guard.readyCondition.selector) ?
+    await page.locator("role=button").elementHandles() : [];
+  try {
+    return await page.locator(guard.readyCondition.selector).evaluateAll((matches, payload) => {
+      const inspect = (0, eval)(`(${payload.script})`) as (value: InspectionInput) => Promise<GuardedValue>;
+      return inspect({ ...payload.input, matches: matches as unknown as readonly ReadyElement[], buttonCandidates: payload.buttonCandidates as unknown as readonly ReadyElement[] });
+    }, { input, script: inspectInPage.toString(), buttonCandidates });
+  } finally {
+    await Promise.all(buttonCandidates.map((candidate) => candidate.dispose()));
+  }
 }
 
 export function sameUrl(left: string, right: string): boolean {
@@ -545,11 +718,13 @@ export async function measureRule(
     url: new URL(fixedUrl).href,
     readyCondition: auditCase.readyCondition,
     slot: `__vlintRuleGuard_${randomBytes(16).toString("hex")}`,
+    recheckBinding: null,
   };
   let detected: GuardedValue | null = null;
   let started = false;
   const check = async (kind: "start" | "finish"): Promise<void> => {
     try {
+      if (kind === "start" && guard.readyCondition !== null) guard.recheckBinding = await ensureRecheck(page);
       const result = await evaluateObserved(page, guard, { kind });
       if (kind === "start" && result.invalid === null) started = true;
       if (result.invalid !== null && detected === null) detected = result;
@@ -562,7 +737,6 @@ export async function measureRule(
   };
   page.on("framenavigated", onNavigation);
   try {
-    if (guard.readyCondition !== null) await ensureRecheck(page);
     await check("start");
     const guarded = new Proxy(page, {
       get(source, property) {
