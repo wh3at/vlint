@@ -391,6 +391,7 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
     if (!excludeSelectors.some((selector) => element.matches(selector))) inspected.push(cell);
   }
   const neighbors = neighborsOf(cells);
+  if (excludeSelectors.includes("#neighbor")) console.log("[DEBUG-vlint-ci] indexed cells", cells.length, inspected.length);
   const overlaps: Overlap[] = [];
   // A text-backed icon paints a glyph rather than content the cell owns: `role="img"` marks
   // that character as an image, and `aria-hidden` marks an icon font's character as decorative.
@@ -400,9 +401,11 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
   for (const cell of inspected) {
     const cellBox = cell.rect;
     const adjacent = neighbors(cell);
+    if (excludeSelectors.includes("#neighbor")) console.log("[DEBUG-vlint-ci] found neighbors", adjacent.length);
     const walker = document.createTreeWalker(cell.element, NodeFilter.SHOW_TEXT);
     const range = document.createRange();
     const breaches = new Map<Element, number>();
+    if (excludeSelectors.includes("#neighbor")) console.log("[DEBUG-vlint-ci] scanning text");
     while (walker.nextNode()) {
       const text = walker.currentNode as Text;
       const parent = text.parentElement;
@@ -464,6 +467,7 @@ function extract({ excludeSelectors, stableAttrs, semanticAttrs }: {
       if (overlapPx > 1) overlaps.push({ cell: descriptor(cell.element), adjacent: descriptor(adjacent), geometry: cellBox, overlapPx });
     }
   }
+  if (excludeSelectors.includes("#neighbor")) console.log("[DEBUG-vlint-ci] extracted", overlaps.length);
   return { elementsInspected: inspected.length, overlaps, selectorError: null };
 }
 
@@ -487,6 +491,7 @@ export async function evaluateTableCellTextOverlap(
       semanticAttrs: LOCATOR_SEMANTIC_ATTRIBUTES,
     };
     data = await page.evaluate<Extraction>(`(${extract.toString()})(${JSON.stringify(args)}, (${createClippingEngine.toString()})(), (${createCellNeighbors.toString()}))`);
+    if (rule.excludeSelectors.includes("#neighbor")) console.error("[DEBUG-vlint-ci] page evaluation finished", data.overlaps.length);
   } catch {
     return { facts: { elementsInspected: 0, violations: [] }, failure: failure("rule-script-failed", "Table-cell text measurement could not read the page.") };
   }

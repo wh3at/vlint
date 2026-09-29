@@ -1187,6 +1187,7 @@ test("excluded cells remain neighbors without counting as inspected cells", asyn
   console.error("[DEBUG-vlint-ci] browser launched");
   try {
     const page = await browser.newPage({ viewport: { width: 800, height: 720 } });
+    page.on("console", (message) => console.error(message.text()));
     await page.setContent(`
       <style>body{margin:0;font:16px Arial}table{table-layout:fixed;width:240px;border-collapse:collapse}td{padding:0;height:40px;white-space:nowrap}</style>
       <table><tr><td id="source">VeryLongUnbrokenPropertyIdentifier</td><td id="neighbor"></td></tr></table>`);
