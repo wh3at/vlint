@@ -1086,7 +1086,7 @@ describe("compiled vlint binary acceptance", () => {
       expect(parsed.cases[1]?.rules.find((rule) => rule.name === "tabs")?.failure).toMatchObject({ code: "minimum-inspected-unmet", target: "tabs", device: "iphone-17", rule: "tabs" });
     }, CHECK_TIMEOUT);
 
-    test.each(["url", "ready"])("detects transient %s loss inside a local evaluator", async (mode) => {
+    test.each(["url", "ready", "url-persistent", "ready-persistent"])("checks local evaluator boundaries for %s changes", async (mode) => {
       const cwd = await tempDir();
       const filename = "transient-state-rule.ts";
       await copyFile(join(pluginFixtureRoot, filename), join(cwd, filename));
@@ -1096,12 +1096,19 @@ describe("compiled vlint binary acceptance", () => {
         provider: { type: "static", targets: [{ name: "fixture", url, readyCondition: { selector: "#ready" } }] },
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
-      expect(result.exitCode, result.stderr).toBe(2);
+      const persistent = mode.endsWith("persistent");
+      expect(result.exitCode, result.stderr).toBe(persistent ? 2 : 0);
       const parsed = JSON.parse(result.stdout) as RunResult;
+      expect(parsed.status).toBe(persistent ? "incomplete" : "clean");
       expect(parsed.cases[0]?.actualUrl).toBe(url);
-      const failure = parsed.cases[0]?.rules.find((rule) => rule.name === "transient-state")?.failure;
-      expect(failure).toMatchObject({ code: mode === "url" ? "url-mismatch" : "ready-lost", target: "fixture", device: "desktop", rule: "transient-state" });
-      if (mode === "url") expect(failure?.actualUrl).toContain("/different?token=observed#fragment");
+      const measured = parsed.cases[0]?.rules.find((rule) => rule.name === "transient-state");
+      if (persistent) {
+        expect(measured?.failure).toMatchObject({ code: mode.startsWith("url") ? "url-mismatch" : "ready-lost", target: "fixture", device: "desktop", rule: "transient-state" });
+        if (mode.startsWith("url")) expect(measured?.failure?.actualUrl).toContain("/different?token=observed#fragment");
+      } else {
+        expect(measured?.failure).toBeNull();
+        expect(measured?.elementsInspected).toBe(1);
+      }
     }, CHECK_TIMEOUT);
 
   },
