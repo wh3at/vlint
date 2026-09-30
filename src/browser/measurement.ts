@@ -1,5 +1,5 @@
 import type { Frame, Page, Request } from "playwright";
-import type { EffectiveAuditCase, ReadyState } from "../contracts/config";
+import type { EffectiveAuditCase } from "../contracts/config";
 import type { RuleEvaluationOutcome } from "../contracts/evaluation";
 import type { Failure } from "../contracts/failure";
 
@@ -36,27 +36,22 @@ export function allowedArrival(auditCase: Pick<EffectiveAuditCase, "url" | "allo
   return [auditCase.url, ...(auditCase.allowedUrls ?? [])].some((allowed) => sameUrl(allowed, url));
 }
 
-async function readySatisfied(page: Page, selector: string, state: ReadyState): Promise<boolean> {
-  const locator = page.locator(selector);
-  const count = await locator.count();
-  if (state === "attached") return count > 0;
-  for (let index = 0; index < count; index += 1) {
-    const visible = await locator.nth(index).isVisible();
-    if (state === "hidden" && visible) return false;
-    if (state === "visible" && visible) return true;
-  }
-  return state === "hidden";
-}
-
 async function checkBoundary(page: Page, auditCase: EffectiveAuditCase, fixedUrl: string): Promise<Failure | null> {
   let code: "url-mismatch" | "ready-lost" | "navigation-during-measurement" | null = null;
   let actualUrl = page.url();
   try {
+    const condition = auditCase.readyCondition;
+    let ready = true;
+    if (condition !== null) {
+      const locator = page.locator(condition.selector);
+      const matches = condition.state === "attached" ? locator : locator.filter({ visible: true });
+      const count = await matches.count();
+      ready = condition.state === "hidden" ? count === 0 : count > 0;
+    }
     const snapshot = await page.evaluate(() => ({ url: location.href, fonts: document.fonts.status }));
     actualUrl = snapshot.url;
     if (!sameUrl(actualUrl, fixedUrl)) code = "url-mismatch";
-    else if (snapshot.fonts !== "loaded" || (auditCase.readyCondition !== null &&
-      !await readySatisfied(page, auditCase.readyCondition.selector, auditCase.readyCondition.state))) code = "ready-lost";
+    else if (snapshot.fonts !== "loaded" || !ready) code = "ready-lost";
   } catch {
     actualUrl = page.url();
     code = !sameUrl(actualUrl, fixedUrl) ? "url-mismatch" : auditCase.readyCondition === null ? "navigation-during-measurement" : "ready-lost";

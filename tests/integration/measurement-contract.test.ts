@@ -1,4 +1,4 @@
-import { chromium, type Browser } from "playwright";
+import { chromium, selectors, type Browser } from "playwright";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createBrowserRunScope, type BrowserRunScope } from "../../src/browser/lifecycle";
 import { findManagedBrowser } from "../../src/browser/install";
@@ -74,6 +74,16 @@ function startPageServer(): PageServer {
 }
 
 beforeAll(async () => {
+  await selectors.register("boundarysample", () => ({
+    query: (root: Document | Element, selector: string) => root.querySelector(selector),
+    queryAll: (root: Document | Element, selector: string) => {
+      const change = (globalThis as any).boundaryChange;
+      (globalThis as any).boundaryChange = null;
+      if (change === "url") history.pushState({}, "", "/changed-during-boundary");
+      if (change === "fonts") Object.defineProperty(document.fonts, "status", { configurable: true, value: "loading" });
+      return Array.from(root.querySelectorAll(selector));
+    },
+  }), { contentScript: false });
   server = startFixtureServer();
   pages = startPageServer();
   const version = findManagedBrowser().browserVersion;
@@ -165,8 +175,8 @@ test("restored ready state and URL changes inside asynchronous evaluation are al
   expect(opened.ok).toBe(true);
   if (!opened.ok) return;
   const page = opened.value.page;
-  const changed = await measureRule(page, audit, page.url(), async (guarded) => {
-    await guarded.evaluate(async () => {
+  const changed = await measureRule(page, audit, page.url(), async (measuredPage) => {
+    await measuredPage.evaluate(async () => {
       const doc = (globalThis as any).document;
       doc.querySelector("#ready").remove();
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -176,8 +186,8 @@ test("restored ready state and URL changes inside asynchronous evaluation are al
     return { facts: { elementsInspected: 1, violations: [] }, failure: null };
   });
   expect(changed.failure).toBeNull();
-  const moved = await measureRule(page, audit, page.url(), async (guarded) => {
-    await guarded.evaluate(async () => {
+  const moved = await measureRule(page, audit, page.url(), async (measuredPage) => {
+    await measuredPage.evaluate(async () => {
       (globalThis as any).history.pushState({}, "", "/other?token=abc#part");
       await new Promise((resolve) => setTimeout(resolve, 20));
       (globalThis as any).history.replaceState({}, "", "/");
@@ -1012,6 +1022,50 @@ test("display:contents uses Playwright visibility at both boundaries", async () 
       facts: { elementsInspected: 1, violations: [] }, failure: null,
     }));
     expect(outcome.failure).toBeNull();
+  } finally {
+    await opened.value.close();
+  }
+});
+
+test.each(["hidden", "visible", "attached"] as const)("%s readiness samples the entire final matching set", async (state) => {
+  const opened = await browser.acquireCase(auditCase(`${pages.url}/text-mutation.html`));
+  if (!opened.ok) throw new Error(opened.failure.code);
+  try {
+    const page = opened.value.page;
+    await page.evaluate(() => {
+      document.body.innerHTML = "<main class='ready' hidden>first</main><main class='ready' hidden>second</main>";
+    });
+    const hiddenAudit = { ...auditCase(page.url()), readyCondition: { selector: ".ready", state: "hidden" as const } };
+    const hidden = await measureRule(page, hiddenAudit, page.url(), async () => ({
+      facts: { elementsInspected: 1, violations: [] }, failure: null,
+    }));
+    expect(hidden.failure).toBeNull();
+    await page.locator(".ready").nth(1).evaluate((element) => { (element as HTMLElement).hidden = false; });
+    const audit = { ...auditCase(page.url()), readyCondition: { selector: ".ready", state } };
+    let evaluated = false;
+    const outcome = await measureRule(page, audit, page.url(), async () => {
+      evaluated = true;
+      return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+    });
+    expect(evaluated).toBe(state !== "hidden");
+    expect(outcome.failure?.code ?? null).toBe(state === "hidden" ? "ready-lost" : null);
+  } finally {
+    await opened.value.close();
+  }
+});
+
+test.each(["url", "fonts"] as const)("boundary checks sample %s after ready selector evaluation", async (change) => {
+  const audit = auditCase(`${pages.url}/text-mutation.html`, { ready: "boundarysample=#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  try {
+    const page = opened.value.page;
+    const outcome = await measureRule(page, audit, page.url(), async (page) => {
+      await page.evaluate((change) => { (globalThis as any).boundaryChange = change; }, change);
+      return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+    });
+    expect(outcome.failure?.code).toBe(change === "url" ? "url-mismatch" : "ready-lost");
+    expect(outcome.facts.elementsInspected).toBe(0);
   } finally {
     await opened.value.close();
   }

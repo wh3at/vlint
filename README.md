@@ -500,4 +500,5 @@ publication, and recovery.
 - Inspects exactly the declared target set — no route discovery or full-site coverage.
 - No screenshot comparison, image understanding, pixel-diff, or click/input/scroll interaction.
 - Each rule checks the fixed target URL, font loading completion, and any declared `readyCondition` only at the start and end of its evaluation. A failed boundary check returns `incomplete` and discards that rule's facts. Changes during evaluation are not monitored: temporary URL changes, document reloads, hide/show, ready-element replacement, and font loading are allowed if the final boundary satisfies all conditions. Without `readyCondition`, no application-specific readiness is checked. Initial page acquisition still validates redirects and waits for loading, fonts, and the declared ready condition.
+- Boundary checks sample the current ready matching set, then the URL and font status through browser automation. They are not an atomic snapshot or a guarantee that the page stays unchanged between those reads or after a check.
 - The caller still owns application startup, login, fixtures, route enumeration, and CI orchestration.
