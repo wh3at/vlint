@@ -370,7 +370,7 @@ describe("local rule browser evaluation", () => {
 
   test("target enabled:false keeps the local rule disabled for that pair (AE5)", async () => {
     const config = spacingConfig();
-    const plan = resolveTargets(config, [
+    const resolution = resolveTargets(config, [
       {
         name: "enabled-target",
         url: "https://example.com/enabled",
@@ -381,6 +381,8 @@ describe("local rule browser evaluation", () => {
         ruleOverrides: { "duplicate-spacing": { enabled: false } },
       },
     ]);
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     const enabledCase = plan.cases.find((auditCase) => auditCase.name === "enabled-target");
     const disabledCase = plan.cases.find((auditCase) => auditCase.name === "disabled-target");
     expect(enabledCase?.rules[0]).toMatchObject({ enabled: true });
@@ -405,7 +407,7 @@ describe("local rule browser evaluation", () => {
 
   test("target settings overlay changes only the overridden pair (AE5)", async () => {
     const config = spacingConfig();
-    const plan = resolveTargets(config, [
+    const resolution = resolveTargets(config, [
       {
         name: "baseline-target",
         url: "https://example.com/baseline",
@@ -431,6 +433,8 @@ describe("local rule browser evaluation", () => {
         },
       },
     ]);
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     const baselineCase = plan.cases.find((auditCase) => auditCase.name === "baseline-target");
     const overlayCase = plan.cases.find((auditCase) => auditCase.name === "overlay-target");
     expect(baselineCase).toBeDefined();

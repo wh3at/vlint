@@ -193,7 +193,7 @@ function resolvePresentation(target: Target, defaults: TargetDefaults, directory
   };
 }
 
-export function makeEffectiveTarget(
+function makeEffectiveTarget(
   target: Target,
   device: DeviceProfile,
   defaults: TargetDefaults,
@@ -234,7 +234,46 @@ function makeAuditCase(
   };
 }
 
-export function resolveTargets(config: LoadedConfig, targets: readonly Target[]): ResolvedCheckPlan {
+export interface MinimumViolation {
+  readonly reason: "unknown-device" | "conflicting-minimums";
+  readonly message: string;
+  readonly target: string;
+  readonly device: string;
+  readonly rule: string | null;
+}
+
+export type PlanResolution =
+  | { readonly ok: true; readonly value: ResolvedCheckPlan }
+  | { readonly ok: false; readonly violation: MinimumViolation };
+
+function minimumViolation(config: LoadedConfig, targets: readonly Target[]): MinimumViolation | null {
+  const names = new Set(config.devices.map((device) => device.name));
+  for (const target of targets) {
+    for (const device of Object.keys(target.deviceRuleMinimums ?? {})) {
+      if (!names.has(device)) return { reason: "unknown-device", message: `unknown device minimum: ${device}`, target: target.name, device, rule: null };
+    }
+  }
+  for (const target of targets) {
+    for (const device of config.devices) {
+      for (const rule of config.rules) {
+        const targetMinimum = target.ruleOverrides?.[rule.name]?.minimumInspected;
+        const deviceMinimum = device.ruleMinimums?.[rule.name];
+        if (targetMinimum !== undefined && deviceMinimum !== undefined && targetMinimum !== deviceMinimum && target.deviceRuleMinimums?.[device.name]?.[rule.name] === undefined) {
+          return {
+            reason: "conflicting-minimums",
+            message: "target and device minimums conflict; specify deviceRuleMinimums",
+            target: target.name, device: device.name, rule: rule.name,
+          };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export function resolveTargets(config: LoadedConfig, targets: readonly Target[]): PlanResolution {
+  const violation = minimumViolation(config, targets);
+  if (violation !== null) return { ok: false, violation };
   const primaryDevice = config.devices[0];
   const logicalTargets =
     primaryDevice === undefined
@@ -247,9 +286,13 @@ export function resolveTargets(config: LoadedConfig, targets: readonly Target[])
       makeAuditCase(target, device, config.defaults, config.rules, config.directory),
     ),
   );
-  return { targets: logicalTargets, cases, rules: config.rules };
+  return { ok: true, value: { targets: logicalTargets, cases, rules: config.rules } };
 }
 
-export function resolveAdHocTarget(config: LoadedConfig, url: string): ResolvedCheckPlan {
+export function resolveAdHocTarget(config: LoadedConfig, url: string): PlanResolution {
+  if (config.provider?.type === "static") {
+    const violation = minimumViolation(config, config.provider.targets);
+    if (violation !== null) return { ok: false, violation };
+  }
   return resolveTargets(config, [{ name: "adhoc", url }]);
 }
