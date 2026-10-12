@@ -61,7 +61,9 @@ describe("configuration", () => {
       "table-header-single-line",
       "table-cell-text-overlap",
     ]);
-    const plan = resolveAdHocTarget(loaded.value, "http://127.0.0.1:4173/adhoc");
+    const resolution = resolveAdHocTarget(loaded.value, "http://127.0.0.1:4173/adhoc");
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     expect(plan.targets.map((target) => target.name)).toEqual(["adhoc"]);
     expect(plan.cases).toHaveLength(1);
     expect(plan.cases[0]).toMatchObject({
@@ -99,7 +101,9 @@ devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
     if (loaded.value.provider === undefined || loaded.value.provider.type !== "static") {
       throw new Error("expected static provider");
     }
-    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    const resolution = resolveTargets(loaded.value, loaded.value.provider.targets);
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     expect(plan.targets.map((target) => target.name)).toEqual(["first", "second"]);
     expect(plan.cases.map((c) => `${c.name}/${c.deviceName}`)).toEqual([
       "first/desk",
@@ -131,7 +135,9 @@ devices: [DESKTOP_DEVICE],
     if (loaded.value.provider === undefined || loaded.value.provider.type !== "static") {
       throw new Error("expected static provider");
     }
-    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    const resolution = resolveTargets(loaded.value, loaded.value.provider.targets);
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     expect(plan.cases.map((c) => `${c.name}/${c.deviceName}`)).toEqual(["first/desk", "second/desk"]);
   });
 
@@ -171,7 +177,9 @@ devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
     if (loaded.value.provider === undefined || loaded.value.provider.type !== "static") {
       throw new Error("expected static provider");
     }
-    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    const resolution = resolveTargets(loaded.value, loaded.value.provider.targets);
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     for (const c of plan.cases) {
       expect(c).toMatchObject({
         locale: "fr-FR",
@@ -206,7 +214,9 @@ devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
     });
     const loaded = await loadConfig(directory);
     if (!loaded.ok) throw new Error(loaded.failure.message);
-    const plan = resolveAdHocTarget(loaded.value, "http://127.0.0.1:4173/adhoc");
+    const resolution = resolveAdHocTarget(loaded.value, "http://127.0.0.1:4173/adhoc");
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     expect(plan.cases.map((c) => `${c.name}/${c.deviceName}`)).toEqual(["adhoc/desk", "adhoc/phone"]);
     expect(plan.targets.map((target) => target.name)).toEqual(["adhoc"]);
   });
@@ -437,7 +447,9 @@ devices: [DESKTOP_DEVICE],
     });
     const loaded = await loadConfig(directory);
     if (!loaded.ok || loaded.value.provider?.type !== "static") throw new Error("expected loaded static config");
-    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    const resolution = resolveTargets(loaded.value, loaded.value.provider.targets);
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     expect(plan.cases[0]?.rules.find((rule) => rule.name === "overflow")?.enabled).toBe(true);
     expect(plan.cases[1]?.rules.find((rule) => rule.name === "overflow")?.enabled).toBe(false);
   });
@@ -460,7 +472,9 @@ devices: [DESKTOP_DEVICE],
     });
     const loaded = await loadConfig(directory);
     if (!loaded.ok || loaded.value.provider?.type !== "static") throw new Error("expected loaded static config");
-    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    const resolution = resolveTargets(loaded.value, loaded.value.provider.targets);
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     expect(plan.cases[0]?.rules.find((rule) => rule.name === "overflow")?.enabled).toBe(false);
   });
 
@@ -628,7 +642,9 @@ devices: [DESKTOP_DEVICE],
     });
     const loaded = await loadConfig(directory);
     if (!loaded.ok || loaded.value.provider?.type !== "static") throw new Error("expected loaded static config");
-    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    const resolution = resolveTargets(loaded.value, loaded.value.provider.targets);
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     const local = plan.cases[0]?.rules.find((rule) => rule.type === "local");
     expect(local).toMatchObject({
       name: "spacing",
@@ -804,7 +820,9 @@ devices: [DESKTOP_DEVICE],
     });
     const loaded = await loadConfig(directory);
     if (!loaded.ok || loaded.value.provider?.type !== "static") throw new Error("expected loaded static config");
-    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    const resolution = resolveTargets(loaded.value, loaded.value.provider.targets);
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     for (const c of plan.cases) {
       if (c.name === "settings") {
         expect(c.rules.find((rule) => rule.name === "tables")).toMatchObject({
@@ -841,7 +859,9 @@ devices: [DESKTOP_DEVICE],
     });
     const loaded = await loadConfig(directory);
     if (!loaded.ok || loaded.value.provider?.type !== "static") throw new Error("expected loaded static config");
-    const plan = resolveTargets(loaded.value, loaded.value.provider.targets);
+    const resolution = resolveTargets(loaded.value, loaded.value.provider.targets);
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     expect(plan.cases[0]?.rules.find((rule) => rule.name === "tables")?.enabled).toBe(true);
     expect(plan.cases[1]?.rules.find((rule) => rule.name === "tables")?.enabled).toBe(false);
   });

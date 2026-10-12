@@ -359,13 +359,15 @@ describe("plugin loader", () => {
     const config = loadedConfig(directory, [
       { name: "spacing-check", type: "local", enabled: true, path, settings: { tolerance: 1 } },
     ]);
-    const plan = resolveTargets(config, [
+    const resolution = resolveTargets(config, [
       {
         name: "settings",
         url: "https://example.com",
         ruleOverrides: { "spacing-check": { settings: { tolerance: "bad" } } },
       },
     ]);
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    const plan = resolution.value;
     const registry = await loadLocalPluginRegistry(config);
     expect(registry.ok).toBe(true);
     if (!registry.ok || registry.value === null) return;
