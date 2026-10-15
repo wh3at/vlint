@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/wh3at/vlint/compare/v0.9.0...v0.10.0) (2026-10-15)
+
+
+### Features
+
+* inspect single-leaf tspan text for SVG clipping ([#53](https://github.com/wh3at/vlint/issues/53)) ([2cbe9af](https://github.com/wh3at/vlint/commit/2cbe9afbfd8e2ded88d9fd3dc6cf6832b50becfe))
+
 ## [0.9.0](https://github.com/wh3at/vlint/compare/v0.8.2...v0.9.0) (2026-10-15)
 
 
