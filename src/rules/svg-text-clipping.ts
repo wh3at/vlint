@@ -52,7 +52,7 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
           if (css.transform !== "none" || css.translate !== "none" || css.scale !== "none" ||
               (["x", "y", "width", "height"] as const).some((name) => {
                 const value = css.getPropertyValue(name);
-                return value !== "auto" && Number.parseFloat(value) !== current[name].baseVal.value;
+                return value !== "auto" && (!/^-?[\d.]+px$/.test(value) || Number.parseFloat(value) !== current[name].baseVal.value);
               })) supported = false;
         }
         if ((current instanceof HTMLElement || current instanceof SVGSVGElement) && ["absolute", "fixed", "sticky"].includes(css.position)) supported = false;
@@ -99,6 +99,7 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
       if (geometry.width === 0 || geometry.height === 0) continue;
       elementsInspected += 1;
       const reachable = { left: geometry.x, right: geometry.x + geometry.width, top: geometry.y, bottom: geometry.y + geometry.height };
+      const paintable = { ...reachable };
       for (const ancestor of ancestors.slice(1)) {
         const current = ancestor.element;
         const css = ancestor.style;
@@ -139,19 +140,27 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
           const scaleX = layout.offsetWidth > 0 ? rect.width / layout.offsetWidth : 1;
           const scaleY = layout.offsetHeight > 0 ? rect.height / layout.offsetHeight : 1;
           if (scrollX) {
-            reachable.left = Math.min(reachable.left + layout.scrollLeft * scaleX, boundary.x + boundary.width);
-            reachable.right = Math.max(reachable.right + (layout.scrollLeft - layout.scrollWidth + layout.clientWidth) * scaleX, boundary.x);
+            const minimum = (layout.scrollLeft - layout.scrollWidth + layout.clientWidth) * scaleX;
+            const maximum = layout.scrollLeft * scaleX;
+            reachable.left = Math.min(reachable.left + maximum, boundary.x + boundary.width);
+            reachable.right = Math.max(reachable.right + minimum, boundary.x);
+            paintable.left = Math.max(paintable.left + minimum, boundary.x);
+            paintable.right = Math.min(paintable.right + maximum, boundary.x + boundary.width);
           }
           if (scrollY) {
-            reachable.top = Math.min(reachable.top + layout.scrollTop * scaleY, boundary.y + boundary.height);
-            reachable.bottom = Math.max(reachable.bottom + (layout.scrollTop - layout.scrollHeight + layout.clientHeight) * scaleY, boundary.y);
+            const minimum = (layout.scrollTop - layout.scrollHeight + layout.clientHeight) * scaleY;
+            const maximum = layout.scrollTop * scaleY;
+            reachable.top = Math.min(reachable.top + maximum, boundary.y + boundary.height);
+            reachable.bottom = Math.max(reachable.bottom + minimum, boundary.y);
+            paintable.top = Math.max(paintable.top + minimum, boundary.y);
+            paintable.bottom = Math.min(paintable.bottom + maximum, boundary.y + boundary.height);
           }
         }
         const overflowPx = {
-          left: clipX ? Math.max(0, boundary.x - reachable.left) : 0,
-          right: clipX ? Math.max(0, reachable.right - boundary.x - boundary.width) : 0,
-          top: clipY ? Math.max(0, boundary.y - reachable.top) : 0,
-          bottom: clipY ? Math.max(0, reachable.bottom - boundary.y - boundary.height) : 0,
+          left: clipX ? Math.max(0, boundary.x - reachable.left, paintable.right <= boundary.x ? geometry.width + boundary.x - paintable.right : 0) : 0,
+          right: clipX ? Math.max(0, reachable.right - boundary.x - boundary.width, paintable.left >= boundary.x + boundary.width ? geometry.width + paintable.left - boundary.x - boundary.width : 0) : 0,
+          top: clipY ? Math.max(0, boundary.y - reachable.top, paintable.bottom <= boundary.y ? geometry.height + boundary.y - paintable.bottom : 0) : 0,
+          bottom: clipY ? Math.max(0, reachable.bottom - boundary.y - boundary.height, paintable.top >= boundary.y + boundary.height ? geometry.height + paintable.top - boundary.y - boundary.height : 0) : 0,
         };
         const directions = (Object.keys(overflowPx) as ClippingDirection[]).filter((side) => overflowPx[side] > tolerancePx);
         if (directions.length === 0) continue;

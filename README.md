@@ -236,7 +236,8 @@ paint containment, rounded overflow clips (including scrollports), non-default
 overflow clip margins, and content-visibility optimization. Also excluded are
 `foreignObject` subtrees, absolute/fixed/sticky HTML or SVG viewport ancestors,
 RTL scrollers, and nested SVG viewports with their own transform/translate/scale
-or CSS geometry differing from their SVG length attributes.
+or CSS geometry differing from their SVG length attributes. Nested CSS geometry
+must resolve to pixel lengths (or `auto`); unresolved percentages/expressions are excluded.
 Untransformed nested SVG viewports and transformed `g`/`text` runs remain supported.
 An advance incompatible with Canvas is also outside the supported scope.
 Non-painted, empty, transparent or zero-viewport text and text in SVG definition

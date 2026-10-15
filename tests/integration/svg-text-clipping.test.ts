@@ -348,3 +348,39 @@ test("CSS-overridden nested viewport geometry and CSS text stroke are outside th
     expect(await evaluateSvgTextClipping(page, rule)).toEqual({ facts: { elementsInspected: 0, violations: [] }, failure: null });
   }
 });
+
+test("percentage CSS viewport geometry is not confused with numerically equal SVG lengths", async () => {
+  await page.setContent(`<style>svg{font:20px monospace;overflow:hidden}</style>
+    <svg width="200" height="40"><svg x="50" width="40" height="40" style="x:50%"><text x="0" y="25">M</text></svg></svg>`);
+  expect(await evaluateSvgTextClipping(page, rule)).toEqual({ facts: { elementsInspected: 0, violations: [] }, failure: null });
+});
+
+test("a scrollport touching the outer clip cannot reveal any ink", async () => {
+  await page.setContent(`<style>body{margin:0}svg{font:20px monospace;overflow:visible;display:block}</style>
+    <div id="outer" style="overflow:clip;width:100px;height:50px">
+      <div style="overflow:auto;width:100px;height:50px;margin-left:100px">
+        <svg width="400" height="40"><text x="20" y="25">MMMM</text></svg>
+      </div>
+    </div>`);
+  const result = await evaluateSvgTextClipping(page, rule);
+  expect(result.failure).toBeNull();
+  expect(result.facts.violations.map((v) => [v.clipLocator, v.directions])).toEqual([["#outer", ["right"]]]);
+});
+
+test("touching scrollport boundaries are detected on all axes while a positive reachable strip is clean", async () => {
+  for (const [position, direction] of [
+    ["margin-left:-100px", "left"], ["margin-left:100px", "right"],
+    ["margin-top:-50px", "top"], ["margin-top:50px", "bottom"],
+    ["margin-left:90px", null],
+  ] as const) {
+    await page.setContent(`<style>body{margin:0}svg{font:20px monospace;overflow:visible;display:block}</style>
+      <div id="outer" style="overflow:clip;width:100px;height:50px;display:flow-root">
+        <div style="overflow:auto;width:100px;height:50px;${position}">
+          <svg width="400" height="200"><text x="20" y="25">MMMM</text></svg>
+        </div>
+      </div>`);
+    const result = await evaluateSvgTextClipping(page, rule);
+    expect(result.failure).toBeNull();
+    expect(result.facts.violations.map((v) => v.directions)).toEqual(direction === null ? [] : [[direction]]);
+  }
+});
