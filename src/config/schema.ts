@@ -207,7 +207,7 @@ function defaultsAt(value: unknown, path: string, validateKeys = true): TargetDe
 function ruleOverrideAt(value: unknown, path: string, rule: RuleMetadata): RuleOverride {
   const object = objectAt(value, path);
   const allowed = ["enabled", "minimumInspected", ...(rule.type === "local" ? ["settings"] : []),
-    ...(rule.type === "tab-label-single-line" || rule.type === "table-header-single-line" || rule.type === "table-cell-text-overlap" ? ["excludeSelectors"] : [])];
+    ...(rule.type === "tab-label-single-line" || rule.type === "table-header-single-line" || rule.type === "table-cell-text-overlap" || rule.type === "svg-text-clipping" ? ["excludeSelectors"] : [])];
   exactKeys(object, allowed, path);
   return {
     ...(object.enabled === undefined ? {} : { enabled: booleanAt(object.enabled, `${path}.enabled`) }),
@@ -394,6 +394,17 @@ function ruleAt(value: unknown, path: string): RuleInstance {
       result.tolerancePx = finiteNumberAt(object.tolerancePx, `${path}.tolerancePx`, 0, 100);
     }
     return result;
+  }
+  if (object.type === "svg-text-clipping") {
+    exactKeys(object, ["name", "type", "enabled", "tolerancePx", "excludeSelectors", "minimumInspected"], path);
+    return {
+      name: nameAt(object.name, `${path}.name`),
+      type: "svg-text-clipping",
+      ...minimum,
+      ...(object.enabled === undefined ? {} : { enabled: booleanAt(object.enabled, `${path}.enabled`) }),
+      ...(object.tolerancePx === undefined ? {} : { tolerancePx: finiteNumberAt(object.tolerancePx, `${path}.tolerancePx`, 0, 100) }),
+      ...(object.excludeSelectors === undefined ? {} : { excludeSelectors: stringArrayAt(object.excludeSelectors, `${path}.excludeSelectors`) }),
+    };
   }
   if (object.type === "table-cell-text-overlap") {
     exactKeys(object, ["name", "type", "enabled", "excludeSelectors", "minimumInspected"], path);

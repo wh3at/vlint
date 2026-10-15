@@ -2,7 +2,6 @@ import { isAbsolute, resolve } from "node:path";
 import type {
   DeviceProfile,
   EffectiveAuditCase,
-  EffectiveLocalRule,
   EffectiveRule,
   EffectiveRuleForTarget,
   EffectiveTarget,
@@ -43,6 +42,11 @@ export const BUILTIN_CELL_RULE: RuleInstance = {
   type: "table-cell-text-overlap",
 };
 
+export const BUILTIN_SVG_RULE: RuleInstance = {
+  name: "svg-text-clipping",
+  type: "svg-text-clipping",
+};
+
 export function rulesWithBuiltins(rules: readonly RuleInstance[] | undefined): readonly RuleInstance[] {
   const configured = rules ?? [];
   return [
@@ -51,6 +55,7 @@ export function rulesWithBuiltins(rules: readonly RuleInstance[] | undefined): r
     ...(configured.some((rule) => rule.type === "page-horizontal-overflow") ? [] : [BUILTIN_OVERFLOW_RULE]),
     ...(configured.some((rule) => rule.type === "table-header-single-line") ? [] : [BUILTIN_TABLE_RULE]),
     ...(configured.some((rule) => rule.type === "table-cell-text-overlap" || rule.name === BUILTIN_CELL_RULE.name) ? [] : [BUILTIN_CELL_RULE]),
+    ...(configured.some((rule) => rule.type === "svg-text-clipping" || rule.name === BUILTIN_SVG_RULE.name) ? [] : [BUILTIN_SVG_RULE]),
   ];
 }
 
@@ -131,6 +136,8 @@ export function normalizeRules(rules: readonly RuleInstance[] | undefined): read
         };
       case "table-cell-text-overlap":
         return { name: rule.name, type: rule.type, enabled: rule.enabled ?? true, minimumInspected, excludeSelectors: rule.excludeSelectors ?? [] };
+      case "svg-text-clipping":
+        return { name: rule.name, type: rule.type, enabled: rule.enabled ?? true, minimumInspected, tolerancePx: rule.tolerancePx ?? 1, excludeSelectors: rule.excludeSelectors ?? [] };
       case "local":
         return {
           name: rule.name,
@@ -160,6 +167,7 @@ function effectiveRulesForTarget(
       case "tab-label-single-line":
       case "table-header-single-line":
       case "table-cell-text-overlap":
+      case "svg-text-clipping":
         return { ...common, excludeSelectors: [...rule.excludeSelectors, ...(override?.excludeSelectors ?? [])] };
       case "page-horizontal-overflow":
         return common;

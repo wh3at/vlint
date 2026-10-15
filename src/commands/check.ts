@@ -1,3 +1,4 @@
+import { evaluateSvgTextClipping } from "../rules/svg-text-clipping";
 import type { Page } from "playwright";
 import type { EffectiveAuditCase, EffectiveRuleForTarget, ResolvedCheckPlan } from "../contracts/config";
 import type { RuleEvaluationOutcome } from "../contracts/evaluation";
@@ -139,6 +140,8 @@ async function evaluateWithCancellation(
     evaluation = evaluateLocalRule(page, rule, contract, auditCase, auditCase.name, signal);
   } else if (rule.type === "table-cell-text-overlap") {
     evaluation = evaluateTableCellTextOverlap(page, rule, auditCase?.name ?? null);
+  } else if (rule.type === "svg-text-clipping") {
+    evaluation = evaluateSvgTextClipping(page, rule, auditCase?.name ?? null);
   } else if (rule.type === "table-header-single-line") {
     evaluation = Promise.resolve(
       evaluateTableHeaderSingleLine(page, rule, auditCase?.name ?? null),

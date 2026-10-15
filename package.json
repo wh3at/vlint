@@ -7,18 +7,19 @@
     "bun": "1.3.14"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "check:architecture": "bun run scripts/check-architecture.ts",
-    "test:unit": "bun test tests/unit tests/golden",
-    "test:integration": "bun test tests/integration/browser-install.test.ts tests/integration/cli-acceptance.test.ts tests/integration/result-transitions.test.ts && bun test tests/integration/browser-lifecycle.test.ts && bun test tests/integration/readiness.test.ts && bun test tests/integration/measurement-contract.test.ts && bun test tests/integration/local-rules.test.ts && bun test tests/integration/tab-label-single-line.test.ts && bun test tests/integration/table-header-single-line.test.ts && bun test tests/integration/page-horizontal-overflow.test.ts && bun test tests/integration/table-cell-text-overlap.test.ts && bun test tests/integration/table-cell-excluded-neighbors.test.ts",
-    "test:acceptance": "bun test tests/acceptance",
-    "test:all": "bun run typecheck && bun run check:architecture && bun run test:unit && bun run build:linux-x64 && bun run test:integration && bun run test:acceptance",
-    "build:linux-x64": "bun run scripts/build.ts linux-x64",
-    "build:feasibility": "bun run scripts/build.ts feasibility",
-    "package:release": "bun run scripts/package-release.ts",
-    "release:validate": "bun run scripts/release-validate.ts",
-    "build:fixture-server": "bun run scripts/build.ts fixture-server",
-    "test:feasibility": "bun run build:feasibility && bun run build:fixture-server && bun test tests/smoke/compiled-runtime.test.ts"
+    "check:runtime": "bun run scripts/check-runtime.ts",
+    "typecheck": "bun run check:runtime && tsc --noEmit",
+    "check:architecture": "bun run check:runtime && bun run scripts/check-architecture.ts",
+    "test:unit": "bun run check:runtime && bun test tests/unit tests/golden",
+    "test:integration": "bun run check:runtime && bun test tests/integration/browser-install.test.ts tests/integration/cli-acceptance.test.ts tests/integration/result-transitions.test.ts && bun test tests/integration/browser-lifecycle.test.ts && bun test tests/integration/readiness.test.ts && bun test tests/integration/measurement-contract.test.ts && bun test tests/integration/local-rules.test.ts && bun test tests/integration/tab-label-single-line.test.ts && bun test tests/integration/table-header-single-line.test.ts && bun test tests/integration/page-horizontal-overflow.test.ts && bun test tests/integration/table-cell-text-overlap.test.ts && bun test tests/integration/table-cell-excluded-neighbors.test.ts && bun test tests/integration/svg-text-clipping.test.ts && bun test tests/integration/svg-text-clipping-pairs.test.ts",
+    "test:acceptance": "bun run check:runtime && bun test tests/acceptance",
+    "test:all": "bun run check:runtime && bun run typecheck && bun run check:architecture && bun run test:unit && bun run build:linux-x64 && bun run test:integration && bun run test:acceptance",
+    "build:linux-x64": "bun run check:runtime && bun run scripts/build.ts linux-x64",
+    "build:feasibility": "bun run check:runtime && bun run scripts/build.ts feasibility",
+    "package:release": "bun run check:runtime && bun run scripts/package-release.ts",
+    "release:validate": "bun run check:runtime && bun run scripts/release-validate.ts",
+    "build:fixture-server": "bun run check:runtime && bun run scripts/build.ts fixture-server",
+    "test:feasibility": "bun run check:runtime && bun run build:feasibility && bun run build:fixture-server && bun test tests/smoke/compiled-runtime.test.ts"
   },
   "dependencies": {
     "commander": "15.0.0",
