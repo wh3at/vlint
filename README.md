@@ -222,6 +222,7 @@ collapsing, default/alphabetic baseline, no custom letter/word spacing, positive
 axis-aligned scaling and translation, `viewBox`, and start/middle/end anchors.
 For the single-`tspan` structure, scalar x/y/dx/dy on parent and child, including
 `em` offsets, use browser-resolved layout and the child's computed font/paint style.
+The child's font family and size may differ from the parent's.
 The parent `text` counts once and remains the diagnostic target.
 Rectangular SVG viewport overflow and
 HTML block/flex/grid/table-container `overflow: hidden / clip` are compared on
@@ -234,7 +235,7 @@ scrolling or other interaction is performed.
 
 Unsupported text is silently excluded as a whole, including when a supported
 rectangle is also present. This includes multiple/nested `tspan`, `textPath`,
-mixed parent/child text or fonts/sizes, x/y/dx/dy lists, dx/dy on direct text runs,
+mixed rendered text across parent and child, x/y/dx/dy lists, dx/dy on direct text runs,
 rotate, `textLength`, other baselines,
 vertical/RTL or bidi text, paint-server fills (`fill: url(...)`, including fallback
 colors), stroke, shadow, decoration, custom font stretch or
