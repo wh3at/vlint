@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/wh3at/vlint/compare/v0.8.2...v0.9.0) (2026-10-15)
+
+
+### Features
+
+* detect SVG text clipping with Canvas ink bounds ([#50](https://github.com/wh3at/vlint/issues/50)) ([2020b0c](https://github.com/wh3at/vlint/commit/2020b0cfb4d810859a6bf88eb4d414d5acf17d2a))
+
 ## [0.8.2](https://github.com/wh3at/vlint/compare/v0.8.1...v0.8.2) (2026-09-30)
 
 
