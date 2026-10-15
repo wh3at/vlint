@@ -65,7 +65,7 @@ test("unsupported layouts and mixed clip mechanisms are silent and not inspected
     `<text x="90 120" y="25">MMMM</text>`,
     `<text x="90" y="25" dx="0 30">MMMM</text>`,
     `<text x="90" y="25" textLength="100">MMMM</text>`,
-    `<text x="90" y="25"><tspan>MMMM</tspan></text>`,
+    `<text x="90" y="25"><tspan>MM</tspan><tspan>MM</tspan></text>`,
     `<text x="90" y="25" stroke="black">MMMM</text>`,
     `<text x="90" y="25" dominant-baseline="middle">MMMM</text>`,
     `<text x="90" y="25" transform="rotate(5)">MMMM</text>`,
@@ -172,7 +172,7 @@ test("tolerance is CSS pixels with an exclusive boundary", async () => {
   expect((await evaluateSvgTextClipping(page, { ...rule, tolerancePx: overflow - 0.01 })).facts.violations).toHaveLength(1);
 });
 
-test("ink bounds track painted SVG pixels across anchors, viewBox and scale at DPR 1 and 2", async () => {
+test.each(["direct", "tspan"])("%s ink bounds track painted SVG pixels across anchors, viewBox and scale at DPR 1 and 2", async (structure) => {
   for (const deviceScaleFactor of [1, 2]) {
     const context = await browser.newContext({ deviceScaleFactor, viewport: { width: 800, height: 600 } });
     const canvasPage = await context.newPage();
@@ -189,13 +189,17 @@ test("ink bounds track painted SVG pixels across anchors, viewBox and scale at D
         { x: 45, y: 15, anchor: "start", transform: "translate(2 0) scale(1.2)", viewBox: "0 0 50 20", clipped: true },
       ];
       for (const [index, placement] of placements.entries()) {
-        await canvasPage.evaluate((value) => {
+        await canvasPage.evaluate(({ value, structure }) => {
           const svg = document.querySelector("svg")!;
-          svg.innerHTML = `<text id="ink" x="${value.x}" y="${value.y}" text-anchor="${value.anchor}" transform="${value.transform}">M</text>`;
+          svg.innerHTML = structure === "direct"
+            ? `<text id="ink" x="${value.x}" y="${value.y}" text-anchor="${value.anchor}" transform="${value.transform}">M</text>`
+            : `<text id="ink" x="0" y="0" text-anchor="${value.anchor}" transform="${value.transform}" style="font-size:10px">
+                <tspan x="${value.x - 10}" y="${value.y - 10}" dx="0.5em" dy="0.5em" style="font-size:20px">M</tspan>
+              </text>`;
           svg.setAttribute("viewBox", value.viewBox);
           svg.style.margin = "100px";
           svg.style.overflow = "hidden";
-        }, placement);
+        }, { value: placement, structure });
         const result = await evaluateSvgTextClipping(canvasPage, { ...rule, tolerancePx: 0 });
         expect(result.failure).toBeNull();
         expect(result.facts.elementsInspected).toBe(1);

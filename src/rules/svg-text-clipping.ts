@@ -30,10 +30,17 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
     for (const element of document.querySelectorAll("svg text")) {
       if (!(element instanceof SVGTextElement) || excludeSelectors.some((selector) => element.closest(selector))) continue;
       if (element.closest("defs, symbol, clipPath, mask, pattern, marker, foreignObject")) continue;
-      const style = getComputedStyle(element);
+      let run: SVGTextPositioningElement = element;
+      if (element.children.length > 0) {
+        const child = element.firstElementChild;
+        if (element.children.length !== 1 || !(child instanceof SVGTSpanElement) || child.children.length > 0 ||
+            Array.from(element.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim())) continue;
+        run = child;
+      }
+      const style = getComputedStyle(run);
       if (style.visibility !== "visible" || style.fill === "none" || style.fill.startsWith("url(") || /rgba\([^)]*,\s*0\)$/.test(style.fill) || Number(style.fillOpacity) === 0) continue;
-      if (element.children.length > 0 || !element.textContent?.trim()) continue;
-      const text = element.textContent.replace(/[\t\n\r ]+/g, " ").replace(/^ | $/g, "");
+      if (!run.textContent?.trim()) continue;
+      const text = run.textContent.replace(/[\t\n\r ]+/g, " ").replace(/^ | $/g, "");
       if (/[\u0590-\u08ff\ufb1d-\ufeff\u202a-\u202e\u2066-\u2069]/u.test(text)) continue;
       if (style.whiteSpace !== "nowrap" && style.whiteSpace !== "normal") continue;
       if (style.direction !== "ltr" || style.unicodeBidi !== "normal" || style.writingMode !== "horizontal-tb" ||
@@ -44,13 +51,19 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
           !["normal", "0px"].includes(style.letterSpacing) || !["normal", "0px"].includes(style.wordSpacing) ||
           style.textTransform !== "none" || style.textShadow !== "none" || style.textDecorationLine !== "none" ||
           style.fontVariantCaps !== "normal" || style.fontFeatureSettings !== "normal" || style.fontVariationSettings !== "normal") continue;
-      if (element.x.baseVal.numberOfItems > 1 || element.y.baseVal.numberOfItems > 1 ||
-          element.hasAttribute("dx") || element.hasAttribute("dy") || element.hasAttribute("rotate") || element.hasAttribute("textLength")) continue;
+      const positioning = run === element ? [element] : [element, run];
+      if (positioning.some((node) => node.x.baseVal.numberOfItems > 1 || node.y.baseVal.numberOfItems > 1 ||
+          node.dx.baseVal.numberOfItems > 1 || node.dy.baseVal.numberOfItems > 1 ||
+          node.hasAttribute("rotate") || node.hasAttribute("textLength"))) continue;
+      if (run === element && (element.hasAttribute("dx") || element.hasAttribute("dy"))) continue;
       const ancestors: { element: Element; style: CSSStyleDeclaration }[] = [];
       let supported = true;
-      for (let current: Element | null = element; current; current = current.parentElement) {
+      for (let current: Element | null = run; current; current = current.parentElement) {
         const css = getComputedStyle(current);
         ancestors.push({ element: current, style: css });
+        if ((current === element || current === run) &&
+          (css.textDecorationLine !== "none" || !["auto", "alphabetic"].includes(css.dominantBaseline) ||
+           !["auto", "baseline"].includes(css.alignmentBaseline) || !["baseline", "0px"].includes(css.baselineShift))) supported = false;
         if (current instanceof SVGSVGElement && (current.width.baseVal.value <= 0 || current.height.baseVal.value <= 0)) supported = false;
         if (current instanceof SVGSVGElement && current.ownerSVGElement !== null) {
           if (css.transform !== "none" || css.translate !== "none" || css.scale !== "none" ||
@@ -67,13 +80,13 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
             css.rotate !== "none" || css.perspective !== "none" || css.translate.split(/\s+/).length > 2 || css.scale.split(/\s+/).length > 2 ||
             (css.transform !== "none" && !axisAligned(new DOMMatrixReadOnly(css.transform))) ||
             (css.scale !== "none" && css.scale.split(/\s+/).some((value) => Number(value) <= 0)) ||
-            (current instanceof SVGTextContentElement && current !== element)) supported = false;
+            (current instanceof SVGTextContentElement && current !== element && current !== run)) supported = false;
         const rectangularClip = [css.overflowX, css.overflowY].some((value) => ["hidden", "clip", "auto", "scroll"].includes(value));
         if (rectangularClip && ([css.borderTopLeftRadius, css.borderTopRightRadius, css.borderBottomLeftRadius, css.borderBottomRightRadius].some((radius) => /[1-9]/.test(radius)) ||
             !(current instanceof SVGSVGElement ? ["0px", "content-box"] : ["0px"]).includes(css.overflowClipMargin))) supported = false;
       }
       if (!supported) continue;
-      const matrix = element.getScreenCTM();
+      const matrix = run.getScreenCTM();
       if (matrix === null) return failure("geometry-evaluation-failed", "SVG text has no screen transform.");
       if (!axisAligned(matrix)) continue;
       context ??= document.createElement("canvas").getContext("2d");
@@ -87,10 +100,10 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
       const metrics = context.measureText(text);
       const values = [metrics.actualBoundingBoxLeft, metrics.actualBoundingBoxRight, metrics.actualBoundingBoxAscent, metrics.actualBoundingBoxDescent, metrics.width];
       if (!values.every(Number.isFinite)) return failure("geometry-evaluation-failed", "Canvas returned invalid SVG text metrics.");
-      const advance = element.getComputedTextLength();
+      const advance = run.getComputedTextLength();
       if (!Number.isFinite(advance)) return failure("geometry-evaluation-failed", "SVG text returned an invalid advance.");
       if (Math.abs(advance - metrics.width) > 0.1) continue;
-      const origin = element.getStartPositionOfChar(0);
+      const origin = run.getStartPositionOfChar(0);
       const geometry: Geometry = {
         x: matrix.a * (origin.x - metrics.actualBoundingBoxLeft) + matrix.e,
         y: matrix.d * (origin.y - metrics.actualBoundingBoxAscent) + matrix.f,

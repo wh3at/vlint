@@ -215,10 +215,15 @@ advance agreement alone is not a guarantee of equivalent placement. Neither SVG
 `getBBox()` nor character-cell BCRs determine violations, and there is no cell-box
 fallback. Fully clipped text remains measurable without changing the document.
 
-Supported scope: a direct, single-style text run in left-to-right horizontal
-writing with normal whitespace collapsing, default/alphabetic baseline, no
-custom letter/word spacing, positive axis-aligned scaling and translation,
-`viewBox`, and start/middle/end anchors. Rectangular SVG viewport overflow and
+Supported scope: a direct text run or a single leaf `tspan` containing all rendered
+text (only indentation whitespace may surround it in the parent `text`). The run
+must be single-style, left-to-right horizontal writing with normal whitespace
+collapsing, default/alphabetic baseline, no custom letter/word spacing, positive
+axis-aligned scaling and translation, `viewBox`, and start/middle/end anchors.
+For the single-`tspan` structure, scalar x/y/dx/dy on parent and child, including
+`em` offsets, use browser-resolved layout and the child's computed font/paint style.
+The parent `text` counts once and remains the diagnostic target.
+Rectangular SVG viewport overflow and
 HTML block/flex/grid/table-container `overflow: hidden / clip` are compared on
 each clipping axis, accounting for borders, padding and scale. Root/body overflow
 propagated to the viewport uses the viewport boundary rather than the body box.
@@ -228,8 +233,9 @@ their reachable ink positions are constrained by scrollports when checking outer
 scrolling or other interaction is performed.
 
 Unsupported text is silently excluded as a whole, including when a supported
-rectangle is also present. This includes child elements (`tspan`, `textPath`,
-mixed fonts/sizes), x/y lists, dx/dy, rotate, `textLength`, other baselines,
+rectangle is also present. This includes multiple/nested `tspan`, `textPath`,
+mixed parent/child text or fonts/sizes, x/y/dx/dy lists, dx/dy on direct text runs,
+rotate, `textLength`, other baselines,
 vertical/RTL or bidi text, paint-server fills (`fill: url(...)`, including fallback
 colors), stroke, shadow, decoration, custom font stretch or
 size adjustment, font feature/variation/caps settings, rotations, skew, reflection,
