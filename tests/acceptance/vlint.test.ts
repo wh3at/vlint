@@ -596,6 +596,7 @@ describe("compiled vlint binary acceptance", () => {
         { name: "page-horizontal-overflow", type: "page-horizontal-overflow" },
         { name: "table-header-single-line", type: "table-header-single-line" },
         { name: "table-cell-text-overlap", type: "table-cell-text-overlap" },
+        { name: "svg-text-clipping", type: "svg-text-clipping" },
       ]);
     });
 
@@ -1109,6 +1110,29 @@ describe("compiled vlint binary acceptance", () => {
         expect(measured?.failure).toBeNull();
         expect(measured?.elementsInspected).toBe(1);
       }
+    }, CHECK_TIMEOUT);
+
+    test("compiled SVG clipping reports actionable JSON and terminal diagnostics with exit 1", async () => {
+      const cwd = await tempDir();
+      await writeConfig(cwd, {});
+      const url = `${fixture.url}/svg-text-clipping.html`;
+      const json = await execBinary(["check", "--url", url, "--format", "json"], cwd);
+      expect(json.exitCode, json.stderr).toBe(1);
+      const parsed = JSON.parse(json.stdout) as RunResult;
+      expect(parsed.status).toBe("violations");
+      const svg = parsed.cases[0]?.rules.find((rule) => rule.type === "svg-text-clipping");
+      expect(svg).toMatchObject({ status: "violations", elementsInspected: 2, failure: null });
+      expect(svg?.violations).toEqual([expect.objectContaining({
+        type: "svg-text-clipping", locator: "#label", clipLocator: "#viewport", text: "MMMM",
+        directions: ["right"], tolerancePx: 1, geometry: expect.any(Object), clipGeometry: expect.any(Object),
+      })]);
+      const terminal = await execBinary(["check", "--url", url], cwd);
+      expect(terminal.exitCode, terminal.stderr).toBe(1);
+      expect(terminal.stdout).toContain("locator=#label clip=#viewport directions=right");
+      await writeConfig(cwd, { rules: [{ name: "svg", type: "svg-text-clipping", excludeSelectors: ["svg"], minimumInspected: 1 }] });
+      const incomplete = await execBinary(["check", "--url", url, "--format", "json"], cwd);
+      expect(incomplete.exitCode, incomplete.stderr).toBe(2);
+      expect((JSON.parse(incomplete.stdout) as RunResult).status).toBe("incomplete");
     }, CHECK_TIMEOUT);
 
   },

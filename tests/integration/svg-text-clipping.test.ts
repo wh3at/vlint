@@ -306,3 +306,45 @@ test("zero-sized SVG viewports and transparent fills are not painted candidates"
     <svg width="100" height="40"><text x="90" y="25" fill="transparent">MMMM</text></svg>`);
   expect(await evaluateSvgTextClipping(page, rule)).toEqual({ facts: { elementsInspected: 0, violations: [] }, failure: null });
 });
+
+test("unmodelled nested viewport transforms, bidi and escaping positioned SVG are excluded as a whole", async () => {
+  const contents = [
+    `<svg width="100" height="40"><svg x="20" width="40" height="40" transform="scale(2)"><text x="35" y="25">MMMM</text></svg></svg>`,
+    `<svg width="100" height="40"><text x="90" y="25">مرحبا</text></svg>`,
+    `<div style="width:100px;height:40px;overflow:hidden"><svg style="position:absolute" width="200" height="40"><text x="90" y="25">MMMM</text></svg></div>`,
+    `<svg width="100" height="40"><foreignObject width="100" height="40"><div><svg width="100" height="40"><text x="90" y="25">MMMM</text></svg></div></foreignObject></svg>`,
+  ];
+  for (const content of contents) {
+    await page.setContent(`<style>svg{font:20px monospace;overflow:hidden}</style>${content}`);
+    expect(await evaluateSvgTextClipping(page, rule)).toEqual({ facts: { elementsInspected: 0, violations: [] }, failure: null });
+  }
+});
+
+test("outer clipping cannot be escaped by scrolling ink out of its scrollport", async () => {
+  await page.setContent(`<style>body{margin:0}svg{font:20px monospace;overflow:visible;display:block}</style>
+    <div id="outer" style="overflow:clip;width:100px;height:50px">
+      <div style="overflow:auto;width:100px;height:50px;margin-left:150px">
+        <svg width="400" height="40"><text x="20" y="25">MMMM</text></svg>
+      </div>
+    </div>`);
+  const result = await evaluateSvgTextClipping(page, rule);
+  expect(result.failure).toBeNull();
+  expect(result.facts.violations.map((v) => [v.clipLocator, v.directions])).toEqual([["#outer", ["right"]]]);
+});
+
+test("rounded scrollports exclude text even when another rectangular viewport clips it", async () => {
+  await page.setContent(`<div style="overflow:auto;border-radius:20px;width:100px;height:40px">
+    <svg width="400" height="40" style="font:20px monospace;overflow:hidden"><text x="390" y="25">MMMM</text></svg>
+    </div>`);
+  expect(await evaluateSvgTextClipping(page, rule)).toEqual({ facts: { elementsInspected: 0, violations: [] }, failure: null });
+});
+
+test("CSS-overridden nested viewport geometry and CSS text stroke are outside the measured subset", async () => {
+  for (const content of [
+    `<svg width="200" height="40"><svg width="100" height="40" style="x:100px"><text x="20" y="25">MMMM</text></svg></svg>`,
+    `<svg width="100" height="40"><text x="90" y="25" style="-webkit-text-stroke:2px black">MMMM</text></svg>`,
+  ]) {
+    await page.setContent(`<style>svg{font:20px monospace;overflow:hidden}</style>${content}`);
+    expect(await evaluateSvgTextClipping(page, rule)).toEqual({ facts: { elementsInspected: 0, violations: [] }, failure: null });
+  }
+});

@@ -223,16 +223,21 @@ HTML block/flex/grid/table-container `overflow: hidden / clip` are compared on
 each clipping axis, accounting for borders, padding and scale. All applicable
 clip ancestors are considered independently. Ordinary `auto / scroll` regions
 are not violations merely because the current scroll position hides text;
-their available scroll range is considered when checking outer clips. No
+their reachable ink positions are constrained by scrollports when checking outer clips. No
 scrolling or other interaction is performed.
 
 Unsupported text is silently excluded as a whole, including when a supported
 rectangle is also present. This includes child elements (`tspan`, `textPath`,
 mixed fonts/sizes), x/y lists, dx/dy, rotate, `textLength`, other baselines,
-vertical/RTL writing, stroke, shadow, decoration, font feature/variation/caps
-settings, rotations, skew, reflection, perspective, arbitrary `clip-path` /
-SVG `clipPath`, masks, filters, paint containment, rounded overflow clips,
-non-default overflow clip margins, and content-visibility optimization.
+vertical/RTL or bidi text, stroke, shadow, decoration, custom font stretch or
+size adjustment, font feature/variation/caps settings, rotations, skew, reflection,
+perspective/3D transforms, arbitrary `clip-path` / SVG `clipPath`, masks, filters,
+paint containment, rounded overflow clips (including scrollports), non-default
+overflow clip margins, and content-visibility optimization. Also excluded are
+`foreignObject` subtrees, absolute/fixed/sticky HTML or SVG viewport ancestors,
+RTL scrollers, and nested SVG viewports with their own transform/translate/scale
+or CSS geometry differing from their SVG length attributes.
+Untransformed nested SVG viewports and transformed `g`/`text` runs remain supported.
 An advance incompatible with Canvas is also outside the supported scope.
 Non-painted, empty, transparent or zero-viewport text and text in SVG definition
 containers (`defs`, `symbol`, `clipPath`, `mask`, `pattern`, `marker`) are ignored.

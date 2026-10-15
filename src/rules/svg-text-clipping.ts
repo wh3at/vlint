@@ -2,15 +2,12 @@ import type { Page } from "playwright";
 import type { EffectiveSvgTextClippingRule } from "../contracts/config";
 import type { ClippingDirection, Geometry, RuleEvaluationOutcome, SvgTextClippingViolation } from "../contracts/evaluation";
 import type { Failure } from "../contracts/failure";
-import { chooseUniqueLocator, LOCATOR_SEMANTIC_ATTRIBUTES, LOCATOR_STABLE_DATA_ATTRIBUTES } from "./locator";
+import { chooseUniqueLocator, composeLocators, cssEscape, LOCATOR_SEMANTIC_ATTRIBUTES, LOCATOR_STABLE_DATA_ATTRIBUTES } from "./locator";
 
-function extractSvgText({ excludeSelectors, tolerancePx, locatorSource, stableAttrs, semanticAttrs }: {
+function extractSvgText({ excludeSelectors, tolerancePx }: {
   excludeSelectors: readonly string[];
   tolerancePx: number;
-  locatorSource: string;
-  stableAttrs: readonly string[];
-  semanticAttrs: readonly string[];
-}): RuleEvaluationOutcome<SvgTextClippingViolation> {
+}, locate: (element: Element) => string): RuleEvaluationOutcome<SvgTextClippingViolation> {
   const violations: SvgTextClippingViolation[] = [];
   let elementsInspected = 0;
   const failure = (code: Failure["code"], message: string): RuleEvaluationOutcome<SvgTextClippingViolation> => ({
@@ -21,7 +18,6 @@ function extractSvgText({ excludeSelectors, tolerancePx, locatorSource, stableAt
     try { document.querySelectorAll(selector); }
     catch { return failure("exclude-selector-invalid", `Invalid exclude selector "${selector}".`); }
   }
-  const locate = new Function(`return (${locatorSource})`)() as (element: Element) => string;
   const axisAligned = (matrix: DOMMatrixReadOnly) => matrix.is2D !== false && matrix.a > 0 && matrix.d > 0 && Math.abs(matrix.b) < 1e-8 && Math.abs(matrix.c) < 1e-8;
   const clips = new Set(["hidden", "clip"]);
   const containers = new Set(["block", "flow-root", "list-item", "inline-block", "table", "inline-table", "table-cell", "table-caption", "flex", "inline-flex", "grid", "inline-grid"]);
@@ -29,16 +25,18 @@ function extractSvgText({ excludeSelectors, tolerancePx, locatorSource, stableAt
   try {
     for (const element of document.querySelectorAll("svg text")) {
       if (!(element instanceof SVGTextElement) || excludeSelectors.some((selector) => element.closest(selector))) continue;
-      if (element.closest("defs, symbol, clipPath, mask, pattern, marker")) continue;
+      if (element.closest("defs, symbol, clipPath, mask, pattern, marker, foreignObject")) continue;
       const style = getComputedStyle(element);
       if (style.visibility !== "visible" || style.fill === "none" || /rgba\([^)]*,\s*0\)$/.test(style.fill) || Number(style.fillOpacity) === 0) continue;
       if (element.children.length > 0 || !element.textContent?.trim()) continue;
-      const text = element.textContent.replace(/[\t\n\r ]+/g, " ").trim();
+      const text = element.textContent.replace(/[\t\n\r ]+/g, " ").replace(/^ | $/g, "");
+      if (/[\u0590-\u08ff\ufb1d-\ufeff\u202a-\u202e\u2066-\u2069]/u.test(text)) continue;
       if (style.whiteSpace !== "nowrap" && style.whiteSpace !== "normal") continue;
-      if (style.direction !== "ltr" || style.writingMode !== "horizontal-tb" ||
+      if (style.direction !== "ltr" || style.unicodeBidi !== "normal" || style.writingMode !== "horizontal-tb" ||
+          style.fontStretch !== "100%" || style.fontSizeAdjust !== "none" ||
           !["auto", "alphabetic"].includes(style.dominantBaseline) ||
           !["auto", "baseline"].includes(style.alignmentBaseline) ||
-          !["baseline", "0px"].includes(style.baselineShift) || style.stroke !== "none" ||
+          !["baseline", "0px"].includes(style.baselineShift) || style.stroke !== "none" || style.webkitTextStrokeWidth !== "0px" ||
           !["normal", "0px"].includes(style.letterSpacing) || !["normal", "0px"].includes(style.wordSpacing) ||
           style.textTransform !== "none" || style.textShadow !== "none" || style.textDecorationLine !== "none" ||
           style.fontVariantCaps !== "normal" || style.fontFeatureSettings !== "normal" || style.fontVariationSettings !== "normal") continue;
@@ -50,16 +48,25 @@ function extractSvgText({ excludeSelectors, tolerancePx, locatorSource, stableAt
         const css = getComputedStyle(current);
         ancestors.push({ element: current, style: css });
         if (current instanceof SVGSVGElement && (current.width.baseVal.value <= 0 || current.height.baseVal.value <= 0)) supported = false;
+        if (current instanceof SVGSVGElement && current.ownerSVGElement !== null) {
+          if (css.transform !== "none" || css.translate !== "none" || css.scale !== "none" ||
+              (["x", "y", "width", "height"] as const).some((name) => {
+                const value = css.getPropertyValue(name);
+                return value !== "auto" && Number.parseFloat(value) !== current[name].baseVal.value;
+              })) supported = false;
+        }
+        if ((current instanceof HTMLElement || current instanceof SVGSVGElement) && ["absolute", "fixed", "sticky"].includes(css.position)) supported = false;
+        if (css.direction !== "ltr" && [css.overflowX, css.overflowY].some((value) => ["auto", "scroll"].includes(value))) supported = false;
         if (css.display === "none" || css.contentVisibility !== "visible" || Number(css.opacity) === 0 ||
             css.clipPath !== "none" || css.maskImage !== "none" || css.filter !== "none" ||
             css.clip !== "auto" || /paint|strict|content/.test(css.contain) ||
-            css.rotate !== "none" || css.perspective !== "none" ||
+            css.rotate !== "none" || css.perspective !== "none" || css.translate.split(/\s+/).length > 2 || css.scale.split(/\s+/).length > 2 ||
             (css.transform !== "none" && !axisAligned(new DOMMatrixReadOnly(css.transform))) ||
             (css.scale !== "none" && css.scale.split(/\s+/).some((value) => Number(value) <= 0)) ||
             (current instanceof SVGTextContentElement && current !== element)) supported = false;
-        const rectangularClip = clips.has(css.overflowX) || clips.has(css.overflowY);
+        const rectangularClip = [css.overflowX, css.overflowY].some((value) => ["hidden", "clip", "auto", "scroll"].includes(value));
         if (rectangularClip && ([css.borderTopLeftRadius, css.borderTopRightRadius, css.borderBottomLeftRadius, css.borderBottomRightRadius].some((radius) => /[1-9]/.test(radius)) ||
-            !["0px", "", "content-box"].includes(css.overflowClipMargin))) supported = false;
+            !(current instanceof SVGSVGElement ? ["0px", "content-box"] : ["0px"]).includes(css.overflowClipMargin))) supported = false;
       }
       if (!supported) continue;
       const matrix = element.getScreenCTM();
@@ -72,7 +79,7 @@ function extractSvgText({ excludeSelectors, tolerancePx, locatorSource, stableAt
       context.textBaseline = "alphabetic";
       context.direction = "ltr";
       context.fontKerning = style.fontKerning as CanvasFontKerning;
-      context.fontStretch = style.fontStretch as CanvasFontStretch;
+      context.fontStretch = "normal";
       const metrics = context.measureText(text);
       const values = [metrics.actualBoundingBoxLeft, metrics.actualBoundingBoxRight, metrics.actualBoundingBoxAscent, metrics.actualBoundingBoxDescent, metrics.width];
       if (!values.every(Number.isFinite)) return failure("geometry-evaluation-failed", "Canvas returned invalid SVG text metrics.");
@@ -91,27 +98,16 @@ function extractSvgText({ excludeSelectors, tolerancePx, locatorSource, stableAt
       }
       if (geometry.width === 0 || geometry.height === 0) continue;
       elementsInspected += 1;
-      let minShiftX = 0, maxShiftX = 0, minShiftY = 0, maxShiftY = 0;
+      const reachable = { left: geometry.x, right: geometry.x + geometry.width, top: geometry.y, bottom: geometry.y + geometry.height };
       for (const ancestor of ancestors.slice(1)) {
         const current = ancestor.element;
         const css = ancestor.style;
         const layout = current as HTMLElement;
-        if (current instanceof HTMLElement && containers.has(css.display)) {
-          const rect = current.getBoundingClientRect();
-          const scaleX = layout.offsetWidth > 0 ? rect.width / layout.offsetWidth : 1;
-          const scaleY = layout.offsetHeight > 0 ? rect.height / layout.offsetHeight : 1;
-          if (["auto", "scroll"].includes(css.overflowX)) {
-            minShiftX += (layout.scrollLeft - (layout.scrollWidth - layout.clientWidth)) * scaleX;
-            maxShiftX += layout.scrollLeft * scaleX;
-          }
-          if (["auto", "scroll"].includes(css.overflowY)) {
-            minShiftY += (layout.scrollTop - (layout.scrollHeight - layout.clientHeight)) * scaleY;
-            maxShiftY += layout.scrollTop * scaleY;
-          }
-        }
+        const scrollX = current instanceof HTMLElement && containers.has(css.display) && ["auto", "scroll"].includes(css.overflowX);
+        const scrollY = current instanceof HTMLElement && containers.has(css.display) && ["auto", "scroll"].includes(css.overflowY);
         const clipX = clips.has(css.overflowX);
         const clipY = clips.has(css.overflowY);
-        if (!clipX && !clipY) continue;
+        if (!clipX && !clipY && !scrollX && !scrollY) continue;
         let boundary: Geometry;
         if (current instanceof SVGSVGElement && current.ownerSVGElement !== null) {
           const parentMatrix = (current.parentElement as unknown as SVGGraphicsElement).getScreenCTM();
@@ -138,11 +134,24 @@ function extractSvgText({ excludeSelectors, tolerancePx, locatorSource, stableAt
             width: current instanceof SVGSVGElement ? rect.width - (borders.left + borders.right + paddingX) * scaleX : layout.clientWidth * scaleX,
             height: current instanceof SVGSVGElement ? rect.height - (borders.top + borders.bottom + paddingY) * scaleY : layout.clientHeight * scaleY };
         }
+        if (scrollX || scrollY) {
+          const rect = current.getBoundingClientRect();
+          const scaleX = layout.offsetWidth > 0 ? rect.width / layout.offsetWidth : 1;
+          const scaleY = layout.offsetHeight > 0 ? rect.height / layout.offsetHeight : 1;
+          if (scrollX) {
+            reachable.left = Math.min(reachable.left + layout.scrollLeft * scaleX, boundary.x + boundary.width);
+            reachable.right = Math.max(reachable.right + (layout.scrollLeft - layout.scrollWidth + layout.clientWidth) * scaleX, boundary.x);
+          }
+          if (scrollY) {
+            reachable.top = Math.min(reachable.top + layout.scrollTop * scaleY, boundary.y + boundary.height);
+            reachable.bottom = Math.max(reachable.bottom + (layout.scrollTop - layout.scrollHeight + layout.clientHeight) * scaleY, boundary.y);
+          }
+        }
         const overflowPx = {
-          left: clipX ? Math.max(0, boundary.x - geometry.x - maxShiftX) : 0,
-          right: clipX ? Math.max(0, geometry.x + geometry.width + minShiftX - boundary.x - boundary.width) : 0,
-          top: clipY ? Math.max(0, boundary.y - geometry.y - maxShiftY) : 0,
-          bottom: clipY ? Math.max(0, geometry.y + geometry.height + minShiftY - boundary.y - boundary.height) : 0,
+          left: clipX ? Math.max(0, boundary.x - reachable.left) : 0,
+          right: clipX ? Math.max(0, reachable.right - boundary.x - boundary.width) : 0,
+          top: clipY ? Math.max(0, boundary.y - reachable.top) : 0,
+          bottom: clipY ? Math.max(0, reachable.bottom - boundary.y - boundary.height) : 0,
         };
         const directions = (Object.keys(overflowPx) as ClippingDirection[]).filter((side) => overflowPx[side] > tolerancePx);
         if (directions.length === 0) continue;
@@ -181,9 +190,9 @@ function browserLocator(element: Element, choose: typeof chooseUniqueLocator, st
 
 export async function evaluateSvgTextClipping(page: Page, rule: EffectiveSvgTextClippingRule, target: string | null = null): Promise<RuleEvaluationOutcome<SvgTextClippingViolation>> {
   try {
-    const { composeLocators, cssEscape } = await import("./locator");
     const locatorSource = `(element) => { const cssEscape = ${cssEscape.toString()}; const composeLocators = ${composeLocators.toString()}; return (${browserLocator.toString()})(element, (${chooseUniqueLocator.toString()}), ${JSON.stringify(LOCATOR_STABLE_DATA_ATTRIBUTES)}, ${JSON.stringify(LOCATOR_SEMANTIC_ATTRIBUTES)}); }`;
-    const result = await page.evaluate<RuleEvaluationOutcome<SvgTextClippingViolation>>(`(${extractSvgText.toString()})(${JSON.stringify({ ...rule, locatorSource, stableAttrs: LOCATOR_STABLE_DATA_ATTRIBUTES, semanticAttrs: LOCATOR_SEMANTIC_ATTRIBUTES })})`);
+    const args = { excludeSelectors: rule.excludeSelectors, tolerancePx: rule.tolerancePx };
+    const result = await page.evaluate<RuleEvaluationOutcome<SvgTextClippingViolation>>(`(${extractSvgText.toString()})(${JSON.stringify(args)}, ${locatorSource})`);
     return { ...result, failure: result.failure === null ? null : { ...result.failure, rule: rule.name, target } };
   } catch {
     return { facts: { elementsInspected: 0, violations: [] }, failure: {
