@@ -101,6 +101,11 @@ export function renderTerminal(result: RunResult): string {
           lines.push(
             `    violation locator=${escapeTerminal(violation.locator)} adjacent=${escapeTerminal(violation.adjacentLocator)} overlap=${violation.overlapPx}px box=${box.x},${box.y},${box.width},${box.height}`,
           );
+        } else if (violation.type === "svg-text-clipping") {
+          const clip = violation.clipGeometry;
+          lines.push(
+            `    violation locator=${escapeTerminal(violation.locator)} clip=${escapeTerminal(violation.clipLocator)} directions=${violation.directions.join(",")} overflow=${escapeTerminal(JSON.stringify(violation.overflowPx))} tolerance=${violation.tolerancePx}px box=${box.x},${box.y},${box.width},${box.height} clipBox=${clip.x},${clip.y},${clip.width},${clip.height} text=${escapeTerminal(violation.text)}`,
+          );
         } else {
           lines.push(
             `    violation message=${escapeTerminal(violation.message)} locator=${escapeTerminal(violation.locator)} box=${box.x},${box.y},${box.width},${box.height}`,

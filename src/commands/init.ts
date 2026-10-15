@@ -51,6 +51,10 @@ const STANDARD_RULES = [
     name: "table-cell-text-overlap",
     type: "table-cell-text-overlap",
   },
+  {
+    name: "svg-text-clipping",
+    type: "svg-text-clipping",
+  },
 ] as const;
 
 /**

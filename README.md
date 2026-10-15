@@ -161,7 +161,8 @@ and iPhone 17 profiles.
     { "name": "tab-label-single-line", "type": "tab-label-single-line" },
     { "name": "page-horizontal-overflow", "type": "page-horizontal-overflow" },
     { "name": "table-header-single-line", "type": "table-header-single-line" },
-    { "name": "table-cell-text-overlap", "type": "table-cell-text-overlap" }
+    { "name": "table-cell-text-overlap", "type": "table-cell-text-overlap" },
+    { "name": "svg-text-clipping", "type": "svg-text-clipping" }
   ],
   "provider": {
     "type": "static",
@@ -181,8 +182,78 @@ and iPhone 17 profiles.
 - **`page-horizontal-overflow`** — detects unintended root-page horizontal scroll attributed to light-DOM elements. Field: `tolerancePx` (`0`–`100`, default `1`).
 - **`table-header-single-line`** — each rendered semantic column header must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `lineTopTolerancePx`.
 - **`table-cell-text-overlap`** — detects visible text entering an adjacent cell in the same table/grid. Fields: `enabled` (default `true`), `excludeSelectors` (default `[]`).
+- **`svg-text-clipping`** — detects SVG text ink extending beyond rectangular clip boundaries. Fields: `enabled`, `excludeSelectors`, `tolerancePx` (CSS pixels, `0`–`100`, default `1`).
 - **`static`** provider — inline `targets` (`name`, `url`, defaults, optional `ruleOverrides`).
 - **`command`** provider — runs a trusted executable without a shell, reads `{"targets":[...]}` from stdout (`executable`, `args`, `timeoutMs`).
+
+### SVG text clipping rule
+
+Enabled by default, even when omitted from `rules`; `init` also includes it.
+Discovers light-DOM SVG `<text>` without chart-specific selectors. Intentional
+clipping is reported too: opt out with `excludeSelectors`, matching the text or
+an ancestor. A named instance suppresses the injected default. As with the cell
+rule, an existing rule using the default name reserves that name.
+
+```jsonc
+{ "name": "svg-labels", "type": "svg-text-clipping",
+  "tolerancePx": 1, "excludeSelectors": [".intentionally-cropped"],
+  "minimumInspected": 1 }
+```
+
+A target can disable the named rule or append exclusions:
+
+```jsonc
+{ "name": "chart", "url": "http://localhost:3000/chart",
+  "ruleOverrides": { "svg-labels": { "enabled": false, "excludeSelectors": ["#annotation"] } } }
+```
+
+The rule measures Canvas `measureText()` ink-oriented `actualBoundingBox*` metrics
+using the SVG font, weight, style, kerning and size, positions them from the SVG
+first-character baseline origin (including `text-anchor`), and maps them through
+`getScreenCTM()` to CSS pixels. SVG advance length is checked for compatibility;
+advance agreement alone is not a guarantee of equivalent placement. Neither SVG
+`getBBox()` nor character-cell BCRs determine violations, and there is no cell-box
+fallback. Fully clipped text remains measurable without changing the document.
+
+Supported scope: a direct, single-style text run in left-to-right horizontal
+writing with normal whitespace collapsing, default/alphabetic baseline, no
+custom letter/word spacing, positive axis-aligned scaling and translation,
+`viewBox`, and start/middle/end anchors. Rectangular SVG viewport overflow and
+HTML block/flex/grid/table-container `overflow: hidden / clip` are compared on
+each clipping axis, accounting for borders, padding and scale. All applicable
+clip ancestors are considered independently. Ordinary `auto / scroll` regions
+are not violations merely because the current scroll position hides text;
+their available scroll range is considered when checking outer clips. No
+scrolling or other interaction is performed.
+
+Unsupported text is silently excluded as a whole, including when a supported
+rectangle is also present. This includes child elements (`tspan`, `textPath`,
+mixed fonts/sizes), x/y lists, dx/dy, rotate, `textLength`, other baselines,
+vertical/RTL writing, stroke, shadow, decoration, font feature/variation/caps
+settings, rotations, skew, reflection, perspective, arbitrary `clip-path` /
+SVG `clipPath`, masks, filters, paint containment, rounded overflow clips,
+non-default overflow clip margins, and content-visibility optimization.
+An advance incompatible with Canvas is also outside the supported scope.
+Non-painted, empty, transparent or zero-viewport text and text in SVG definition
+containers (`defs`, `symbol`, `clipPath`, `mask`, `pattern`, `marker`) are ignored.
+Shadow DOM, embedded SVG images, occlusion, ellipsis and line-clamp are not checked.
+
+JSON and terminal diagnostics include `text`, unique `locator`, ink `geometry`,
+`clipLocator`, `clipGeometry`, `directions`, `overflowPx` for all four sides, and
+`tolerancePx`. Geometry and distances are CSS pixels; an excess must be strictly
+greater than the tolerance to report. One text can report multiple clip sources
+but counts only once in `elementsInspected`. Excluded and unsupported text do
+not count. Zero candidates is valid unless a positive minimum was declared.
+Unsupported conditions produce no diagnostic or failure and do not alone make
+a run `incomplete`. A supported measurement failure is an ordinary rule failure,
+not a violation or a successful zero count.
+
+A clean result means no violations **within this supported scope**, not that all
+SVG text is intact. Canvas bounds are not pixel-perfect glyph-loss detection:
+rasterization, anti-aliasing and scaling can differ from the measured outline.
+DPR 1/2 image controls in tests verify placement and a cell-only boundary crossing;
+they are not part of product detection or a universal accuracy guarantee.
+
 
 ### Table header single-line rule
 

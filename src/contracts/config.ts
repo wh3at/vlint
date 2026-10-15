@@ -75,7 +75,8 @@ export type BuiltinRuleType =
   | "tab-label-single-line"
   | "page-horizontal-overflow"
   | "table-header-single-line"
-  | "table-cell-text-overlap";
+  | "table-cell-text-overlap"
+  | "svg-text-clipping";
 
 export type RuleType = BuiltinRuleType | "local";
 
@@ -114,6 +115,13 @@ export interface TableCellTextOverlapRuleInstance extends RuleInstanceBase {
   readonly excludeSelectors?: readonly string[];
 }
 
+export interface SvgTextClippingRuleInstance extends RuleInstanceBase {
+  readonly type: "svg-text-clipping";
+  readonly enabled?: boolean;
+  readonly tolerancePx?: number;
+  readonly excludeSelectors?: readonly string[];
+}
+
 export interface LocalRuleInstance extends RuleInstanceBase {
   readonly type: "local";
   /** Project-relative path to a self-contained TypeScript rule file (R1, R2). */
@@ -126,6 +134,7 @@ export type RuleInstance =
   | PageHorizontalOverflowRuleInstance
   | TableHeaderSingleLineRuleInstance
   | TableCellTextOverlapRuleInstance
+  | SvgTextClippingRuleInstance
   | LocalRuleInstance;
 
 export interface Config {
@@ -171,6 +180,12 @@ export interface EffectiveTableCellTextOverlapRule extends EffectiveRuleBase {
   readonly excludeSelectors: readonly string[];
 }
 
+export interface EffectiveSvgTextClippingRule extends EffectiveRuleBase {
+  readonly type: "svg-text-clipping";
+  readonly tolerancePx: number;
+  readonly excludeSelectors: readonly string[];
+}
+
 export interface EffectiveLocalRule extends EffectiveRuleBase {
   readonly type: "local";
   readonly path: string;
@@ -182,6 +197,7 @@ export type EffectiveRule =
   | EffectivePageHorizontalOverflowRule
   | EffectiveTableHeaderSingleLineRule
   | EffectiveTableCellTextOverlapRule
+  | EffectiveSvgTextClippingRule
   | EffectiveLocalRule;
 
 export type EffectiveRuleForTarget = EffectiveRule;

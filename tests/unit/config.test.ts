@@ -60,6 +60,7 @@ describe("configuration", () => {
       "page-horizontal-overflow",
       "table-header-single-line",
       "table-cell-text-overlap",
+      "svg-text-clipping",
     ]);
     const resolution = resolveAdHocTarget(loaded.value, "http://127.0.0.1:4173/adhoc");
     if (!resolution.ok) throw new Error(resolution.violation.message);
@@ -412,6 +413,7 @@ devices: [DESKTOP_DEVICE],
         minimumInspected: null,
       },
       { name: "table-cell-text-overlap", type: "table-cell-text-overlap", enabled: true, minimumInspected: null, excludeSelectors: [] },
+        { name: "svg-text-clipping", type: "svg-text-clipping", enabled: true, minimumInspected: null, excludeSelectors: [], tolerancePx: 1 },
     ]);
   });
 
@@ -552,6 +554,7 @@ devices: [DESKTOP_DEVICE],
       "page-horizontal-overflow:page-horizontal-overflow",
       "table-header-single-line:table-header-single-line",
       "table-cell-text-overlap:table-cell-text-overlap",
+      "svg-text-clipping:svg-text-clipping",
     ]);
     const local = loaded.value.rules.find((rule) => rule.type === "local");
     expect(local).toMatchObject({
@@ -746,6 +749,7 @@ devices: [DESKTOP_DEVICE],
       },
       expect.objectContaining({ name: "page-horizontal-overflow" }),
       expect.objectContaining({ name: "table-cell-text-overlap" }),
+      expect.objectContaining({ name: "svg-text-clipping" }),
     ]);
   });
 

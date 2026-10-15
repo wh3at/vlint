@@ -68,11 +68,24 @@ export interface TableCellTextOverlapViolation extends ViolationBase {
   readonly overlapPx: number;
 }
 
+export type ClippingDirection = "left" | "right" | "top" | "bottom";
+
+export interface SvgTextClippingViolation extends ViolationBase {
+  readonly type: "svg-text-clipping";
+  readonly text: string;
+  readonly clipLocator: string;
+  readonly clipGeometry: Geometry;
+  readonly directions: readonly ClippingDirection[];
+  readonly overflowPx: Readonly<Record<ClippingDirection, number>>;
+  readonly tolerancePx: number;
+}
+
 export type Violation =
   | TabLabelSingleLineViolation
   | PageHorizontalOverflowViolation
   | TableHeaderSingleLineViolation
   | TableCellTextOverlapViolation
+  | SvgTextClippingViolation
   | LocalViolation;
 
 /**
