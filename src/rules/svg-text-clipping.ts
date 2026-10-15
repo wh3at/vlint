@@ -34,7 +34,8 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
       if (element.children.length > 0) {
         const child = element.firstElementChild;
         if (element.children.length !== 1 || !(child instanceof SVGTSpanElement) || child.children.length > 0 ||
-            Array.from(element.childNodes).some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim())) continue;
+            Array.from(element.childNodes).some((node) => (node.nodeType === Node.TEXT_NODE || node.nodeType === Node.CDATA_SECTION_NODE) && /[^\t\n\r ]/.test(node.textContent ?? ""))) continue;
+        if (!["normal", "nowrap"].includes(getComputedStyle(element).whiteSpace)) continue;
         run = child;
       }
       const style = getComputedStyle(run);
@@ -45,11 +46,9 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
       if (style.whiteSpace !== "nowrap" && style.whiteSpace !== "normal") continue;
       if (style.direction !== "ltr" || style.unicodeBidi !== "normal" || style.writingMode !== "horizontal-tb" ||
           style.fontStretch !== "100%" || style.fontSizeAdjust !== "none" ||
-          !["auto", "alphabetic"].includes(style.dominantBaseline) ||
-          !["auto", "baseline"].includes(style.alignmentBaseline) ||
-          !["baseline", "0px"].includes(style.baselineShift) || style.stroke !== "none" || style.webkitTextStrokeWidth !== "0px" ||
+          style.stroke !== "none" || style.webkitTextStrokeWidth !== "0px" ||
           !["normal", "0px"].includes(style.letterSpacing) || !["normal", "0px"].includes(style.wordSpacing) ||
-          style.textTransform !== "none" || style.textShadow !== "none" || style.textDecorationLine !== "none" ||
+          style.textTransform !== "none" || style.textShadow !== "none" ||
           style.fontVariantCaps !== "normal" || style.fontFeatureSettings !== "normal" || style.fontVariationSettings !== "normal") continue;
       const positioning = run === element ? [element] : [element, run];
       if (positioning.some((node) => node.x.baseVal.numberOfItems > 1 || node.y.baseVal.numberOfItems > 1 ||
