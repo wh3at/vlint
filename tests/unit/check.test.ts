@@ -36,7 +36,7 @@ const MOBILE_DEVICE = {
   userAgent: "Mozilla/5.0 (TestPhone)",
 };
 
-async function writeSentinelProvider(directory: string, sentinel: string, targetsJson: string): Promise<string> {
+async function writeSentinelProvider(directory: string, targetsJson: string): Promise<string> {
   const script = join(directory, "provider.sh");
   await writeFile(script, `#!/bin/sh\ntouch "$1"\necho '${targetsJson}'\n`);
   await chmod(script, 0o755);
@@ -65,7 +65,6 @@ describe("check resolution", () => {
     const sentinel = join(directory, "provider-ran");
     const script = await writeSentinelProvider(
       directory,
-      sentinel,
       '{"targets":[{"name":"from-provider","url":"http://127.0.0.1:4173/provided"}]}',
     );
     await writeFile(
@@ -89,7 +88,6 @@ describe("check resolution", () => {
     const sentinel = join(directory, "provider-ran");
     const script = await writeSentinelProvider(
       directory,
-      sentinel,
       '{"targets":[{"name":"second","url":"http://127.0.0.1:4173/second"},{"name":"first","url":"http://127.0.0.1:4173/first"}]}',
     );
     await writeFile(

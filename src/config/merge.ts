@@ -2,7 +2,6 @@ import { isAbsolute, resolve } from "node:path";
 import type {
   DeviceProfile,
   EffectiveAuditCase,
-  EffectiveLocalRule,
   EffectiveRule,
   EffectiveRuleForTarget,
   EffectiveTarget,

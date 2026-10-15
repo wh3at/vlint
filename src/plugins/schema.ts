@@ -11,7 +11,6 @@ import { MAX_CALLBACK_SOURCE_BYTES } from "./types";
 const DANGEROUS_JSON_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const MAX_SCHEMA_DEPTH = 16;
 const MAX_SCHEMA_PROPERTIES = 64;
-const MAX_SCHEMA_ARRAY_ITEMS = 64;
 
 function pluginFailure(code: Failure["code"], message: string, rule: string | null = null): Failure {
   return { stage: "config", code, message, target: null, device: null, rule };

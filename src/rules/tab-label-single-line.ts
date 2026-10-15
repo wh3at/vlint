@@ -20,7 +20,6 @@ import type { Page } from "playwright";
 import type { EffectiveTabLabelSingleLineRule } from "../contracts/config";
 import type {
   Geometry,
-  RuleEvaluationFact,
   RuleEvaluationOutcome,
   TabLabelSingleLineViolation,
 } from "../contracts/evaluation";

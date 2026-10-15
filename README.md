@@ -548,10 +548,33 @@ JSON, fixes the layout from the rule type, geometry, and locator, and re-runs.
 
 ## Building from source
 
+Development uses the exact Bun version declared in `package.json` → `engines.bun`.
+The project-local `mise.toml` selects that version without changing global tools:
+
 ```sh
-bun install --frozen-lockfile   # requires Bun 1.3.14
-bun run build:linux-x64         # dist/vlint-linux-x64
+mise install
+mise exec -- bun install --frozen-lockfile
+mise exec -- bun run build:linux-x64
 ```
+
+The binary is written to `dist/vlint-linux-x64`. If your shell already selects the
+required Bun version, plain `bun` commands work too. From the repository root,
+package validation/build scripts and direct `bun test` commands stop on a version
+mismatch before doing work. Unit tests check that the mise and CI pins match
+`package.json`. This is a development guard, not a requirement on users of the
+compiled executable.
+
+```sh
+mise exec -- bun run typecheck
+mise exec -- bun test tests/integration/svg-text-clipping-pairs.test.ts
+mise exec -- bun run test:all
+```
+
+SVG geometry controls exercise the public rule evaluator in
+`tests/integration/svg-text-clipping-pairs.test.ts`. Their small scene generator
+is `tests/fixtures/svg-text-clipping.ts`; expected outcomes remain explicit in
+the tests. The controls pair joint translation, overlapping/touching/separated
+scrollports, pixel/percentage units, and supported/unsupported clip combinations.
 
 `bun run release:validate` (Docker) exercises the archive in a clean Ubuntu 24.04 x64
 guest; `bun run test:feasibility` runs the compiled-Playwright feasibility probe.
