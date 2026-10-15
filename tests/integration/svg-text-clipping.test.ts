@@ -384,3 +384,67 @@ test("touching scrollport boundaries are detected on all axes while a positive r
     expect(result.facts.violations.map((v) => v.directions)).toEqual(direction === null ? [] : [[direction]]);
   }
 });
+
+test("body overflow propagated to the viewport does not clip at the body box", async () => {
+  const isolated = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  try {
+    for (const overflow of ["hidden", "clip"]) {
+      await isolated.setContent(`<!doctype html><style>body{margin:0;height:40px;overflow:${overflow}}
+        svg{display:block;font:20px monospace;overflow:visible}</style>
+        <svg width="100" height="40"><text x="20" y="100">M</text></svg>`);
+      const result = await evaluateSvgTextClipping(isolated, rule);
+      expect(result.failure).toBeNull();
+      expect(result.facts.elementsInspected).toBe(1);
+      expect(result.facts.violations).toEqual([]);
+      await isolated.locator("text").evaluate((element) => element.setAttribute("y", "650"));
+      const clipped = await evaluateSvgTextClipping(isolated, rule);
+      expect(clipped.failure).toBeNull();
+      expect(clipped.facts.violations).toHaveLength(1);
+      expect(clipped.facts.violations[0]).toMatchObject({ directions: ["bottom"],
+        clipGeometry: { x: 0, y: 0, width: 800, height: 600 } });
+    }
+    await isolated.setContent(`<!doctype html><style>html{overflow:auto}body{margin:0;height:40px;overflow:hidden}
+      svg{display:block;font:20px monospace;overflow:visible}</style>
+      <svg width="100" height="40"><text x="20" y="100">M</text></svg>`);
+    const local = await evaluateSvgTextClipping(isolated, rule);
+    expect(local.failure).toBeNull();
+    expect(local.facts.violations).toHaveLength(1);
+    expect(local.facts.violations[0]).toMatchObject({ directions: ["bottom"], clipGeometry: { height: 40 } });
+  } finally { await isolated.close(); }
+});
+
+test("paint-server fills are outside the measured subset even with a solid fallback", async () => {
+  for (const fill of ["url(#missing) none", "url(#missing) black", "url(#gradient)"]) {
+    await page.setContent(`<svg width="100" height="40" style="font:20px monospace;overflow:hidden">
+      <defs><linearGradient id="gradient"><stop stop-color="black"/></linearGradient></defs>
+      <text x="90" y="25" fill="${fill}">MMMM</text></svg>`);
+    expect(await evaluateSvgTextClipping(page, rule)).toEqual({ facts: { elementsInspected: 0, violations: [] }, failure: null });
+  }
+});
+
+test("SVG diagnostic fields enforce a 64 KiB UTF-8 boundary", async () => {
+  for (const field of ["text", "locator", "clipLocator"] as const) {
+    for (const excess of [0, 1]) {
+      await page.setContent(`<svg id="viewport" width="100" height="40" style="font:20px monospace;overflow:hidden">
+        <text id="label" x="95" y="25">M</text></svg>`);
+      await page.evaluate(({ field, excess }) => {
+        if (field === "text") {
+          document.querySelector("text")!.textContent = "M" + " ".repeat(65535 + excess);
+        } else {
+          document.querySelector(field === "locator" ? "text" : "svg")!.id = "é".repeat(32767) + "a".repeat(1 + excess);
+        }
+      }, { field, excess });
+      const result = await evaluateSvgTextClipping(page, rule, "fixture");
+      if (excess === 0) {
+        expect(result.failure).toBeNull();
+        expect(result.facts.violations).toHaveLength(1);
+        const value = result.facts.violations[0]![field];
+        expect(new TextEncoder().encode(value).byteLength).toBe(65536);
+      } else {
+        expect(result.failure).toMatchObject({ code: "diagnostic-field-too-large", target: "fixture", rule: rule.name });
+        expect(result.facts.elementsInspected).toBe(1);
+        expect(result.facts.violations).toEqual([]);
+      }
+    }
+  }
+});

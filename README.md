@@ -220,8 +220,9 @@ writing with normal whitespace collapsing, default/alphabetic baseline, no
 custom letter/word spacing, positive axis-aligned scaling and translation,
 `viewBox`, and start/middle/end anchors. Rectangular SVG viewport overflow and
 HTML block/flex/grid/table-container `overflow: hidden / clip` are compared on
-each clipping axis, accounting for borders, padding and scale. All applicable
-clip ancestors are considered independently. Ordinary `auto / scroll` regions
+each clipping axis, accounting for borders, padding and scale. Root/body overflow
+propagated to the viewport uses the viewport boundary rather than the body box.
+All applicable clip ancestors are considered independently. Ordinary `auto / scroll` regions
 are not violations merely because the current scroll position hides text;
 their reachable ink positions are constrained by scrollports when checking outer clips. No
 scrolling or other interaction is performed.
@@ -229,7 +230,8 @@ scrolling or other interaction is performed.
 Unsupported text is silently excluded as a whole, including when a supported
 rectangle is also present. This includes child elements (`tspan`, `textPath`,
 mixed fonts/sizes), x/y lists, dx/dy, rotate, `textLength`, other baselines,
-vertical/RTL or bidi text, stroke, shadow, decoration, custom font stretch or
+vertical/RTL or bidi text, paint-server fills (`fill: url(...)`, including fallback
+colors), stroke, shadow, decoration, custom font stretch or
 size adjustment, font feature/variation/caps settings, rotations, skew, reflection,
 perspective/3D transforms, arbitrary `clip-path` / SVG `clipPath`, masks, filters,
 paint containment, rounded overflow clips (including scrollports), non-default

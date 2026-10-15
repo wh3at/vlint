@@ -21,13 +21,17 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
   const axisAligned = (matrix: DOMMatrixReadOnly) => matrix.is2D !== false && matrix.a > 0 && matrix.d > 0 && Math.abs(matrix.b) < 1e-8 && Math.abs(matrix.c) < 1e-8;
   const clips = new Set(["hidden", "clip"]);
   const containers = new Set(["block", "flow-root", "list-item", "inline-block", "table", "inline-table", "table-cell", "table-caption", "flex", "inline-flex", "grid", "inline-grid"]);
+  const root = document.documentElement;
+  const rootStyle = getComputedStyle(root);
+  const bodyOverflowPropagates = rootStyle.overflowX === "visible" && rootStyle.overflowY === "visible" &&
+    !/size|layout|paint|strict|content/.test(`${rootStyle.contain} ${document.body ? getComputedStyle(document.body).contain : ""}`);
   let context: CanvasRenderingContext2D | null = null;
   try {
     for (const element of document.querySelectorAll("svg text")) {
       if (!(element instanceof SVGTextElement) || excludeSelectors.some((selector) => element.closest(selector))) continue;
       if (element.closest("defs, symbol, clipPath, mask, pattern, marker, foreignObject")) continue;
       const style = getComputedStyle(element);
-      if (style.visibility !== "visible" || style.fill === "none" || /rgba\([^)]*,\s*0\)$/.test(style.fill) || Number(style.fillOpacity) === 0) continue;
+      if (style.visibility !== "visible" || style.fill === "none" || style.fill.startsWith("url(") || /rgba\([^)]*,\s*0\)$/.test(style.fill) || Number(style.fillOpacity) === 0) continue;
       if (element.children.length > 0 || !element.textContent?.trim()) continue;
       const text = element.textContent.replace(/[\t\n\r ]+/g, " ").replace(/^ | $/g, "");
       if (/[\u0590-\u08ff\ufb1d-\ufeff\u202a-\u202e\u2066-\u2069]/u.test(text)) continue;
@@ -110,7 +114,9 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
         const clipY = clips.has(css.overflowY);
         if (!clipX && !clipY && !scrollX && !scrollY) continue;
         let boundary: Geometry;
-        if (current instanceof SVGSVGElement && current.ownerSVGElement !== null) {
+        if (current === root || (current === document.body && bodyOverflowPropagates)) {
+          boundary = { x: 0, y: 0, width: root.clientWidth, height: root.clientHeight };
+        } else if (current instanceof SVGSVGElement && current.ownerSVGElement !== null) {
           const parentMatrix = (current.parentElement as unknown as SVGGraphicsElement).getScreenCTM();
           if (parentMatrix === null) return failure("geometry-evaluation-failed", "SVG viewport has no screen transform.");
           if (!axisAligned(parentMatrix)) continue;
@@ -137,24 +143,25 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
         }
         if (scrollX || scrollY) {
           const rect = current.getBoundingClientRect();
-          const scaleX = layout.offsetWidth > 0 ? rect.width / layout.offsetWidth : 1;
-          const scaleY = layout.offsetHeight > 0 ? rect.height / layout.offsetHeight : 1;
-          if (scrollX) {
-            const minimum = (layout.scrollLeft - layout.scrollWidth + layout.clientWidth) * scaleX;
-            const maximum = layout.scrollLeft * scaleX;
-            reachable.left = Math.min(reachable.left + maximum, boundary.x + boundary.width);
-            reachable.right = Math.max(reachable.right + minimum, boundary.x);
-            paintable.left = Math.max(paintable.left + minimum, boundary.x);
-            paintable.right = Math.min(paintable.right + maximum, boundary.x + boundary.width);
-          }
-          if (scrollY) {
-            const minimum = (layout.scrollTop - layout.scrollHeight + layout.clientHeight) * scaleY;
-            const maximum = layout.scrollTop * scaleY;
-            reachable.top = Math.min(reachable.top + maximum, boundary.y + boundary.height);
-            reachable.bottom = Math.max(reachable.bottom + minimum, boundary.y);
-            paintable.top = Math.max(paintable.top + minimum, boundary.y);
-            paintable.bottom = Math.min(paintable.bottom + maximum, boundary.y + boundary.height);
-          }
+          const updateScrollRange = (horizontal: boolean) => {
+            const start = horizontal ? "left" : "top";
+            const end = horizontal ? "right" : "bottom";
+            const offset = horizontal ? layout.offsetWidth : layout.offsetHeight;
+            const scale = offset > 0 ? (horizontal ? rect.width : rect.height) / offset : 1;
+            const position = horizontal ? layout.scrollLeft : layout.scrollTop;
+            const extent = horizontal ? layout.scrollWidth : layout.scrollHeight;
+            const size = horizontal ? layout.clientWidth : layout.clientHeight;
+            const boundaryStart = horizontal ? boundary.x : boundary.y;
+            const boundaryEnd = boundaryStart + (horizontal ? boundary.width : boundary.height);
+            const minimum = (position - extent + size) * scale;
+            const maximum = position * scale;
+            reachable[start] = Math.min(reachable[start] + maximum, boundaryEnd);
+            reachable[end] = Math.max(reachable[end] + minimum, boundaryStart);
+            paintable[start] = Math.max(paintable[start] + minimum, boundaryStart);
+            paintable[end] = Math.min(paintable[end] + maximum, boundaryEnd);
+          };
+          if (scrollX) updateScrollRange(true);
+          if (scrollY) updateScrollRange(false);
         }
         const overflowPx = {
           left: clipX ? Math.max(0, boundary.x - reachable.left, paintable.right <= boundary.x ? geometry.width + boundary.x - paintable.right : 0) : 0,
@@ -164,8 +171,13 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
         };
         const directions = (Object.keys(overflowPx) as ClippingDirection[]).filter((side) => overflowPx[side] > tolerancePx);
         if (directions.length === 0) continue;
-        violations.push({ type: "svg-text-clipping", locator: locate(element), text: element.textContent!, geometry,
-          clipLocator: locate(current), clipGeometry: boundary, directions, overflowPx, tolerancePx });
+        const locator = locate(element);
+        const clipLocator = locate(current);
+        if ([element.textContent!, locator, clipLocator].some((value) => new TextEncoder().encode(value).byteLength > 64 * 1024)) {
+          return failure("diagnostic-field-too-large", "SVG text clipping diagnostics exceed the supported size.");
+        }
+        violations.push({ type: "svg-text-clipping", locator, text: element.textContent!, geometry,
+          clipLocator, clipGeometry: boundary, directions, overflowPx, tolerancePx });
       }
     }
     return { facts: { elementsInspected, violations }, failure: null };
