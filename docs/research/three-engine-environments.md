@@ -1,237 +1,210 @@
-# 3エンジン（Chromium / Firefox / WebKit）を再現可能に配布・実行するための事実整理
+# 3エンジンを再現可能に配布・実行できる条件
 
-対象issue: [#45 3エンジンを再現可能に配布・実行できる条件は何か](https://github.com/wh3at/vlint/issues/45)
+対象: [3エンジンを再現可能に配布・実行できる条件は何か](https://github.com/wh3at/vlint/issues/45)
 
-本書は**環境契約の下流判断（どのエンジンを、どのOSで、どう固定・導入するか）を可能にするための事実と未検証事項**の整理であり、方針判断そのものは行わない。
+## 結論と調査範囲
 
-## 0. 調査方法と証拠クラス
+Playwright 1.61.1にはUbuntu 24.04 x64向けのChromium・Firefox・WebKitの成果物と依存定義がある。ただし、**現行vlintの配布・導入・検証・結果形式はChromium headless shell専用**であり、3エンジンでのBunコンパイル配布と既存ルールの動作は実証していない。
 
-| クラス | 意味 | 本書での表記 |
+固定の単位はエンジン名や表示バージョンだけでは足りない。Playwright版、ブラウザー成果物、ホストOS・アーキテクチャ、依存ライブラリ、フォント、実行オプションを区別する必要がある。どこまで固定・確認し、何を再現性として保証するかは後続の製品判断である。
+
+- コード読解の基準は[main d2d5ee8](https://github.com/wh3at/vlint/tree/d2d5ee8d70df32a85caf39f9da31fe819e124a2f)。研究ブランチの古いコードではない。
+- 外部仕様・実装は原則Playwright `v1.61.1`、Bun `bun-v1.3.14`の一次資料で照合した。現行サイトの最新版の説明を固定版へ適用しない。
+- ブラウザーの導入・起動、コンパイル済み3エンジンの実行、実OSとの比較は行っていない。後述の合成テストは実ブラウザーの測定ではない。
+- 本書は事実・推論・未検証事項を整理する調査成果物であり、実装仕様ではない。製品コードは変更していない。
+
+用語はリポジトリの`CONTEXT.md`に従う。**検査対象プラットフォームは利用者の閲覧環境であり、検査実行ホストとは異なる。** 現行の`devices`はviewport等のエミュレーションパラメーターで、iPhone・Windowsなどのプラットフォーム宣言そのものではない。同じviewportやUAを与えただけで実OSの表示再現が成立するとは扱わない。
+
+## 1. 現行vlintの事実（コード読解）
+
+以下のパスはすべて上記mainに対するもの。
+
+| 領域 | 確認したこと | 根拠 |
 | --- | --- | --- |
-| **A: リポジトリ事実** | `/home/wh3at/Work/vlint` の現行HEADのコード・スクリプト・CI定義を直接読んで確認した事実 | 「A:」（コード読解） |
-| **B: 一次ドキュメント/一次ソース事実** | Playwright 1.61.1 のタグ付き一次ソース、`browsers.json`、公式ドキュメント、Bun公式ドキュメント、MCRのタグ一覧 | 「B:」 |
-| **C: 推論** | A/Bから導いた推論。ソースが直接そう述べているわけではない | 「C:」（推論） |
-| **D: 未検証** | 実機・実バイナリでの確認ができていないもの | §10 に列挙 |
+| 依存固定 | Playwright `1.61.1`、Bun `1.3.14`。ビルド・テスト前にBun版の厳密一致を検査する | `package.json`, `scripts/check-runtime.ts` |
+| 管理対象・起動 | `MANAGED_BROWSER_NAME = "chromium-headless-shell"`、`chromium.launch({headless: true, executablePath})`のみ | `src/browser/install.ts`, `src/browser/lifecycle.ts` |
+| コンパイル | `bun-linux-x64-baseline`。Playwrightの`package.json`と`browsers.json`をビルド時にJSへ埋め込み、`chromium-bidi/*`をexternalにする。ブラウザー実行ファイルは同梱しない | `scripts/build.ts`, `README.md` |
+| 実バージョン検証 | 実行ファイルへ`--version`を渡し、stdout中の4要素の数字列を期待`browserVersion`と文字列比較する。非0終了・タイムアウト・不一致は`browser-incompatible` | `src/browser/install.ts`: `probeBrowserVersion`, `verifyActualBrowserVersion` |
+| checkとstatus | `check`は配置・権限の確認後、実バージョンも検証する。`browser status`は配置・アクセス・revisionディレクトリの検査だけで、実バージョンを問い合わせない | 同: `resolveManagedExecutableForCheck`, `inspectBrowserRequirements`; `src/commands/browser-status.ts` |
+| キャッシュ・環境変数 | 標準キャッシュを前提にChromiumのディレクトリを走査する。`PLAYWRIGHT_BROWSERS_PATH`はinstall/checkで拒否。installでは`PLAYWRIGHT_DOWNLOAD_HOST`と`PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST`も拒否する | `src/browser/install.ts` |
+| 明示的準備 | `browser install --with-deps`がPlaywrightの内部registryの`installDeps`を特権ワーカーから呼ぶ。`check`は導入を行わない | 同: `runDependenciesInstallerWorkerMain`, `installBrowserDependencies` |
+| OS・依存 | 配布インストーラスクリプトはUbuntu 24.04 x64を要求するが、バイナリ自身には同じOSゲートがない。deb/README/CI/リリース検証コンテナのapt一覧はChromium向け21パッケージ＋`ca-certificates`＋`fonts-liberation` | `scripts/package-release.ts`, `README.md`, `.github/workflows/ci.yml`, `tests/release/Containerfile` |
+| 実行単位 | 1 runで1回起動した`Browser`接続を共有し、ケースは最大2並列。これを単一OSプロセス、または将来の3エンジンで必ず3プロセスになるという意味には読めない | `src/browser/lifecycle.ts`, `src/run/orchestrator.ts` |
+| コンテキスト | viewport/screen/DPR/isMobile/hasTouch/locale/timezoneを渡す。`isMobile: false`も省略しない。プロファイルはvlint設定の自前定義で、Playwrightのデバイス一覧を自動適用していない | `src/browser/lifecycle.ts`, `src/config/schema.ts` |
+| 設定・ケース | 設定のトップレベル許可キーはdevices/provider/defaults/rules。エンジン指定はない。ケースは対象ページ×デバイスで、エンジン識別子を持たない | `src/config/schema.ts`, `src/contracts/config.ts`, `src/contracts/result.ts` |
+| 結果環境 | `environment.platform = "linux"`, `arch = "x64"`, `browser.name = "chromium"`が固定リテラル。versionは`browser.version()`由来で、起動できなければnull | `src/run/orchestrator.ts`, `src/contracts/result.ts` |
+| 未記録情報 | checkの結果にはホストのディストリビューション版、Playwright版、ブラウザーrevision、成果物同定情報、glibc、フォント構成、コンテナ同定情報がない。statusは期待revision/版/パス/キャッシュ等を持つが単一ブラウザー前提 | `src/contracts/result.ts`, `src/commands/browser-status.ts` |
+| 検証資産 | CI定義はUbuntu 24.04、管理ブラウザーの導入と統合・受け入れはChromium前提。リリース検証コンテナはUbuntuベースをdigest指定するが、aptのバージョンは指定していない | `.github/workflows/ci.yml`, `tests/release/Containerfile` |
 
-補足（検証の限界）:
-- 本調査ではブラウザのダウンロード・起動・3エンジン実行は行っていない。したがって「Firefox/WebKitでvlintが実際に動くか」はすべて未検証（§10）。
-- ローカルにインストール済みの `node_modules/playwright-core/browsers.json` と、jsDelivr の `playwright-core@1.61.1` の同ファイルは**完全一致**することを確認済み（A∩B、相互検証）。以降のバージョン固定値は両者で一致。
-- Playwright公式サイト `playwright.dev` の現行ドキュメントは**最新リリース（1.64.x）向け**である。vlint が固定する 1.61.1 の記述は `raw.githubusercontent.com/microsoft/playwright/v1.61.1/...` のタグ付きファイルを一次ソースとして使った（Dockerドキュメントは `docs/src/docker-js.md` ではなくサイト現行版のみ参照。§4 に注意書き）。
+内部registryの利用、manifest埋め込みの文字列置換、externalの扱いは公開APIだけの統合ではない。Playwright更新時にはこの接続点も再確認する必要がある（コード構造からの推論）。
 
-## 1. 現行vlintが固定しているもの（A:）
+## 2. Playwrightのブラウザー固定・ホスト選択（一次ソース）
 
-| 項目 | 現状 | 根拠 |
+### 成果物の固定値
+
+[`browsers.json`][manifest]の関連項目:
+
+| 成果物 | revision | browserVersion |
 | --- | --- | --- |
-| Playwright依存 | `playwright` 1.61.1（`dependencies`。devDependencyではない） | `package.json` |
-| 管理対象ブラウザ名 | `chromium-headless-shell` **のみ**。定数 `MANAGED_BROWSER_NAME` で単一固定 | `src/browser/install.ts:50` |
-| エンジン選択API | `import { chromium } from "playwright"` → `chromium.launch({ headless: true, executablePath })`。`firefox`/`webkit` は未使用 | `src/browser/lifecycle.ts:5`, `:188` |
-| エンジンのリビジョン固定 | **ビルド時に `node_modules/playwright-core/browsers.json` と `package.json` の中身をJS文字列として埋め込む**（`browsers.json` を実行時に読まない） | `scripts/build.ts:4-5`, `:8-27`（`playwrightManifestPlugin`） |
-| 実バージョン検証 | 実行ファイルに `--version` を実行し、標準出力の **`\d+\.\d+\.\d+\.\d+`（4要素）** が `browsers.json` の `browserVersion` と一致するか照合。不一致/非0終了/タイムアウトは `browser-incompatible` | `src/browser/install.ts:110`, `:219-243` |
-| ブラウザ探索 | Playwright標準キャッシュのみ。`cacheRoot` は実行ファイルパスから3階層上、`chromium_headless_shell-*` / `chromium-*` ディレクトリを走査し `ready / missing / partial / revision-mismatch / not-executable` に分類 | `src/browser/install.ts:730-731`, `:763-871` |
-| 環境変数の拒否 | `PLAYWRIGHT_BROWSERS_PATH` は install/check いずれでも**常に拒否**（`browser-cache-override-unsupported`）。install 時は `PLAYWRIGHT_DOWNLOAD_HOST` / `PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST` も拒否 | `src/browser/install.ts:245-270` |
-| 依存ライブラリ導入 | `vlint browser install --with-deps` のみ。`registry.installDeps([chromium-headless-shell], false)` を `sudo` 経由の特権ワーカーで実行。`check` からは絶対に呼ばない | `src/browser/install.ts:162-200`, `:530-545` |
-| `check` の入り口検証 | 実行前に管理ブラウザの存在＋実バージョンを再検証（ダウンロードはしない） | `src/browser/install.ts:639-680` |
-| ビルド成果物 | `bun build --compile`, target `bun-linux-x64-baseline`, `external: ["chromium-bidi/*"]` | `scripts/build.ts:60-73` |
-| OSゲート | **インストーラスクリプトのみ**が `/etc/os-release` を読み `ID=ubuntu` かつ `VERSION_ID=24.04` かつ x86_64 を要求。不一致は exit 2。バイナリ自身はOSを検証しない | `scripts/package-release.ts` `renderInstaller` |
-| `.deb` の依存宣言 | `Depends:` は Chromium用のaptパッケージ一覧（＋`ca-certificates`, `fonts-liberation`） | `scripts/package-release.ts` `UBUNTU_BROWSER_DEPENDENCIES` |
-| 検証済み実行環境 | CIはすべて `runs-on: ubuntu-24.04`。リリース検証は `FROM ubuntu@sha256:52df9b1e...`（noble）のコンテナ | `.github/workflows/ci.yml`, `tests/release/Containerfile:1` |
-| 実行時並列度 | 1 runにつき**ブラウザプロセスは1個**を共有し、ケースは最大2並列（`workerCount = Math.min(2, cases.length)`） | `src/run/orchestrator.ts` |
+| chromium | 1228 | 149.0.7827.55 |
+| chromium-headless-shell | 1228 | 149.0.7827.55 |
+| firefox | 1532 | 151.0 |
+| webkit | 2311 | 26.5 |
 
-**C（推論）**: 「エンジンのリビジョン固定」は配布バイナリのコンパイル時定数である。したがって固定エンジン集合を変えることは、設定変更ではなく**vlintの新ビルド**を意味する。3エンジン化した場合、1 runあたり3ブラウザプロセス（ブラウザタイプごとに1個）になる。
+ローカル`node_modules/playwright-core/browsers.json`の対応値も確認した。Firefoxの`151.0`とWebKitの`26.5`は**2要素**で、Chromiumの4要素形式とは異なる。表示バージョンとPlaywrightのrevisionは別の識別子である。
 
-## 2. Playwright 1.61.1 が固定しているエンジン成果物（B:）
+WebKitにはOSごとのrevision overrideがあり、例としてmac14は2251、debian11は2105、ubuntu20.04は2092となる。[registry][registry]はoverride時の`browserVersion`を`undefined`にする。これら古いホストを新たにvlintの対応範囲へ含める決定はしていない。
 
-`playwright-core@1.61.1` の `browsers.json`（ローカル `node_modules` とnpm配布物で一致）:
+### OSごとに同じ成果物とは限らない
 
-| name | revision | installByDefault | browserVersion | title |
-| --- | --- | --- | --- | --- |
-| `chromium` | 1228 | true | 149.0.7827.55 | Chrome for Testing |
-| `chromium-headless-shell` | 1228 | true | 149.0.7827.55 | Chrome Headless Shell |
-| `chromium-tip-of-tree` | 1432 | false | 151.0.7886.0 | Chrome Canary for Testing |
-| `chromium-tip-of-tree-headless-shell` | 1432 | false | 151.0.7886.0 | Chrome Canary Headless Shell |
-| `firefox` | 1532 | true | **151.0** | Firefox |
-| `firefox-beta` | 1526 | false | 152.0b1 | Firefox Beta |
-| `webkit` | 2311 | true | **26.5** | WebKit |
-| `ffmpeg` | 1011 | true | （なし） | — |
-| `winldd` | 1007 | false | — | — |
-| `android` | 1001 | false | — | — |
+[registryのダウンロード表][registry]はUbuntu 24.04向けFirefox/WebKitのzipを定義する。WebKitはUbuntu/Debianのリリースごとに別のzipを選ぶ。Chromium x64の複数Linuxリリースは同じChrome for Testingのlinux64 zipを共有する。
 
-`webkit` には `revisionOverrides` がある: `mac14`/`mac14-arm64` → 2251、`debian11-x64`/`-arm64` → 2105、**`ubuntu20.04-x64`/`-arm64` → 2092**。
+[hostPlatform][host]と[linuxUtils][linux]はLinuxのアーキテクチャと`/etc/os-release`のID・VERSION_IDからホスト分類を決める。未対応ディストリビューションにはUbuntu 24.04へのフォールバック経路があり、`PLAYWRIGHT_HOST_PLATFORM_OVERRIDE`による上書きもある。registryは非公式プラットフォームのダウンロード時に警告するが、必ず停止するわけではない。
 
-補足（A:）: vlintの compiled feasibility probe は固定revision `1228` を期待値として出力しており（`tests/feasibility/compiled-playwright.ts:45`, `:101`）、1.61.1の `chromium-headless-shell` 1228 と整合する。
+**重要な訂正:** フォールバックしても期待バージョンが変わらない場合があり、Chromiumでは成果物自体を共有している。したがって**現行vlintのバージョン一致検証がフォールバックを必ず検出する、とは言えない**。バージョン一致はホストOSの適合性やライブラリ同一性の証明ではない。バイナリ自身にOSゲートがないことと合わせ、必要条件を満たさない代替環境を拒否する契約は別途検討が必要である（上記事実からの推論）。
 
-### 2.1 ホストOSごとに配布物が違う（B:, `packages/playwright-core/src/server/registry/index.ts` @v1.61.1）
+[固定版のシステム要件][intro]にはUbuntu 24.04 x64が含まれる。[Docker文書][docker]はFirefox/WebKitのブラウザービルドがglibc向けで、Alpine等のmuslディストリビューションを非対応とする。これは「Chromiumならmuslで動作保証される」という意味ではない。
 
-ダウンロードパス定義（`DOWNLOAD_PATHS`）から読み取れる事実:
+## 3. 実バイナリの版をどう観測できるか
 
-- `webkit`: `builds/webkit/%s/webkit-ubuntu-24.04.zip`, `...-ubuntu-26.04.zip`, `...-debian-12.zip`, `...-debian-13.zip` など、**Ubuntu/Debianのリリースごとに別成果物**。`ubuntu20.04-*` は `webkit-ubuntu-20.04.zip`（固定リビジョン2092＝frozen）。
-- `firefox`: `builds/firefox/%s/firefox-ubuntu-24.04.zip`, `firefox-debian-12.zip` など。**`ubuntu26.04-x64` は `firefox-ubuntu-24.04.zip` を再利用**。
-- `chromium` / `chromium-headless-shell`: Chrome for Testing の `cftUrl(...)`（`builds/cft/<version>/linux64/...zip`）で、20.04以降は同じ linux64 成果物を再利用。
-- 未対応ディストリの扱い: `isOfficiallySupportedPlatform` が false のとき `BEWARE: your OS is not officially supported by Playwright; downloading fallback build for <hostPlatform>.` を出す（コード上の事実）。フォールバック先は 2025-11 のコミット `bf6a60f chore: default to ubuntu 24.04 for unsupported distros (#38269)` で **`ubuntu24.04` に変更**された（`hostPlatform.ts` の1行差分）。
-- `hasRevisionOverride` の成果物では `You are using a frozen <name> browser which does not receive updates anymore on <hostPlatform>.` を出す（＝`ubuntu20.04`/`debian11` 上の WebKit は frozen）。
+### `browser.version()`はエンジン共通の独立検証ではない
 
-**C（推論）**: 3エンジンの「バージョン固定」は `playwright` のバージョンだけでは閉じない。少なくともWebKitは**ホストOSリリースにも依存**し、非対応ディストリでは黙って別ビルドにフォールバックしうる。vlintの現行 `verifyActualBrowserVersion` は `--version` 出力と `browsers.json` の一致を見るため、フォールバックが起きれば `browser-incompatible` として**失敗側に倒れる**（＝偽cleanにはならない）。ただしfrozen WebKit（ubuntu20.04）では `browserVersion` が `undefined` になり（`readDescriptors` はoverride時に `browserVersion` を入れない）、`findManagedBrowser()` は `String(undefined)` = `"undefined"` を返す。**C（推論）**: この経路に乗ると現行のバージョン検証ロジックは成立しない。
+| エンジン | 固定版の実装 | 読み取れる範囲 |
+| --- | --- | --- |
+| Chromium | [`crBrowser.ts`][cr]がCDP `Browser.getVersion`のproductから取得 | 接続したブラウザーのプロトコル応答由来 |
+| Firefox | [`ffBrowser.ts`][ff]がJuggler `Browser.getInfo`から取得 | 接続したブラウザーのプロトコル応答由来 |
+| WebKit | [`wkBrowser.ts`][wk]の`const BROWSER_VERSION = '26.5'`を返す | Playwrightライブラリ内の定数。実WebKitバイナリの版を独立に確認した値ではない |
 
-## 3. Playwright 1.61.1 が宣言するLinuxサポート範囲（B:）
+WebKitの版を結果へ載せることと、期待成果物が実際に起動したことを検証することは区別する必要がある。いずれの表示版も成果物のハッシュ検証そのものではない。
 
-`docs/src/intro-js.md` @v1.61.1 の System requirements（タグ付き一次ソース）:
+Linux WebKitの実行入口は[`pw_run.sh`][wrapper]で、引数をMiniBrowserへ渡す。上流[MiniBrowserのGTK実装][minibrowser]には`--version`があるため、「ラッパーなのでバージョン照会不可能」と断定できない。ただしこれは上流mainの参考情報で、Playwright revision 2311の実出力は未測定。headless時にはWPE側を選ぶ分岐もある。仮に取得できてもWebKitGTK/WPEのライブラリ版を`26.5`やrevisionと同一視できない。
 
-- Node.js: latest 22.x, 24.x or 26.x
-- Windows 11+ / Windows Server 2019+ / WSL
-- macOS 14 (Sonoma) 以降
-- **Debian 12 / 13、Ubuntu 22.04 / 24.04 / 26.04（x86-64 または arm64）**
+### 実行した合成ロジックテスト
 
-現行サイト（最新リリース向け）も同じ一覧で、`docs: add Ubuntu 26.04 and Node.js 26.x to system requirements (#41283)` で追加されたことが確認できる。1.61.1 のタグ付きドキュメントにも Ubuntu 26.04 が既に入っている（＝1.61.1時点で26.04対応は存在）。
+mainの実関数をBun 1.3.14でimportし、次を実行した。ブラウザーは起動していない。
 
-musl/Alpine（B: `playwright.dev/docs/docker`）:
-> Browser builds for Firefox and WebKit are built for the [glibc](...) library. Alpine Linux and other distributions that are based on the [musl](...) standard library are not supported.
+| 関数・入力 | 観測した結果 |
+| --- | --- |
+| `verifyActualBrowserVersion`へ期待`151.0`、スタブprobeのstdout=`Mozilla Firefox 151.0`、exit=0、timeout=false | `browser-incompatible` |
+| `rejectAmbientBrowserOverrides("check", {PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright"})` | `browser-cache-override-unsupported` |
 
-**これはFirefox/WebKit固有の制約**である点が3エンジン化で重要（Chromiumの headless shell だけを使う現行構成では効いてこない）。
+前者のstdoutは実Firefox出力ではなく合成入力である。ただし現行検証が4要素の一致結果と2要素の期待値を文字列比較する以上、Firefoxの期待`151.0`・WebKitの期待`26.5`にはそのまま流用できないことはコードから確定する。
 
-Bun側（B: `bun.com/docs/bundler/executables`）:
-- `--compile` の対応ターゲット表で `bun-linux-x64` / `bun-linux-arm64` は **glibc**、`bun-linux-x64-musl` / `bun-linux-arm64-musl` は musl。
-- x64では「BunはNehalem(SSE4.2)向け単一バイナリを出荷し実行時にAVX2/AVX-512を選択。`-baseline`/`-modern` は後方互換のため受理され、同じバイナリに解決される」。**C（推論）**: vlintの `bun-linux-x64-baseline` は `bun-linux-x64` と等価であり、CPU差の吸収はbaseline指定ではなくBun側のランタイム選択に依存する。
+`browser status`のreadyはこの実バージョン検証を含まない。配置・権限の確認、版の確認、実起動成功は別段階である。
 
-## 4. 依存ライブラリ: エンジンごとに必要なapt集合が違う（B:, `src/server/registry/nativeDeps.ts` @v1.61.1）
+## 4. 導入・依存・コンテナ・Bunの条件
 
-`ubuntu24.04-x64` エントリの実データ:
+### エンジン別のシステム依存
 
-- `tools`（12）: `xvfb`, `fonts-noto-color-emoji`, `fonts-unifont`, `libfontconfig1`, `libfreetype6`, `xfonts-cyrillic`, `xfonts-scalable`, `fonts-liberation`, `fonts-ipafont-gothic`, `fonts-wqy-zenhei`, `fonts-tlwg-loma-otf`, `fonts-freefont-ttf`
-- `chromium`（21）: `libasound2t64`, `libatk-bridge2.0-0t64`, `libatk1.0-0t64`, `libatspi2.0-0t64`, `libcairo2`, `libcups2t64`, `libdbus-1-3`, `libdrm2`, `libgbm1`, `libglib2.0-0t64`, `libnspr4`, `libnss3`, `libpango-1.0-0`, `libx11-6`, `libxcb1`, `libxcomposite1`, `libxdamage1`, `libxext6`, `libxfixes3`, `libxkbcommon0`, `libxrandr2`
-- `firefox`（25）: 上記に加え `libavcodec60`, `libcairo-gobject2`, `libgdk-pixbuf-2.0-0`, `libgtk-3-0t64`, `libpangocairo-1.0-0`, `libx11-xcb1`, `libxcb-shm0`, `libxcursor1`, `libxi6`, `libxrender1`, `libfontconfig1`, `libfreetype6`（`libatk-bridge2.0-0t64`, `libatspi2.0-0t64`, `libcups2t64`, `libglib2.0-0t64` 系は含まれない）
-- `webkit`（約52）: `gstreamer1.0-libav`, `gstreamer1.0-plugins-bad/base/good`, `libicu74`, `libenchant-2-2`, `libepoxy0`, `libevent-2.1-7t64`, `libflite1`, `libgbm1`, `libgles2`, `libgtk-4-1`, `libharfbuzz-icu0`, `libharfbuzz0b`, `libhyphen0`, `libjpeg-turbo8`, `liblcms2-2`, `libmanette-0.2-0`, `libopus0`, `libpng16-16t64`, `libsecret-1-0`, `libvpx9`, `libwayland-*`, `libwebp7`, `libwebpdemux2`, `libwoff1`, `libxml2`, `libxslt1.1`, `libx264-164`, `libavif16`, …（＋ `lib2package` に soname→パッケージ対応表）
-- `ubuntu26.04-x64` も同ファイルに存在し、WebKitは `libicu78` などへ soname が変わる（＝**WebKitの依存はホストOSのリリースに追従**）。`ubuntu24.04-arm64` 等は x64 の定義を spread して流用。
+[`nativeDeps.ts`][deps]はUbuntu 24.04 x64についてtools/chromium/firefox/webkitを別の配列として持つ。toolsにはフォントやxvfbが含まれる。Firefoxには`libgtk-3-0t64`等、WebKitにはGStreamer・`libicu74`・`libenchant-2-2`等があり、**現行vlintのChromium向けapt一覧だけでは3エンジンの依存を宣言したことにならない**。
 
-リポジトリ現状との比較（A:）:
-- vlintの `.deb` `Depends:` と README/CI/Containerfile の apt 一覧は、**Playwrightの `chromium`（21個）＋ `ca-certificates` + `fonts-liberation`** とほぼ一致する。Firefox/WebKitの依存（`libgtk-3-0t64`, `gstreamer*`, `libicu74`, `libenchant-2-2` 等）は**どこにも宣言されていない**。
+Playwrightの依存導入は[依存処理][dependencies]を通じてapt等を実行し、必要なら昇格する。vlintは既存の明示的`--with-deps`と特権ワーカーを持つが、対象は現在shellのみ。3エンジン対応時には、管理対象、debの依存、セットアップ、CI/コンテナの前提を整合させる必要がある（推論）。
 
-**C（推論）**: 3エンジンを「vlintが明示的にprovisionする」場合、必要なapt集合はエンジン集合とホストOSリリースの積で増える。`registry.installDeps()` を実行ファイル名ごとに呼ぶ形に拡張すればPlaywright側の定義をそのまま使えるが、`.deb` の外部依存宣言・README・Containerfile・CIは別途整合が必要になる。
+依存パッケージ名だけの固定と、取得されるパッケージ版の固定は異なる。またtoolsがフォントを追加することは、検査対象プラットフォームに必要なフォント条件を満たしたことの証明ではない。
 
-補足: `install-deps` はroot/sudoを要する（B: `playwright.dev/docs/browsers` の "Install system dependencies" 節、およびproxies節の "make sure to run the command as a root user"）。vlintは `sudo -v` → 特権スーパーバイザワーカーという独自経路で実装済み（A: `src/browser/install.ts:384-461`）。
+### コンテナの選択肢と現在の衝突
 
-## 5. コンテナ vs ネイティブ（B: + A:）
+[公式Dockerfile.noble][dockerfile]はUbuntu nobleをベースにブラウザーと依存を導入し、`PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`を設定する。[公式文書][docker]はPlaywrightパッケージ自体は別途必要で、プロジェクトとイメージのPlaywright版を合わせるよう述べる。MCRの[タグ一覧][mcr]で`v1.61.1-noble`の存在を調査エージェントが確認した。イメージのpull・実行や具体的digestの取得はしていない。
 
-公式Dockerイメージ（`utils/docker/Dockerfile.noble` @v1.61.1）で確認した事実:
-- `FROM ubuntu:noble`
-- **`ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`** を設定し、`playwright-core install --with-deps` でブラウザを焼き込み、`chmod -R 777 /ms-playwright`
-- `adduser pwuser`、`ARG DOCKER_IMAGE_NAME_TEMPLATE="mcr.microsoft.com/playwright:v%version%-noble"`
-- MCRのタグ一覧（一次）に **`v1.61.1-noble`, `v1.61.1-noble-amd64`, `v1.61.1-jammy`, `v1.61.1-resolute` が存在**する
+この標準環境変数は現行vlintの拒否条件に該当する。したがって**公式イメージを無変更で使えば現行vlintは拒否する**。これは3エンジンやコンテナが将来利用不可能という意味ではなく、現在のキャッシュ契約との衝突である。変数を外して通常キャッシュへ別途導入する案、vlintの明示的管理先を設計する案、自前イメージを作る案等の採否は未決で、動作も未実証。
 
-Dockerドキュメント（現行サイト、1.64.0で例示）の運用事実:
-- `--ipc=host` を推奨（Chromiumが落ちるため）、`--init` 推奨、Chromium起動の奇妙なエラー時はローカル開発で `--cap-add=SYS_ADMIN`
-- root実行ではChromiumサンドボックスが無効。非root＋seccomp profileで `clone/setns/unshare` を許可
-- 「Playwright versionとDockerイメージのバージョンが一致しないとブラウザ実行ファイルを特定できない」
-- イメージは信頼できないサイト閲覧には非推奨
+公式文書には非root・sandbox・seccomp、`--init`、Chromium向け`--ipc=host`等の注意がある。これらを無条件の製品要件とはしない。`run-server`によるリモート実行も公式の選択肢だが、現行vlintはローカルlaunch前提で、そのまま利用できるわけではない。
 
-**A×Bの衝突（重要）**: vlintは `PLAYWRIGHT_BROWSERS_PATH` を**常に拒否**する（§1）。公式Playwrightイメージは同変数を `/ms-playwright` に設定済み。したがって**公式イメージをそのままvlintの実行環境にすると、vlintは `browser-cache-override-unsupported` で即座に失敗する**（A: `src/browser/install.ts:250-256` の分岐、B: Dockerfileの `ENV` 行から導くC（推論）ではなく、両方の一次事実から直接言える）。回避するにはイメージ内で同変数をunsetし、通常キャッシュに別途インストールする（その場合、焼き込み済みブラウザは使われない）。
+Dockerでは[tagとは別にdigestでイメージを固定できる][digest]。既存のvlint検証用Containerfileもベースdigestを使う。しかし、ベースdigestを固定しても、その後の未固定`apt-get install`まで不変になるわけではない（Containerfile読解からの推論）。ブラウザー・フォント・依存を含む完成イメージの固定と、そこからの更新手順は別の判断対象である。digestの固定だけでページ内容やホストカーネルまで同一になるとは主張しない。
 
-ネイティブ（Ubuntu 24.04ホスト）:
-- 現行で検証済みなのは「Ubuntu 24.04 x64（GitHub Actions runner / `ubuntu@sha256:52df9b1e...` コンテナ）＋ chromium-headless-shell」のみ（A: CI/Containerfile/READMEの宣言）。
-- リリース検証ゲストは `apt-get install -y --no-install-recommends` でChromium依存＋`sudo`＋`useradd` を行い、非rootユーザー `vlint` で実行する（A: `tests/release/Containerfile`）。
+### Bunコンパイル配布
 
-## 6. エンジンと製品（branded product）の区別（B:）
+[固定Bun 1.3.14の実行ファイル文書][bun]は`bun-linux-x64`をglibc向けとし、baselineとmodernを別のCPU互換ターゲットとして説明する。現行vlintはbaselineを選ぶ。最新版サイトの「同じバイナリへ解決される」という説明は固定版の根拠に使わない。
 
-`playwright.dev/docs/browsers` の記述（現行サイト。1.61.1でも同等の節が存在）:
+JS・manifestの埋め込みとブラウザー実行ファイルの配布は別である。Firefoxの既定起動は[`firefox.ts`][firefox]のJuggler経路で、`moz-*` channel時のみBiDi側へ委譲する。既定FirefoxがChromium BiDiを使う、とは読めない。ただし、現行buildのexternal・遅延require・内部registry・ダウンローダー・周辺ファイルがFirefox/WebKitでもコンパイル後に成立するかは未実証。Bunのバグ報告を一般的な動作仕様とは扱わない。
 
-- **Chromium**: 「For Google Chrome, Microsoft Edge and other Chromium-based browsers, by default, Playwright uses open source Chromium builds. Since the Chromium project is ahead of the branded browsers, when the world is on Google Chrome N, Playwright already supports Chromium N+1」。brandedは `channel: 'chrome' | 'msedge' | ...` で別途指定（インストールも別）。
-- **headless shell**: 「Playwright ships a regular Chromium build for headed operations and a separate chromium headless shell for headless mode」。`--only-shell` でshellのみ導入、`--no-shell` でshellをスキップ。
-- **新headlessモード**: `channel: 'chromium'` で新しいheadlessに切り替わる。公式が「New Headlessは本物のChromeブラウザであり…より高精度なE2Eに向く」と述べ、Playwrightも「chromium headless shell とは挙動が異なる場合がある」と警告（＝**同一「Chromium」でも固定する成果物で挙動が変わる**）。
-- **Firefox**: 「Playwright's Firefox version matches the recent Firefox Stable build. Playwright doesn't work with the branded version of Firefox since it relies on patches.」
-- **WebKit**: 「Playwright's WebKit is derived from the latest WebKit main branch sources, often before these updates are incorporated into Apple Safari and other WebKit-based browsers.… Playwright doesn't work with the branded version of Safari since it relies on patches.… While running WebKit on Linux CI is usually the most affordable option, for the closest-to-Safari experience you should run WebKit on mac, for example if you do video playback.」またプラットフォーム依存機能（メディアコーデック等）はLinux/macOS/Windowsで大きく異なる。
+## 5. エンジンと製品、エミュレーションの限界
 
-**C（推論）**: ユーザー合意（「実Safari/iPhoneではなくChromium/Firefox/WebKitを対象」）は、Playwrightの上記記述と整合する。ただし「WebKitのLinuxビルド＝Linux上で最も安価な近似」であり、Safari実機の保証ではない点は、下流の環境契約の文言（保証範囲）に影響する。
+[Playwrightのブラウザー文書][browsers]が区別しているもの:
 
-## 7. コンパイル済みBun配布物とPlaywrightの統合（A: + B:）
+- Chromiumの通常ビルド、別成果物のheadless shell、Chrome/Edgeのbranded channelは同一の実行対象ではない。`channel: 'chromium'`の新headlessとshellには挙動差がありうる。
+- PlaywrightのFirefoxはパッチ適用版で、一般配布のbranded Firefoxをそのまま動かす方式ではない。
+- PlaywrightのWebKitはSafari製品ではなく、branded Safariには対応しない。文書はSafariに近い経験にはmac上のWebKitを勧め、OSごとの機能差にも言及する。Linux WebKitをiPhone Safariの表示保証に読み替えない。
 
-- `bun build --compile` は「importされたファイルとパッケージをBunランタイムごと単一実行ファイルに同梱する」（B: Bunドキュメント）。ただし**外部化したパッケージは実行時に解決されない**という報告がある（B: oven-sh/bun issue #31632「`bun build --compile`: "external" packages not resolved externally」、#18749、#25038、#27530）。これはバグ報告（一次だが「報告」であって仕様記述ではない）。
-- vlintが外部化しているのは `chromium-bidi/*` のみ（A: `scripts/build.ts:68`）。`playwright-core` の**公開パッケージ `package.json` は `dependencies` を一切持たない**（A: ローカル `node_modules/playwright-core/package.json`）。したがってビルド環境にも実行環境にも `chromium-bidi` は実在しない。
-- `playwright-core` が読み込む `require("chromium-bidi/...")` は BiDi-over-CDP ブリッジ由来（B: microsoft/playwright issue #33031 のスタックトレース、および第三者コミットメッセージ）。**Firefoxの既定経路ではない**ことを一次ソースで確認した: v1.61.1 の `packages/playwright-core/src/server/firefox/firefox.ts` は `channel?.startsWith('moz-')` のときだけ `bidiFirefox` に委譲し、既定では `-juggler-pipe` を付けて起動する（`defaultArgs`）。
-- Linux上の実行ファイル配置パターン（B: `registry/index.ts` @v1.61.1 の `EXECUTABLE_PATHS`）:
-  - `chromium-headless-shell` / linux-x64 → `chrome-headless-shell-linux64/chrome-headless-shell`
-  - `firefox` / linux-x64 → `firefox/firefox`
-  - **`webkit` / linux-x64 → `pw_run.sh`**（macも `pw_run.sh`、winは `Playwright.exe`）
-- vlintのビルドは `playwright-core` の `lib/**/*.js` 内の `require(...package.json)` / `require(...browsers.json)` を**埋め込みJSONに置換**している（A: `scripts/build.ts:8-27`）。これはBun issue #25038 が示す「`playwright-core/package.json` を実ファイルとして探しに行く」問題への対処。
+[`isMobile`の公式記述][params]はFirefox非サポートを明記する。一方、同タグの[`browserContext.ts`][context]にFirefox固有の拒否はなく、[`ffBrowser.ts`][ff]は値をJugglerへ転送する。調査エージェントが追った[`TargetRegistry.js`][targets]ではviewportSizeとDPRを扱うが、isMobileを消費する経路は見つからなかった。
 
-**C（推論）**:
-1. **バージョン検証の形状がChromium専用**。現行は `--version` 出力に `\d+\.\d+\.\d+\.\d+` を要求する（A）。`browsers.json` の `firefox.browserVersion` は `"151.0"`（3要素）であり、WebKitのLinux実行ファイルは `pw_run.sh`（バージョン問い合わせ用のCLIではない）。**「Firefox/WebKitでも同じ検証をそのまま使える」根拠は現時点で存在しない**（未検証、§10）。
-2. Firefoxの既定起動経路はjugglerであり、`chromium-bidi` の遅延requireに依存しない可能性が高い。ただし**コンパイル済みバイナリでrequire評価がいつ起きるか**は未検証。WebKitのプロトコル経路も本調査では追い切っていない（`webkit.ts` には `bidi`/`juggler` の記述は見つからなかった）。§10参照。
+**非サポートと「例外で拒否する」は同義ではなく、これらは必ずしも資料間の矛盾ではない。** 少なくとも例外が出ないことをもってモバイルエミュレーション対応と認定できない。`isMobile: false`を渡すだけで失敗すると断定する根拠もない。viewport・DPR・touch・screen・UAの実効挙動は個別に確認が必要である。
 
-## 8. 環境メタデータの現状（A:）
+[エミュレーション文書][emulation]のデバイス展開例はパラメーターの設定方法であり、実OS再現の保証ではない。エンジンとデバイスの有効組み合わせをvlintがどう定めるかは後続判断となる。
 
-`vlint check --format json` の `environment` は**リテラル固定**（A: `src/run/orchestrator.ts` `completedResult`、`src/contracts/result.ts:88-92`）:
+## 6. 既存DOM計測との互換性（コード読解・未実証）
 
-```json
-"environment": { "platform": "linux", "arch": "x64", "browser": { "name": "chromium", "version": "<browser.version()>" } }
-```
+現行の組み込みルール型は5つ＋`local`。`table-cell-clipping.ts`は独立したルール型ではなく、クリップ形状を扱う共有モジュールである。全ルールがページ内JSだけで完結するわけではなく、例えばタブ行数のクラスタリングはホスト側の純関数で行う。
 
-- `browser.name` はリテラル `"chromium"`、`platform`/`arch` もリテラル。**エンジン名を表現する余地が型として存在しない**。`version` は Playwright `browser.version()` の戻り値、起動失敗時は `null`。
-- 記録されていない情報: ディストロ名/バージョン（`/etc/os-release`）、glibcバージョン、コンテナ/ネイティブの別、Playwrightバージョン、エンジンのrevision、実行ファイルパス、キャッシュ位置。
-- `vlint browser status --format json` はより豊富（A: `src/commands/browser-status.ts`）: `status`, `requirements{ name, revision, browserVersion, executablePath, cacheRoot }`, `environment{ xdgCacheHome, playwrightBrowsersPath }`, `detectedRevisions[]`, `executablePresent`, `executableAccessible`。ただし単一ブラウザ前提。
-- `RunStatus`/`CaseStatus` の構造もエンジン軸を持たない（case identityは target×device）。**C（推論）**: 3エンジン化は case の追加軸か実行の反復かを選ぶ必要があり、どちらでもJSON契約の変更になる。設定スキーマも `exactKeys(object, ["devices","provider","defaults","rules"])`（A: `src/config/schema.ts:518`）で、`device` の許容キーにもエンジンは無い（`:299-305`）。**C（推論）**: 既存configにエンジンを与えるには新フィールド追加が必要で、`exactKeys` 方式のため旧configは無変更で通る（後方互換）が、契約追加は不可避。
+| ルール・境界 | エンジン差を調べる接点 |
+| --- | --- |
+| tab-label-single-line / table-header-single-line | `Range.getClientRects()`のテキスト片・行矩形、computed line-height、行クラスタリングの入力 |
+| page-horizontal-overflow | scrollWidth/clientWidth/innerWidth、BCR、局所スクロール領域、丸めと帰属 |
+| table-cell-text-overlap | セルとテキストの矩形、隣接関係、computed clip-path文字列の解析、Canvas/Path2Dによる形状判定 |
+| svg-text-clipping | Canvas measureTextのactualBoundingBox、SVGのCTM・文字位置・advance、computed styleの対応判定 |
+| 共通のready境界 | URL、ready selector、`document.fonts.status`の観測 |
+| local | ユーザーコードが選ぶ計測API。組み込みルールの確認だけでは互換性を証明できない |
 
-## 9. 既存ジオメトリルールとの互換性（A:）
+根拠: mainの`src/rules/*.ts`, `src/browser/measurement.ts`, `src/contracts/config.ts`, `README.md`。
 
-現行ルールは全て**ページ内JS**として実行され、Node側は純関数（クラスタリング・ロケータ合成）という構成（A: `src/rules/tab-label-single-line.ts:9-17`）。
+これらは**差が入りうる箇所の同定**で、3エンジンで不具合や判定差を測定した結果ではない。エンジン間の差は検出すべき実際のレイアウト差である可能性もあり、「全エンジンの結果を一致させる」が正しい受け入れ基準とは未決である。
 
-エンジン差が入力に効きうる箇所（A: コードから確認した依存API）:
-- `Range` の矩形列（1行=1矩形を前提に、矩形の重なりと解決済み `line-height` の半分で行クラスタを形成: `sameLine`）。**行分割の矩形化は各エンジンのレイアウト実装に依存**する。
-- `document.fonts.status !== "loaded"` をready境界の条件に使用（A: `src/browser/measurement.ts:39-58`）。
-- `clip-path` は **`getComputedStyle` の文字列をvlint自身が解析**し、`inset()/xywh()/circle()/ellipse()/polygon()/path()/url(#id)` と `calc()`、`closest-side/farthest-side` をモデル化。`path()` の点内判定には `<canvas>` の2Dコンテキストを使用（A: `src/rules/table-cell-clipping.ts:21-119`）。READMEは「エンジンが還元できない式・読めない形状は空ではなく未モデルとして扱う」と明記。
-- `[popover]`, `[role="tooltip"|"dialog"]`, `[role="img"]`, `aria-hidden`, `border-radius`、`overflow: hidden`（block/flex/grid）、ellipsis 等の判定はページ内で行う。
+とくにSVGなどは非対応条件のテキストを検査対象から除外するため、起動成功やcleanだけでは検査の成立を確認できない。検査件数・対象集合・除外条件と期待する違反の検出を併せて見る必要がある（コードからの推論）。
 
-**C（推論）**: ルールのアルゴリズムはエンジン非依存だが、**入力（矩形・行分割・computed値）はエンジン実装差の影響を受ける**。「あるエンジンでしか `clip-path: xywh()` が計算値として観測されない」「行矩形の分割が異なる」といった差は、violation/clean の判定差になりうる。現時点で3エンジン間の判定一致を検証した証拠はない（**D: 未検証**）。既存の golden/integration/acceptance テストは `chromium-headless-shell` 前提で組まれている（A: `package.json` の `test:integration`/`test:acceptance`、CIのbrowser-testsジョブ）。
+既存ADRの固定URL照合、ルール計測区間の開始・終了時のready確認、宣言された最低検査件数、実測URLの出力は維持する前提となる。ブラウザー追加自体はこれらを弱める理由にならない。特にADR-0004により区間全体の状態維持は保証しない。
 
-ADRとの関係（A: `docs/adr/`）: 0001/0004（ルール計測区間の境界検証）、0002（宣言された最小検査件数）、0003（URL生値の出力）はいずれもエンジン非依存の決定であり、3エンジン化そのものと衝突しない。**環境契約はこれらを弱めない形で追加される必要がある**（＝エンジンごとにURL/ready境界検証と件数保証を維持する必要がある）。
+## 7. 未検証事項と後続判断への引き渡し
 
-## 10. 未検証事項・未解決の問い（D:）
+### 実証が必要なこと
 
-1. **Firefox / WebKit がvlintのコンパイル済みバイナリで実際に起動・検査できるか**。未検証（本調査でブラウザは導入していない）。CI/受け入れテストは `chromium-headless-shell` のみ。
-2. **Firefox / WebKit の「実バージョン検証」方法**。`--version` が何を返すか（Firefoxは `Mozilla Firefox 151.0` 形式と推定されるが実測していない）、WebKitの `pw_run.sh` にバージョン相当の問い合わせが存在するか。→ 現行の4要素regexでは `"151.0"` に一致しない（C: 推論、ローカル `browsers.json` の値から）。
-3. **コンパイル済みバイナリでの `chromium-bidi` 遅延requireの到達性**。Firefox既定（juggler）では到達しないと読めるが、モジュール読み込み時に評価されるかはBunのバンドル挙動依存で未検証。`moz-*` channelを使う方針を取る場合、追加の依存解決が必要になる可能性がある。
-4. **WebKit on Linux の機能差がどのルールに影響するか**。特に `clip-path: xywh()` / `path()` の計算値サポート、`Range.getClientRects()` の行分割、`document.fonts.status`、`[popover]`。エンジン別の実測が必要。
-5. **Playwright 1.61.1 の `hostPlatform` 判定の実装**（`/etc/os-release` のどのフィールドを見るか）。`packages/playwright-core/src/server/utils/hostPlatform.ts` は v1.61.1 のタグに存在せず（404）、配置場所を特定できなかった。コミット `bf6a60f` の差分と `registry/index.ts` の分岐からは「未対応ディストリ → ubuntu24.04 にフォールバック」までしか確認できていない。
-6. **Ubuntu 20.04 のサポート終了時期**。現行リリースノートに "Ubuntu 20.04 is not supported anymore" の記述があるが、どのリリースで落ちたかは未確認（1.61.1の `browsers.json` には `ubuntu20.04` の WebKit revision override が残っている）。
-7. **vlintの `PLAYWRIGHT_BROWSERS_PATH` 拒否が3エンジンでも妥当か**。公式イメージ（`/ms-playwright`）、`PLAYWRIGHT_BROWSERS_PATH=0`（hermetic install：`node_modules/playwright-core/.local-browsers`）はいずれも現行vlintでは使えない（B: browsersの "Hermetic install" 節、A: 拒否コード）。複数エンジンをキャッシュで共有・固定する戦略の選択肢を狭める。
-8. **3エンジン化に伴う実行リソース**（1 runあたりブラウザプロセス数、メモリ、`--ipc=host` の必要性、`workerCount=2` との相互作用）は未計測。
-9. **`chromium`（通常ビルド）と `chromium-headless-shell` のどちらを固定対象にするか**で挙動が違う（§6）。現行はshellのみ。
+| 確認対象 | 観測・記録する内容 |
+| --- | --- |
+| Bunコンパイル後の3エンジン | 対象Ubuntu 24.04 x64のクリーン環境で、明示的導入、内部ワーカー、起動、context、ページ内計測、終了まで。ソース実行だけで代替しない |
+| 成果物同定 | Firefox/WebKitの実`--version`出力と観測経路、期待revision/成果物と実体の対応。WebKitのライブラリ定数を独立検証としない |
+| 必須環境の拒否 | 未導入、誤revision、版文字列だけ同じ別成果物、非対応ホスト・override・依存欠落等。バージョン照合だけでOSフォールバック拒否を保証しない |
+| デバイスパラメーター | エンジン別のviewport、screen、DPR、touch、UA、meta viewport。FirefoxのisMobile非サポートも踏まえる |
+| 既存ルール | fixtureごとの違反・計測値・elementsInspected・対象集合・非対応条件。エンジン差とルール不備を区別する |
+| 再現性と閲覧環境への有用性 | 同一固定環境での反復、別ホストでの再実行、iPhone/Windows等の実際の閲覧環境との代表例比較。前二者の成功を後者の証明にしない |
+| コンテナ運用・資源 | キャッシュ契約、権限・sandbox、ネットワーク、必要ライブラリ、フォント、完成イメージの識別、メモリ・並列度。実測していないプロセス数を固定しない |
 
-## 11. 下流の環境契約決定に効く含意（判断はしない）
+これらは実装完了を示すチェック済み項目ではなく、仕様に受け入れ条件を定めるための入力である。
 
-決定に必要な入力として、次の事実が制約になる:
+### 既存の後続チケットが所有する判断
 
-- **エンジン集合はprovision時の選択であり、コンパイル時定数**（§1）。`MANAGED_BROWSER_NAME` が単一の定数であること、`browsers.json` がビルド時に埋め込まれることが根拠。
-- **`playwright` のバージョンを上げると全エンジンのリビジョンが同時に動く**（§2）。1.61.1 → 最新（現行ドキュメントは1.64.0基準）では `chromium` 1249 / `firefox` 1560 / `webkit` 2376 に変化し、mainの `browsers.json` からは `ubuntu20.04`/`debian11` の override が消えている。
-- **ホストOSはエンジン固定の一部**（特にWebKit）（§2.1, §3）。「Ubuntu 24.04 x64」という現行の単一ゲートは、少なくともこの組み合わせでは整合する。
-- **コンテナ採用は公式イメージそのままでは成立しない**（§5、`PLAYWRIGHT_BROWSERS_PATH` 拒否）。ネイティブ＋通常キャッシュ、あるいはイメージ派生＋変数unset＋再インストールのいずれかが必要。
-- **依存導入はエンジン×OSの積で増える**（§4）。`.deb` `Depends:`、README、Containerfile、CIは現状Chromiumのみを宣言している。
-- **環境メタデータは現状「linux/x64/chromium」しか表現できない**（§8）。3エンジンを再現可能に配布するには、エンジン識別・リビジョン・ホストOS識別の記録先が契約として必要になる。
-- **ルール判定のエンジン間一致は未検証**（§9, §10-4）。「3エンジンで同じ判定になる」という前提を今は立てられない。
+- [ブラウザー環境の準備と固定をどこまで引き受けるか](https://github.com/wh3at/vlint/issues/47): 検査対象プラットフォーム・製品指定と実行エンジン／成果物／フォントの対応、成立を確認する実証、対応ホスト、管理・導入・更新・固定の責任、ネイティブ／コンテナ、版検証とstatusの保証、未成立条件の扱い。
+- [検査環境の設定と受け入れ基準をどう統合するか](https://github.com/wh3at/vlint/issues/48): 設定とケースの軸、環境情報の出所と出力、既存設定・結果の移行、エンジン差を結果へ説明する方法、ルールの検査成立・反復再現性・想定閲覧環境への有用性を分けた受け入れ基準。
 
-## ソース一覧
+本調査から将来のバイナリ配布単位、エンジンの並列実行方式、全エンジンの結果一致、iPhone/Windowsへの対応済み認定は決まらない。mapの「実OS／実機での完全再現は対象外」と、想定する閲覧環境に有用な検査という目的が両立するかも、人間との後続判断に残す。
 
-一次ソース（リポジトリ、現行HEAD）:
-- `package.json`, `scripts/build.ts`, `scripts/package-release.ts`, `scripts/release-validate.ts`
-- `src/browser/install.ts`, `src/browser/lifecycle.ts`, `src/browser/measurement.ts`
-- `src/commands/check.ts`, `src/commands/browser-install.ts`, `src/commands/browser-status.ts`
-- `src/config/schema.ts`, `src/contracts/config.ts`, `src/contracts/result.ts`, `src/run/orchestrator.ts`
-- `src/rules/tab-label-single-line.ts`, `src/rules/table-cell-clipping.ts`
-- `tests/feasibility/compiled-playwright.ts`, `tests/release/Containerfile`, `.github/workflows/ci.yml`
-- `docs/adr/0001..0004`, `docs/operations/release.md`
-- `node_modules/playwright-core/browsers.json`（1.61.1相当）, `node_modules/playwright-core/package.json`
+## 前版からの訂正要点
 
-一次ソース（外部）:
-- Playwright 1.61.1 タグ付きソース: `browsers.json`, `docs/src/intro-js.md`, `packages/playwright-core/src/server/registry/index.ts`, `.../registry/nativeDeps.ts`, `.../server/firefox/firefox.ts`, `.../server/webkit/webkit.ts`, `utils/docker/Dockerfile.noble`（`https://raw.githubusercontent.com/microsoft/playwright/v1.61.1/...`）
-- 公式ドキュメント: [Browsers](https://playwright.dev/docs/browsers), [Installation](https://playwright.dev/docs/intro), [Docker](https://playwright.dev/docs/docker)
-- 公式コミット/PR: [`bf6a60f` unsupported distros → ubuntu 24.04](https://github.com/microsoft/playwright/commit/bf6a60fd92c8c3b4afa08837aa8bbcd44f50c95e), [`#41025` Ubuntu 26.04 support](https://github.com/microsoft/playwright/pull/41025), [`a2905f5` system requirements docs](https://github.com/microsoft/playwright/commit/a2905f5121121ab7c4254eadaefbb1c8f69985ef)
-- MCRタグ一覧: `https://mcr.microsoft.com/v2/playwright/tags/list`（`v1.61.1-noble` 等の存在確認）
-- Bun: [Single-file executable](https://bun.com/docs/bundler/executables)
-- Bun issue（バグ報告であり仕様記述ではない）: [#31632](https://github.com/oven-sh/bun/issues/31632), [#18749](https://github.com/oven-sh/bun/issues/18749), [#25038](https://github.com/oven-sh/bun/issues/25038), [#27530](https://github.com/oven-sh/bun/issues/27530)
-- Playwright issue（同上）: [#33031 chromium-bidi require](https://github.com/microsoft/playwright/issues/33031), [#27139 bun compatibility](https://github.com/microsoft/playwright/issues/27139), [#38121 add bun support](https://github.com/microsoft/playwright/issues/38121)
+- Firefox `151.0`は2要素。4要素検証の一般化は不可。
+- WebKitの`browser.version()`は実バイナリ由来ではない。`pw_run.sh`の存在だけでCLI照会不可能とも言えない。
+- OSフォールバックを版一致検証が必ず検出する、という推論は撤回。
+- Firefoxの`isMobile`非サポートと、値を例外で拒否しない実装を矛盾扱いしない。
+- Bunの最新版説明を1.3.14へ適用しない。バグ報告をexternal解決の仕様にしない。
+- manifest埋め込みから将来のエンジン選択方式は決まらず、3エンジン化からプロセス数も決まらない。
 
-## 残る問い（次段で潰すべきもの）
-
-1. Firefox/WebKitの実行ファイルから**バージョンを機械可読に取得する方法**があるか（`--version`、プロトコル応答、配布メタデータ）。
-2. コンパイル済みBunバイナリで**Firefox/WebKitの起動が成立するか**（最小再現）。
-3. 3エンジンで**同一フィクスチャの判定が一致するか**（少なくとも `clip-path` 系と行分割系）。
-4. 公式Playwrightイメージを使う場合の**変数unset＋再インストール手順**が成立するか、それともネイティブ前提を維持するか。
-5. 環境メタデータとして何を契約に載せるか（Playwrightバージョン、エンジン名、revision、ホストOS識別、キャッシュ位置、glibc）。
+[manifest]: https://github.com/microsoft/playwright/blob/v1.61.1/packages/playwright-core/browsers.json
+[registry]: https://github.com/microsoft/playwright/blob/v1.61.1/packages/playwright-core/src/server/registry/index.ts
+[host]: https://github.com/microsoft/playwright/blob/v1.61.1/packages/utils/hostPlatform.ts
+[linux]: https://github.com/microsoft/playwright/blob/v1.61.1/packages/utils/linuxUtils.ts
+[intro]: https://github.com/microsoft/playwright/blob/v1.61.1/docs/src/intro-js.md
+[deps]: https://github.com/microsoft/playwright/blob/v1.61.1/packages/playwright-core/src/server/registry/nativeDeps.ts
+[dependencies]: https://github.com/microsoft/playwright/blob/v1.61.1/packages/playwright-core/src/server/registry/dependencies.ts
+[cr]: https://github.com/microsoft/playwright/blob/v1.61.1/packages/playwright-core/src/server/chromium/crBrowser.ts
+[ff]: https://github.com/microsoft/playwright/blob/v1.61.1/packages/playwright-core/src/server/firefox/ffBrowser.ts
+[wk]: https://github.com/microsoft/playwright/blob/v1.61.1/packages/playwright-core/src/server/webkit/wkBrowser.ts
+[wrapper]: https://github.com/microsoft/playwright/blob/v1.61.1/browser_patches/webkit/pw_run.sh
+[minibrowser]: https://github.com/WebKit/WebKit/blob/main/Tools/MiniBrowser/gtk/main.c
+[firefox]: https://github.com/microsoft/playwright/blob/v1.61.1/packages/playwright-core/src/server/firefox/firefox.ts
+[docker]: https://github.com/microsoft/playwright/blob/v1.61.1/docs/src/docker.md
+[dockerfile]: https://github.com/microsoft/playwright/blob/v1.61.1/utils/docker/Dockerfile.noble
+[mcr]: https://mcr.microsoft.com/v2/playwright/tags/list
+[digest]: https://docs.docker.com/reference/cli/docker/image/pull/#pull-an-image-by-digest-immutable-identifier
+[bun]: https://github.com/oven-sh/bun/blob/bun-v1.3.14/docs/bundler/executables.mdx
+[browsers]: https://github.com/microsoft/playwright/blob/v1.61.1/docs/src/browsers.md
+[params]: https://github.com/microsoft/playwright/blob/v1.61.1/docs/src/api/params.md#context-option-ismobile
+[context]: https://github.com/microsoft/playwright/blob/v1.61.1/packages/playwright-core/src/server/browserContext.ts
+[targets]: https://github.com/microsoft/playwright/blob/v1.61.1/browser_patches/firefox/juggler/TargetRegistry.js
+[emulation]: https://github.com/microsoft/playwright/blob/v1.61.1/docs/src/emulation.md
