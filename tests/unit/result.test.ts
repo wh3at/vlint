@@ -253,7 +253,7 @@ describe("orchestrator result model", () => {
     expect(firstFailure(result)).toMatchObject({ target: "broken", rule: null });
   });
 
-  test("keeps evaluator facts and marks mixed attempted/not-executed cases partial across all cases", async () => {
+  test("keeps evaluator facts and continues later rules after rule-specific failures across all cases", async () => {
     const rules = [rule("first"), rule("fails"), rule("later")];
     const result = await runResolvedCheck(
       plan(["a", "b"], rules),
@@ -280,10 +280,9 @@ describe("orchestrator result model", () => {
       }),
       { toolVersion: "0.1.0" },
     );
-    // collect-all: both cases run; the failing rule makes each case partial.
-    expect(result.cases.map((item) => item.status)).toEqual(["partial", "partial"]);
-    expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "not-executed"]);
-    expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "not-executed"]);
+    expect(result.cases.map((item) => item.status)).toEqual(["failed", "failed"]);
+    expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "clean"]);
+    expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "clean"]);
     expect(result.cases[0]?.rules[1]).toMatchObject({ elementsInspected: 2, violations: [{ text: "observed-before-failure" }] });
     expect(firstFailure(result)).toMatchObject({ target: "a", rule: "fails" });
   });
@@ -312,15 +311,14 @@ describe("orchestrator result model", () => {
       }),
       { toolVersion: "0.1.0" },
     );
-    // collect-all: the second case runs and its failing rule fails too.
-    expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["disabled", "failed", "not-executed"]);
-    expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["disabled", "failed", "not-executed"]);
+    expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["disabled", "failed", "clean"]);
+    expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["disabled", "failed", "clean"]);
     expect(result.summary.ruleEvaluations).toEqual({
-      clean: 0,
+      clean: 2,
       violations: 0,
       failed: 2,
       disabled: 2,
-      notExecuted: 2,
+      notExecuted: 0,
     });
   });
 
