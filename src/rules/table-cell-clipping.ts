@@ -115,6 +115,7 @@ export function createClippingEngine(): ClippingEngine {
   /** A 2D context used only to answer point-in-path questions about `clip-path`. */
   function ink(): CanvasRenderingContext2D | null {
     if (inkContext === undefined) inkContext = document.createElement("canvas").getContext("2d");
+    if (inkContext === null) throw new Error("Canvas 2D context is unavailable for table-cell clipping.");
     return inkContext;
   }
 
@@ -128,7 +129,7 @@ export function createClippingEngine(): ClippingEngine {
     const svg = (element as SVGGraphicsElement).ownerSVGElement;
     if (svg === null) return { width: 0, height: 0 };
     const view = svg.viewBox.baseVal;
-    if (view.width > 0 && view.height > 0) return { width: view.width, height: view.height };
+    if (view !== null && view.width > 0 && view.height > 0) return { width: view.width, height: view.height };
     const bounds = svg.getBoundingClientRect();
     return { width: bounds.width, height: bounds.height };
   }

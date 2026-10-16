@@ -3,18 +3,9 @@ targets resolved=2
 cases resolved=4 complete=4 partial=0 failed=0 not-executed=0
 rules clean=3 violations=1 failed=0 disabled=4 not-executed=0
 elements=5 violations=2 failures=0
-case target=settings\u{1b}]8;;https://attacker.invalid\u{7} environment=windows-chromium device=MacBook Air 13: complete url=https://example.com/settings?token=secret&token=second#private actualUrl=-
+environment=windows-chromium rule=tabs executions=4 elements=5 clean=3 violations=1 failed=0 disabled=0 not-executed=0
+environment=windows-chromium rule=off-rule executions=0 elements=0 clean=0 violations=0 failed=0 disabled=4 not-executed=0
+case target=settings\u{1b}]8;;https://attacker.invalid\u{7} environment=windows-chromium device=MacBook Air 13 url=https://example.com/settings?token=secret&token=second#private actualUrl=-
   rule tabs: violations elements=2 violations=2
     violation lines=2 locator=#tab\nnext box=1.125,2,30,40 text=first\r\nsecond\u{202e}
     violation lines=1 locator=#other box=0,0,10,10 text=plain
-  rule off-rule: disabled elements=0 violations=0
-case target=settings\u{1b}]8;;https://attacker.invalid\u{7} environment=windows-chromium device=iPhone 17: complete url=https://example.com/settings?token=secret&token=second#private actualUrl=-
-  rule tabs: clean elements=1 violations=0
-  rule off-rule: disabled elements=0 violations=0
-case target=second environment=windows-chromium device=MacBook Air 13: complete url=https://example.com/x?a=1&b=2 actualUrl=-
-  rule tabs: clean elements=1 violations=0
-  rule off-rule: disabled elements=0 violations=0
-case target=second environment=windows-chromium device=iPhone 17: complete url=https://example.com/x?a=1&b=2 actualUrl=-
-  rule tabs: clean elements=1 violations=0
-  rule off-rule: disabled elements=0 violations=0
-finalize tabs: passed elements=5

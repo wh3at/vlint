@@ -3,11 +3,7 @@ targets resolved=1
 cases resolved=2 complete=1 partial=0 failed=1 not-executed=0
 rules clean=1 violations=0 failed=0 disabled=2 not-executed=1
 elements=1 violations=0 failures=1
-case target=only environment=windows-chromium device=MacBook Air 13: failed url=https://example.com/only actualUrl=-
-  rule tabs: not-executed elements=0 violations=0
-  rule off: disabled elements=0 violations=0
+environment=windows-chromium rule=tabs executions=1 elements=1 clean=1 violations=0 failed=0 disabled=0 not-executed=1
+environment=windows-chromium rule=off executions=0 elements=0 clean=0 violations=0 failed=0 disabled=2 not-executed=0
+case target=only environment=windows-chromium device=MacBook Air 13 url=https://example.com/only actualUrl=-
   failure navigation/navigation-http-status target=only device=MacBook Air 13 rule=-: navigation returned HTTP 500
-case target=only environment=windows-chromium device=iPhone 17: complete url=https://example.com/only actualUrl=-
-  rule tabs: clean elements=1 violations=0
-  rule off: disabled elements=0 violations=0
-finalize tabs: not-executed elements=0
