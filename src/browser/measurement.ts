@@ -37,7 +37,7 @@ export function allowedArrival(auditCase: Pick<EffectiveAuditCase, "url" | "allo
 }
 
 async function checkBoundary(page: Page, auditCase: EffectiveAuditCase, fixedUrl: string): Promise<Failure | null> {
-  let code: "url-mismatch" | "ready-lost" | "navigation-during-measurement" | null = null;
+  let code: "url-mismatch" | "ready-lost" | "navigation-during-measurement" | "font-load-failed" | null = null;
   let actualUrl = page.url();
   try {
     const condition = auditCase.readyCondition;
@@ -48,9 +48,16 @@ async function checkBoundary(page: Page, auditCase: EffectiveAuditCase, fixedUrl
       const count = await matches.count();
       ready = condition.state === "hidden" ? count === 0 : count > 0;
     }
-    const snapshot = await page.evaluate(() => ({ url: location.href, fonts: document.fonts.status }));
+    const snapshot = await page.evaluate(() => {
+      let fontFailed = false;
+      document.fonts.forEach((face) => {
+        if (face.status === "error") fontFailed = true;
+      });
+      return { url: location.href, fonts: document.fonts.status, fontFailed };
+    });
     actualUrl = snapshot.url;
     if (!sameUrl(actualUrl, fixedUrl)) code = "url-mismatch";
+    else if (snapshot.fontFailed) code = "font-load-failed";
     else if (snapshot.fonts !== "loaded" || !ready) code = "ready-lost";
   } catch {
     actualUrl = page.url();
@@ -58,9 +65,9 @@ async function checkBoundary(page: Page, auditCase: EffectiveAuditCase, fixedUrl
   }
   if (code === null) return null;
   return {
-    stage: code === "ready-lost" ? "ready-condition" : "navigation",
+    stage: code === "font-load-failed" ? "web-font" : code === "ready-lost" ? "ready-condition" : "navigation",
     code,
-    message: code === "ready-lost" ? "ready state was not satisfied or could not be verified at a measurement boundary" : "target URL was not satisfied or could not be verified at a measurement boundary",
+    message: code === "font-load-failed" ? "one or more web fonts failed to load at a measurement boundary" : code === "ready-lost" ? "ready state was not satisfied or could not be verified at a measurement boundary" : "target URL was not satisfied or could not be verified at a measurement boundary",
     target: auditCase.name,
     device: auditCase.deviceName,
     rule: null,
