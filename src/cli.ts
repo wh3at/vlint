@@ -1,3 +1,4 @@
+import { persistReport } from "./output/report";
 import { Command, CommanderError, Option } from "commander";
 import vlintPackage from "../package.json";
 import { boundaryFailure, boundarySuccess } from "./contracts/failure";
@@ -301,8 +302,18 @@ export async function runCli(
     );
     return 0;
   }
-  const result = await runtime.check(invocation.url, signal);
+  const result = await persistReport(await runtime.check(invocation.url, signal));
+  if (result.reportPath === null) {
+    const failure = result.failures.at(-1)!;
+    io.stdout(invocation.format === "json"
+      ? `${JSON.stringify({ status: result.status, tool: result.tool, summary: result.summary, failures: [failure], reportPath: null })}\n`
+      : `vlint: incomplete\n${failure.code}: ${escapeTerminal(failure.message)}\n`);
+    return 2;
+  }
   io.stdout(invocation.format === "json" ? renderJson(result) : renderTerminal(result));
+  if (invocation.format !== "json" && result.reportPath !== null) {
+    io.stdout(`reportPath: ${escapeTerminal(result.reportPath)}\n`);
+  }
   if (result.status === "incomplete") return 2;
   return result.status === "violations" ? 1 : 0;
 }

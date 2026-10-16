@@ -1,5 +1,6 @@
 export type FailureStage =
   | "config"
+  | "report"
   | "provider"
   | "browser-setup"
   | "authentication"
@@ -11,6 +12,7 @@ export type FailureStage =
 
 export type FailureCode =
   | "config-not-found"
+  | "report-write-failed"
   | "config-read-failed"
   | "config-too-large"
   | "config-invalid-json"
