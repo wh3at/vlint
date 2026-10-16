@@ -35,9 +35,28 @@ The tests use fixed loopback pages and the existing deterministic test font. The
 exercise Chromium, Firefox and WebKit through external CLI processes, covering CSS
 and JS font success/error, an unsettled JS font timeout, unused weight/subset requests,
 redirect authorization, fixed arrival URL, persistent and roundtrip URL/ready changes,
-case isolation, rule isolation and retention of completed evaluations. They do not
-claim that every possible font failure is observable in every engine.
+case isolation, rule isolation and retention of completed evaluations. A separate
+three-engine interruption slice sends SIGTERM to the exact compiled child PID while
+two cases are evaluating; it verifies exit 2, retained completed rules and unexecuted
+subsequent cases. These tests do not claim that every possible font failure is
+observable in every engine.
 
 The implementation lane reused a private Docker snapshot of #57's prepared Ubuntu
 24.04 environment and copied `/tmp/browsers-57` to `/tmp/browsers-62`. It did not
 install packages on the Arch host, mutate #57's container, or delete shared caches.
+
+## Recorded implementation evidence
+
+At source head `4d4bba50a8b35cc651d70f602d20bdb1de582bd0`, the full command above
+passed: 3 tests, 142 assertions, 152.80 seconds. Typecheck and architecture checks
+passed (42 modules); `bun test tests/unit/result.test.ts` passed all 33 tests.
+The full unit suite had 351 passes and 4 obsolete setup-test failures awaiting #59;
+those failures are not readiness or runner failures.
+
+The late-error tracer first failed because the compiled CLI returned exit 0 instead
+of 2. The rule-isolation tracer first failed because a later independent rule was
+`not-executed` rather than `clean`. Both passed after their minimal fixes.
+An early matrix run used a 2-second budget for every target and timed out on an
+otherwise clean Firefox page under shared load. Ordinary targets now have a
+10-second budget; only the deliberately stalled font retains a 2-second budget.
+The final whole-file run passed with these separate budgets.
