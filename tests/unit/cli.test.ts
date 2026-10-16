@@ -22,7 +22,7 @@ describe("Commander CLI grammar", () => {
     [["check", "--format", "terminal", "--format", "json"], { kind: "check", url: null, format: "json" }],
     [["browser", "install"], { kind: "browser-install", force: false }],
     [["browser", "install", "--force"], { kind: "browser-install", force: true }],
-    [["init"], { kind: "init" }],
+    [["init"], { kind: "init", environments: [] }],
     [["setup"], { kind: "setup" }],
   ] as const)("accepts Commander-standard invocation %#", (args, expected) => {
     expect(invocation(args)).toEqual(expected);

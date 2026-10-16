@@ -159,8 +159,22 @@ vlint check --format json
 ## Configuration
 
 `vlint.config.json` (valid JSON, read from the current working directory) is the only
-configuration source. Run `vlint init` to generate the standard MacBook Air 13-inch
-and iPhone 17 profiles.
+configuration source. In a terminal, `vlint init` asks for a platform, then its
+browser; repeat and enter `done` to finish. Automation must select explicitly:
+
+```sh
+vlint init --environment windows:chromium --environment iphone:webkit
+vlint init --help
+```
+
+Valid choices are `windows:chromium`, `windows:firefox`, `macos:chromium`,
+`macos:webkit`, `iphone:webkit`, and `android:chromium`. Repeated flags select
+only those environments and bypass prompts even in a terminal. Without a terminal
+and selections, init fails with guidance rather than choosing defaults.
+Generated devices contain editable concrete viewport, screen, DPR, mobile and
+touch values from public Playwright desktop/mobile presets; User-Agent is not
+stored. Each generated environment references its device. Existing files,
+directories and symlinks at the config path are never overwritten or migrated.
 
 ```jsonc
 {
