@@ -105,13 +105,10 @@ function fragmentCenter(frag: TextFragment): number {
   return frag.y + frag.height / 2;
 }
 
-/**
- * Two fragments are same-line when their rects vertically overlap OR their
- * centers are within half the smaller resolved line-height (KTD8).
- */
 function sameLine(a: TextFragment, b: TextFragment): boolean {
-  const rectsOverlap = !(a.y + a.height <= b.y || b.y + b.height <= a.y);
-  if (rectsOverlap) return true;
+  const distance = Math.abs(fragmentCenter(a) - fragmentCenter(b));
+  const overlapHeight = (Math.min(a.height, a.lineHeight) + Math.min(b.height, b.lineHeight)) / 2;
+  if (distance < overlapHeight) return true;
   const threshold = 0.5 * Math.min(a.lineHeight, b.lineHeight);
   return Math.abs(fragmentCenter(a) - fragmentCenter(b)) <= threshold;
 }

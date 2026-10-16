@@ -547,5 +547,16 @@ export async function evaluateTableHeaderSingleLine(
       ),
     };
   }
+  if (candidateDiagnostics.some((entry) => entry.kind === "generated-content-unmeasured")) {
+    return {
+      facts,
+      failure: failure(
+        "generated-content-unsupported",
+        "Table-header candidates render ::before/::after generated content, which is not measurable.",
+        rule,
+        targetName,
+      ),
+    };
+  }
   return { facts, failure: null };
 }
