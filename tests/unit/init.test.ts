@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { devices as playwrightDevices } from "playwright";
 import {
   buildStandardConfig,
   CONFIG_NAME,
@@ -61,7 +60,6 @@ describe("vlint init: standard config generation", () => {
       deviceScaleFactor: 3,
       isMobile: true,
       hasTouch: true,
-      userAgent: playwrightDevices["iPhone 17"].userAgent,
     });
 
     // MacBook keeps Chromium's default user agent (no userAgent field emitted).
@@ -75,9 +73,7 @@ describe("vlint init: standard config generation", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const iphone = result.value.devices[1]!;
-    // The generated UA is the registry value, faithfully copied, not invented.
-    expect(iphone.userAgent).toBe(playwrightDevices["iPhone 17"].userAgent);
-    expect(iphone.userAgent!.startsWith("Mozilla/5.0 (iPhone")).toBe(true);
+    expect("userAgent" in iphone).toBe(false);
   });
 });
 

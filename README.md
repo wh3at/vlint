@@ -146,12 +146,12 @@ Every check requires a project-local `vlint.config.json`; run `vlint init` or
 `vlint setup` first.
 
 ```sh
-vlint check --url http://localhost:3000/  # every configured device, one URL
-vlint check                               # every provider target × every device
+vlint check --url http://localhost:3000/
+vlint check
 vlint check --format json
 ```
 
-- `--url` uses the configured devices but does not resolve a target provider.
+- `--url` uses the declared environment/device combinations but does not resolve a target provider.
 - Without `--url`, the config must contain a `static` or `command` provider.
 - One case failing does not stop the rest; the run is reported as `incomplete` (see [Exit codes](#exit-codes)).
 - The caller starts the target app and prepares fixtures and authentication state; vlint does not start dev servers, generate fixtures, or perform logins.
@@ -164,7 +164,8 @@ and iPhone 17 profiles.
 
 ```jsonc
 {
-  "devices": [/* from `vlint init` */],
+  "devices": [{ "name": "desktop", "viewport": { "width": 1280, "height": 720 }, "screen": { "width": 1280, "height": 720 }, "deviceScaleFactor": 1, "isMobile": false, "hasTouch": false }],
+  "environments": [{ "name": "windows-chrome", "platform": "windows", "browser": "chromium", "devices": ["desktop"] }],
   "defaults": { "locale": "en-US", "timezoneId": "UTC", "timeoutMs": 30000 },
   "rules": [
     { "name": "tab-label-single-line", "type": "tab-label-single-line" },
@@ -182,10 +183,44 @@ and iPhone 17 profiles.
 
 | Field | Description |
 | --- | --- |
-| `devices` | Ordered device profiles with unique names; authority for viewport, screen, DPR, mobile, touch, optional `userAgent`. |
+| `devices` | Device profiles with unique names; authority for viewport, screen, DPR, mobile and touch. Device `userAgent` is forbidden. |
+| `environments` | Required non-empty ordered list of unique `name`, `platform`, `browser`, and non-empty `devices` references. |
 | `defaults` | `locale`, `timezoneId`, `timeoutMs`, `readyCondition`, `browserState`. |
 | `rules` | Built-in and local rule instances. |
 | `provider` | Optional `static` or `command` provider; required only without `--url`. |
+
+### Declared environments
+
+Supported combinations are `windows:chromium`, `windows:firefox`, `macos:chromium`,
+`macos:webkit`, `iphone:webkit`, and `android:chromium`. Browser names refer to
+Playwright-managed engines, not installed branded browsers. The execution host
+need not match the declared platform. Unknown device references, unsupported
+combinations and duplicate environment names are configuration errors. Old
+configurations without environments are rejected; there is no implicit Chromium mode.
+
+Cases are planned in target order, environment order, then device-reference order.
+Environments may share devices; unreferenced devices are not checked. Targets and
+rules are common to every environment; there are no environment-specific overrides.
+Minimums are checked independently per case, never pooled across environments.
+
+UA comes from Playwright's public `Desktop Chrome`, `Desktop Firefox`, `Desktop Safari`,
+`iPhone 17`, or `Pixel 10` preset. macOS Chromium uses a macOS UA constructed with
+the managed Chromium version. Missing required presets fail rather than substitute.
+Explicit device screen options are passed unchanged through Playwright's public
+context API; preset screen values never overwrite them. This is emulation, not
+a guarantee of physical OS/device signals. See [measured engine limits](docs/operations/environment-execution-validation.md).
+
+Only selected engines launch. A missing or unusable engine fails its own cases
+while other engines continue. `check` never downloads, installs, repairs or falls
+back to another engine/version.
+
+The complete result's `execution` metadata separates the actual `host`, selected
+`engines` (expected/obtained version, version source, revision, artifact, executable
+and launch diagnostic), environment UA, and referenced device configurations.
+Cases refer to environment names and device names rather than copying those
+shared values. Device metadata records options supplied to Playwright, not an
+independent observation of browser signals. WebKit's version source is explicitly
+`playwright-metadata`, not independent binary verification.
 
 - **`tab-label-single-line`** — each rendered tab label must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `labelSelector`.
 - **`page-horizontal-overflow`** — detects unintended root-page horizontal scroll attributed to light-DOM elements. Field: `tolerancePx` (`0`–`100`, default `1`).
@@ -341,6 +376,7 @@ many DOM elements. Disabled rules do not count as inspected.
     { "name": "desktop", "viewport": { "width": 1280, "height": 720 }, "screen": { "width": 1280, "height": 720 }, "deviceScaleFactor": 1, "isMobile": false, "hasTouch": false, "ruleMinimums": { "tabs": 2 } },
     { "name": "phone", "viewport": { "width": 390, "height": 720 }, "screen": { "width": 390, "height": 720 }, "deviceScaleFactor": 1, "isMobile": true, "hasTouch": true }
   ],
+  "environments": [{ "name": "windows-chrome", "platform": "windows", "browser": "chromium", "devices": ["desktop", "phone"] }],
   "rules": [{ "name": "tabs", "type": "tab-label-single-line", "minimumInspected": 1 }],
   "provider": { "type": "static", "targets": [{
     "name": "settings", "url": "http://localhost:3000/settings",

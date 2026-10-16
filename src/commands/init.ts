@@ -117,7 +117,7 @@ function refineIphone(descriptor: unknown): IphoneDescriptor | null {
  * registry into concrete values at generation time; the Chromium-incompatible
  * `defaultBrowserType` is deliberately dropped.
  */
-export function buildStandardConfig(source: DeviceSource = playwrightDevices): BoundaryResult<Config> {
+export function buildStandardConfig(source: DeviceSource = playwrightDevices): BoundaryResult<Omit<Config, "environments">> {
   const raw = source[IPHONE_KEY];
   if (raw === undefined) {
     return boundaryFailure({
@@ -147,7 +147,6 @@ export function buildStandardConfig(source: DeviceSource = playwrightDevices): B
     deviceScaleFactor: iphone.deviceScaleFactor,
     isMobile: iphone.isMobile,
     hasTouch: iphone.hasTouch,
-    userAgent: iphone.userAgent,
   };
   return boundarySuccess({
     devices: [MACBOOK_PROFILE, iphoneProfile],

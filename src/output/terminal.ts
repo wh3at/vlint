@@ -76,7 +76,7 @@ export function renderTerminal(result: RunResult): string {
   ];
   for (const caseResult of published.cases) {
     lines.push(
-      `case target=${escapeTerminal(caseResult.target.name)} device=${escapeTerminal(caseResult.device.name)}: ${caseResult.status} url=${escapeTerminal(caseResult.target.url)} actualUrl=${escapeNullable(caseResult.actualUrl ?? null)} viewport=${caseResult.device.viewport.width}x${caseResult.device.viewport.height}@${caseResult.device.deviceScaleFactor}`,
+      `case target=${escapeTerminal(caseResult.target.name)} environment=${escapeTerminal(caseResult.environment)} device=${escapeTerminal(caseResult.device.name)}: ${caseResult.status} url=${escapeTerminal(caseResult.target.url)} actualUrl=${escapeNullable(caseResult.actualUrl ?? null)}`,
     );
     for (const rule of caseResult.rules) {
       lines.push(

@@ -2,10 +2,10 @@ import { open, stat } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import type { Browser, BrowserContext, BrowserContextOptions, Frame, Page } from "playwright";
-import { chromium } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
+import type { BrowserEngine } from "../contracts/config";
 import type { EffectiveAuditCase, ReadyState, Viewport } from "../contracts/config";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../contracts/failure";
-import { resolveManagedExecutableForCheck, type VersionProbe } from "./install";
 import { allowedArrival, observeMainFrameNavigation, sameUrl } from "./measurement";
 import {
   createDeadline,
@@ -101,13 +101,12 @@ export interface BrowserRunScope {
 }
 
 export interface CreateRunScopeOptions {
+  readonly engine?: BrowserEngine;
   readonly launchTimeoutMs?: number;
   /** Cancellation for the run-level launch. Abort before/during launch returns an interrupt failure and reaps a late-settling browser. */
   readonly signal?: AbortSignal;
   /** Test seam: replaces the real Playwright launch to fault-inject launch failure. */
   readonly launch?: () => Promise<Browser>;
-  /** Test seam overriding the actual-version probe used by the check-path resolution. */
-  readonly versionProbe?: VersionProbe;
   /** Bounded budget (ms) for closing the managed browser; defaults to a generous safety cap. */
   readonly closeTimeoutMs?: number;
 }
@@ -184,23 +183,17 @@ async function raceNavigation<T>(wait: Promise<T>, navigated: Promise<void>): Pr
   ]);
 }
 
-async function defaultLaunch(executablePath: string, timeoutMs: number): Promise<Browser> {
-  return raceTimeout(chromium.launch({ headless: true, executablePath }), timeoutMs);
-}
-
-/** Creates the single run-level Browser after confirming the managed executable is present. */
 export async function createBrowserRunScope(
   options: CreateRunScopeOptions = {},
 ): Promise<BoundaryResult<BrowserRunScope>> {
-  const resolved = resolveManagedExecutableForCheck(undefined, options.versionProbe);
-  if (!resolved.ok) return boundaryFailure(resolved.failure);
+  const engine = options.engine ?? "chromium";
   if (signalAborted(options.signal)) return boundaryFailure(interruptFailure());
 
   const timeoutMs = options.launchTimeoutMs ?? DEFAULT_LAUNCH_TIMEOUT_MS;
   const launchPromise =
     options.launch !== undefined
       ? options.launch()
-      : defaultLaunch(resolved.value.executablePath, timeoutMs);
+      : { chromium, firefox, webkit }[engine].launch({ headless: true, timeout: timeoutMs });
 
   let browser: Browser;
   try {
@@ -217,7 +210,7 @@ export async function createBrowserRunScope(
       return boundaryFailure(interruptFailure());
     }
     return boundaryFailure(
-      browserSetupFailure("browser-launch-failed", "failed to launch the managed Chromium browser"),
+      browserSetupFailure("browser-launch-failed", error instanceof Error ? error.message : `failed to launch managed ${engine}`),
     );
   }
 

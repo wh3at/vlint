@@ -1,3 +1,4 @@
+import { withEnvironments } from "../fixtures/environments";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { evaluateSvgTextClipping } from "../../src/rules/svg-text-clipping";
@@ -136,7 +137,7 @@ test("default CLI evaluation reports clipping and target overrides preserve fail
   const device = { name: "desktop", viewport: { width: 800, height: 600 }, screen: { width: 800, height: 600 },
     deviceScaleFactor: 1, isMobile: false, hasTouch: false };
   const url = `${server.url}/svg-text-clipping.html`;
-  const save = async (extra: object) => Bun.write(join(directory, "vlint.config.json"), JSON.stringify({ devices: [device], ...extra }));
+  const save = async (extra: object) => Bun.write(join(directory, "vlint.config.json"), JSON.stringify(withEnvironments({ devices: [device], ...extra })));
   try {
     await save({});
     const result = await runCheckCommand(directory, url, {}, "test");

@@ -1,6 +1,8 @@
+import { withEnvironments } from "../fixtures/environments";
 import { expect, test } from "bun:test";
 import { normalizeRules, resolveTargets } from "../../src/config/merge";
-import { parseConfig } from "../../src/config/schema";
+import { parseConfig as parseRawConfig } from "../../src/config/schema";
+const parseConfig = (value: unknown) => parseRawConfig(withEnvironments(value));
 
 const device = {
   name: "desktop", viewport: { width: 800, height: 600 }, screen: { width: 800, height: 600 },
@@ -23,6 +25,7 @@ test("SVG clipping configuration validates tolerance and merges target exclusion
   expect(parsed.ok).toBe(true);
   if (!parsed.ok || parsed.value.provider?.type !== "static") throw new Error("invalid config");
   const plan = resolveTargets({ path: "config", directory: ".", defaults: {}, devices: [device],
+    environments: parsed.value.environments,
     rules: normalizeRules(parsed.value.rules) }, parsed.value.provider.targets);
   expect(plan.ok).toBe(true);
   if (!plan.ok) throw new Error(plan.violation.message);

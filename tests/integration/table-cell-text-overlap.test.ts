@@ -20,6 +20,7 @@ beforeAll(async () => {
   }));
   await Bun.write(join(directory, "vlint.config.json"), JSON.stringify({
     devices,
+    environments: [{ name: "windows", platform: "windows", browser: "chromium", devices: ["800", "390"] }],
     rules: [{ name: "tab-label-single-line", type: "tab-label-single-line" }],
   }));
 });
@@ -730,6 +731,7 @@ test("named rule can be enabled per target with cell exclusions", async () => {
     const url = `${server.url}/table-cell-text-overlap.html`;
     await Bun.write(join(isolated, "vlint.config.json"), JSON.stringify({
       devices: [{ name: "phone", viewport: { width: 390, height: 720 }, screen: { width: 390, height: 720 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false }],
+      environments: [{ name: "windows", platform: "windows", browser: "chromium", devices: ["phone"] }],
       rules: [
         { name: "tab-label-single-line", type: "tab-label-single-line" },
         { name: "cells", type: "table-cell-text-overlap", enabled: false, excludeSelectors: ["#native-body"] },

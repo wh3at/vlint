@@ -1,3 +1,4 @@
+import { withEnvironments } from "../fixtures/environments";
 import { afterEach, describe, expect, test } from "bun:test";
 import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -37,7 +38,7 @@ async function temporaryDirectory(): Promise<string> {
 }
 
 async function writeConfig(directory: string, value: unknown): Promise<void> {
-  await writeFile(join(directory, "vlint.config.json"), typeof value === "string" ? value : JSON.stringify(value));
+  await writeFile(join(directory, "vlint.config.json"), typeof value === "string" ? value : JSON.stringify(withEnvironments(value)));
 }
 
 const MINIMAL_DEVICE = {

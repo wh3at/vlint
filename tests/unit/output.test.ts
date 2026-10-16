@@ -1,3 +1,4 @@
+import { executionFixture } from "../fixtures/environments";
 import { describe, expect, test } from "bun:test";
 import type { RunResult } from "../../src/contracts/result";
 import { isLocalViolation, isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
@@ -7,11 +8,7 @@ import { escapeTerminal, renderTerminal } from "../../src/output/terminal";
 const result: RunResult = {
   status: "violations",
   tool: { name: "vlint", version: "0.1.0" },
-  environment: {
-    platform: "linux",
-    arch: "x64",
-    browser: { name: "chromium", version: "149.0.7827.55" },
-  },
+  execution: executionFixture,
   summary: {
     targets: { resolved: 1 },
     cases: { resolved: 1, complete: 1, partial: 0, failed: 0, notExecuted: 0 },
@@ -29,13 +26,8 @@ const result: RunResult = {
       },
       device: {
         name: "MacBook Air 13",
-        viewport: { width: 1470, height: 956 },
-        screen: { width: 1470, height: 956 },
-        deviceScaleFactor: 2,
-        isMobile: false,
-        hasTouch: false,
-        userAgent: null,
       },
+      environment: "windows-chromium",
       locale: "en-US",
       timezoneId: "UTC",
       status: "complete",

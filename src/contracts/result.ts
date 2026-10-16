@@ -1,3 +1,23 @@
+import type { AuditEnvironment, BrowserEngine, DeviceProfile } from "./config";
+
+export interface EngineExecution {
+  readonly engine: BrowserEngine;
+  readonly expectedVersion: string | null;
+  obtainedVersion: string | null;
+  versionSource: "browser.version" | "playwright-metadata" | null;
+  readonly revision: string;
+  readonly artifact: { readonly name: string; readonly directory: string; readonly downloadURLs: readonly string[] };
+  readonly executablePath: string;
+  diagnostic: string | null;
+}
+
+export interface RunExecution {
+  readonly host: { readonly platform: string; readonly architecture: string; readonly release: string };
+  readonly engines: readonly EngineExecution[];
+  readonly environments: readonly (AuditEnvironment & { readonly userAgent: string | null })[];
+  readonly devices: readonly DeviceProfile[];
+}
+
 import type { RuleFinalization, TableHeaderCandidateDiagnostic, Violation } from "./evaluation";
 import type { Failure } from "./failure";
 import type { RuleType } from "./config";
@@ -27,25 +47,15 @@ export interface CaseTarget {
   readonly url: string;
 }
 
-/**
- * Concrete device emulation applied to one audit case. Carries the full
- * profile from the ordered device list so the result is self-describing
- * without referring back to configuration (R18).
- */
 export interface CaseDevice {
   readonly name: string;
-  readonly viewport: { readonly width: number; readonly height: number };
-  readonly screen: { readonly width: number; readonly height: number };
-  readonly deviceScaleFactor: number;
-  readonly isMobile: boolean;
-  readonly hasTouch: boolean;
-  readonly userAgent: string | null;
 }
 
 export interface CaseResult {
   readonly target: CaseTarget;
   readonly actualUrl?: string | null;
   readonly device: CaseDevice;
+  readonly environment: string;
   readonly locale: string;
   readonly timezoneId: string;
   readonly status: CaseStatus;
@@ -85,11 +95,7 @@ export interface RunSummary {
 export interface RunResult {
   readonly status: RunStatus;
   readonly tool: { readonly name: "vlint"; readonly version: string };
-  readonly environment: {
-    readonly platform: "linux";
-    readonly arch: "x64";
-    readonly browser: { readonly name: "chromium"; readonly version: string | null };
-  };
+  readonly execution: RunExecution;
   readonly summary: RunSummary;
   readonly cases: readonly CaseResult[];
   readonly ruleFinalizations: readonly RuleFinalization[];

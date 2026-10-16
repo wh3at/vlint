@@ -1,3 +1,4 @@
+import { desktopEnvironment } from "../fixtures/environments";
 /**
  * Integration tests for local rule browser evaluation (U3).
  */
@@ -18,6 +19,7 @@ const DESKTOP_CASE: EffectiveAuditCase = {
   name: "spacing-fixture",
   url: "http://127.0.0.1/spacing-violation.html",
   deviceName: "desk",
+  environment: desktopEnvironment,
   viewport: { width: 1280, height: 800 },
   screen: { width: 1280, height: 800 },
   deviceScaleFactor: 1,
@@ -57,6 +59,7 @@ function spacingConfig(): LoadedConfig {
   return {
     path: `${fixtureRoot}/vlint.config.json`,
     directory: fixtureRoot,
+    environments: [{ ...desktopEnvironment, devices: ["desk"] }],
     devices: [
       {
         name: "desk",

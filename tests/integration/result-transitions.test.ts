@@ -1,3 +1,4 @@
+import { desktopEnvironment, executionFixture } from "../fixtures/environments";
 import { describe, expect, test } from "bun:test";
 import type {
   EffectiveAuditCase,
@@ -61,6 +62,7 @@ function auditCase(item: EffectiveTarget): EffectiveAuditCase {
     name: item.name,
     url: item.url,
     deviceName: "desktop",
+    environment: desktopEnvironment,
     viewport: item.viewport,
     screen: item.viewport,
     deviceScaleFactor: item.deviceScaleFactor,
@@ -82,7 +84,7 @@ function plan(
   disabled: Readonly<Record<string, readonly string[]>> = {},
 ): ResolvedCheckPlan {
   const targets = targetNames.map((name) => target(name, rules, disabled[name] ?? []));
-  return { rules, targets, cases: targets.map(auditCase) };
+  return { environments: [desktopEnvironment], rules, targets, cases: targets.map(auditCase) };
 }
 
 const cleanOutcome: RuleEvaluationOutcome = {
@@ -126,7 +128,7 @@ function dependencies(options: DepOptions = {}): CheckDependencies<string> {
     async launch() {
       if (options.launchFailure !== undefined) return boundaryFailure(options.launchFailure);
       return boundarySuccess({
-        browserVersion: "149.0.7827.55",
+        execution: executionFixture,
         async openCase(item) {
           const failure = options.openFailure?.[item.name];
           if (failure !== undefined) return boundaryFailure(failure);
@@ -489,7 +491,7 @@ function concurrencyHarness(options: HarnessOptions = {}) {
     async launch() {
       if (options.launchFailure !== undefined) return boundaryFailure(options.launchFailure);
       return boundarySuccess({
-        browserVersion: "149.0.7827.55",
+        execution: executionFixture,
         async openCase(item, signal): Promise<BoundaryResult<{ page: string; close(): Promise<BoundaryResult<void>> }>> {
           if (signal?.aborted) {
             return boundaryFailure({
