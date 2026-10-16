@@ -1,247 +1,109 @@
 import { open, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { devices as playwrightDevices } from "playwright";
-import type { Config, DeviceProfile, Viewport } from "../contracts/config";
-import {
-  boundaryFailure,
-  boundarySuccess,
-  type BoundaryResult,
-} from "../contracts/failure";
+import type { Config, DeviceProfile, AuditEnvironment } from "../contracts/config";
+import { boundaryFailure, boundarySuccess, type BoundaryResult, type FailureCode } from "../contracts/failure";
 
 export const CONFIG_NAME = "vlint.config.json";
-
-export interface InitResult {
-  readonly path: string;
-}
-
-const IPHONE_KEY = "iPhone 17";
-function signalAborted(signal: AbortSignal | undefined): boolean {
-  return signal?.aborted === true;
-}
-
-
-/**
- * Standard desktop device: MacBook Air 13" (M5) default logical display.
- * `userAgent` is omitted so Playwright's Chromium default user agent is used.
- */
-const MACBOOK_PROFILE: DeviceProfile = {
-  name: "macbook-air-13-m5",
-  viewport: { width: 1470, height: 956 },
-  screen: { width: 1470, height: 956 },
-  deviceScaleFactor: 2,
-  isMobile: false,
-  hasTouch: false,
-};
-
-/** Standard rules pinned into generated configuration. */
-const STANDARD_RULES = [
-  {
-    name: "tab-label-single-line",
-    type: "tab-label-single-line",
-  },
-  {
-    name: "page-horizontal-overflow",
-    type: "page-horizontal-overflow",
-  },
-  {
-    name: "table-header-single-line",
-    type: "table-header-single-line",
-  },
-  {
-    name: "table-cell-text-overlap",
-    type: "table-cell-text-overlap",
-  },
-  {
-    name: "svg-text-clipping",
-    type: "svg-text-clipping",
-  },
-] as const;
-
-/**
- * Minimal registry shape used to source the iPhone descriptor. The real
- * Playwright `devices` object is the default source; tests inject a controlled
- * shape to exercise the missing/invalid descriptor path.
- */
+export interface InitResult { readonly path: string }
 export type DeviceSource = Readonly<Record<string, unknown>>;
 
-interface IphoneDescriptor {
-  readonly userAgent: string;
-  readonly viewport: Viewport;
-  readonly screen: Viewport;
-  readonly deviceScaleFactor: number;
-  readonly isMobile: boolean;
-  readonly hasTouch: boolean;
+const PRESETS = {
+  "windows:chromium": "Desktop Chrome",
+  "windows:firefox": "Desktop Firefox",
+  "macos:chromium": "Desktop Chrome",
+  "macos:webkit": "Desktop Safari",
+  "iphone:webkit": "iPhone 17",
+  "android:chromium": "Pixel 10",
+} as const;
+export const ENVIRONMENT_CHOICES = Object.keys(PRESETS);
+
+function failure(code: FailureCode, message: string): BoundaryResult<never> {
+  return boundaryFailure({ stage: code === "signal-interrupt" ? "interrupt" : "config", code, message, target: null, device: null, rule: null });
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+function viewport(value: unknown): value is { width: number; height: number } {
+  if (typeof value !== "object" || value === null) return false;
+  return "width" in value && typeof value.width === "number" && value.width > 0 && Number.isFinite(value.width)
+    && "height" in value && typeof value.height === "number" && value.height > 0 && Number.isFinite(value.height);
 }
 
-function asViewport(value: unknown): Viewport | null {
-  if (!isRecord(value)) return null;
-  const width = value.width;
-  const height = value.height;
-  if (typeof width !== "number" || !Number.isFinite(width)) return null;
-  if (typeof height !== "number" || !Number.isFinite(height)) return null;
-  return { width, height };
-}
-
-/**
- * Project-owned runtime refinement of the iPhone 17 descriptor.
- *
- * The public Playwright `DeviceDescriptor` type omits `screen`, so the registry
- * value is treated as `unknown` and the full context-relevant shape — including
- * `screen` — is validated here. A missing key or any missing/invalid field
- * becomes a typed init failure rather than a silent approximation. No internal
- * Playwright import and no unchecked cast is used: the value flows through
- * `unknown` and narrows via guards.
- */
-function refineIphone(descriptor: unknown): IphoneDescriptor | null {
-  if (!isRecord(descriptor)) return null;
-  const screen = asViewport(descriptor.screen);
-  const viewport = asViewport(descriptor.viewport);
-  if (screen === null || viewport === null) return null;
-  const userAgent = descriptor.userAgent;
-  const deviceScaleFactor = descriptor.deviceScaleFactor;
-  const isMobile = descriptor.isMobile;
-  const hasTouch = descriptor.hasTouch;
-  if (typeof userAgent !== "string" || userAgent.length === 0) return null;
-  if (typeof deviceScaleFactor !== "number" || !Number.isFinite(deviceScaleFactor)) return null;
-  if (typeof isMobile !== "boolean" || typeof hasTouch !== "boolean") return null;
-  return { userAgent, viewport, screen, deviceScaleFactor, isMobile, hasTouch };
-}
-
-/**
- * Build the standard config: the two standard devices and rules, with
- * no provider and no URL. The iPhone profile is normalized from the Playwright
- * registry into concrete values at generation time; the Chromium-incompatible
- * `defaultBrowserType` is deliberately dropped.
- */
-export function buildStandardConfig(source: DeviceSource = playwrightDevices): BoundaryResult<Omit<Config, "environments">> {
-  const raw = source[IPHONE_KEY];
-  if (raw === undefined) {
-    return boundaryFailure({
-      stage: "config",
-      code: "init-device-unavailable",
-      message: `Playwright registry does not provide ${IPHONE_KEY}`,
-      target: null,
-      device: null,
-      rule: null,
-    });
+export function buildStandardConfig(selections: readonly string[], source: DeviceSource = playwrightDevices): BoundaryResult<Config> {
+  if (selections.length === 0) return failure("init-environment-required", "Choose environments with --environment windows:chromium; see vlint init --help");
+  const devices: DeviceProfile[] = [];
+  const environments: AuditEnvironment[] = [];
+  for (const selection of new Set(selections)) {
+    if (!Object.hasOwn(PRESETS, selection)) return failure("init-environment-invalid", `Unsupported environment ${selection}; see vlint init --help`);
+    const key = selection as keyof typeof PRESETS;
+    const preset = PRESETS[key];
+    const descriptor = source[preset];
+    if (typeof descriptor !== "object" || descriptor === null
+      || !("viewport" in descriptor) || !viewport(descriptor.viewport)
+      || !("screen" in descriptor) || !viewport(descriptor.screen)
+      || !("deviceScaleFactor" in descriptor) || typeof descriptor.deviceScaleFactor !== "number" || !Number.isFinite(descriptor.deviceScaleFactor) || descriptor.deviceScaleFactor <= 0
+      || !("isMobile" in descriptor) || typeof descriptor.isMobile !== "boolean"
+      || !("hasTouch" in descriptor) || typeof descriptor.hasTouch !== "boolean") {
+      return failure("init-device-unavailable", `Playwright ${preset} descriptor is missing required emulation fields`);
+    }
+    const name = key.replace(":", "-");
+    const [platform, browser] = key.split(":") as [AuditEnvironment["platform"], AuditEnvironment["browser"]];
+    devices.push({ name, viewport: descriptor.viewport, screen: descriptor.screen, deviceScaleFactor: descriptor.deviceScaleFactor, isMobile: descriptor.isMobile, hasTouch: descriptor.hasTouch });
+    environments.push({ name, platform, browser, devices: [name] });
   }
-  const iphone = refineIphone(raw);
-  if (iphone === null) {
-    return boundaryFailure({
-      stage: "config",
-      code: "init-device-unavailable",
-      message: `Playwright ${IPHONE_KEY} descriptor is missing required emulation fields`,
-      target: null,
-      device: null,
-      rule: null,
-    });
-  }
-  const iphoneProfile: DeviceProfile = {
-    name: "iphone-17",
-    viewport: iphone.viewport,
-    screen: iphone.screen,
-    deviceScaleFactor: iphone.deviceScaleFactor,
-    isMobile: iphone.isMobile,
-    hasTouch: iphone.hasTouch,
-  };
-  return boundarySuccess({
-    devices: [MACBOOK_PROFILE, iphoneProfile],
-    rules: STANDARD_RULES,
-  });
+  return boundarySuccess({ devices, environments, rules: [
+    { name: "tab-label-single-line", type: "tab-label-single-line" },
+    { name: "page-horizontal-overflow", type: "page-horizontal-overflow" },
+    { name: "table-header-single-line", type: "table-header-single-line" },
+    { name: "table-cell-text-overlap", type: "table-cell-text-overlap" },
+    { name: "svg-text-clipping", type: "svg-text-clipping" },
+  ] });
 }
 
-/**
- * Run `vlint init` against a directory. Generates the standard config via an
- * exclusive create (O_CREAT|O_EXCL) so an existing regular file, directory, or
- * symlink target is never overwritten, then writes a single stable byte stream.
- * Returns the created path on success or a typed failure otherwise.
- */
-export async function runInitCommand(
-  cwd: string,
-  signal?: AbortSignal,
-): Promise<BoundaryResult<InitResult>> {
-  if (signalAborted(signal)) {
-    return boundaryFailure({
-      stage: "interrupt",
-      code: "signal-interrupt",
-      message: "operation cancelled",
-      target: null,
-      device: null,
-      rule: null,
-    });
+async function interactiveSelections(signal?: AbortSignal): Promise<readonly string[]> {
+  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  const selections: string[] = [];
+  try {
+    while (true) {
+      const platform = (await terminal.question("Platform (windows, macos, iphone, android; done to finish): ", { signal })).trim();
+      if (platform === "done" && selections.length > 0) return selections;
+      const choices = ENVIRONMENT_CHOICES.filter((choice) => choice.startsWith(`${platform}:`));
+      if (choices.length === 0) { process.stdout.write("Choose a listed platform.\n"); continue; }
+      const browser = (await terminal.question(`Browser (${choices.map((choice) => choice.split(":")[1]).join(", ")}): `, { signal })).trim();
+      const selection = `${platform}:${browser}`;
+      if (!choices.includes(selection)) { process.stdout.write("Choose a listed browser.\n"); continue; }
+      selections.push(selection);
+    }
+  } finally { terminal.close(); }
+}
+
+export async function runInitCommand(cwd: string, signal?: AbortSignal, selections: readonly string[] = []): Promise<BoundaryResult<InitResult>> {
+  if (signal?.aborted) return failure("signal-interrupt", "operation cancelled");
+  let chosen = selections;
+  if (chosen.length === 0 && process.stdin.isTTY && process.stdout.isTTY) {
+    try { chosen = await interactiveSelections(signal); }
+    catch { return signal?.aborted ? failure("signal-interrupt", "operation cancelled") : failure("init-environment-required", "Environment selection ended; see vlint init --help"); }
   }
-  const config = buildStandardConfig();
+  const config = buildStandardConfig(chosen);
   if (!config.ok) return config;
   const path = resolve(cwd, CONFIG_NAME);
-  const content = `${JSON.stringify(config.value, null, 2)}\n`;
-
   let handle;
-  try {
-    handle = await open(path, "wx");
-  } catch (error) {
-    const code = error instanceof Error && "code" in error
-      ? String((error as NodeJS.ErrnoException).code)
-      : "";
-    // EEXIST: a regular file or a symlink whose target already exists.
-    // EISDIR: the path is an existing directory. Both mean the path is taken.
-    if (code === "EEXIST" || code === "EISDIR") {
-      return boundaryFailure({
-        stage: "config",
-        code: "config-already-exists",
-        message: `${CONFIG_NAME} already exists`,
-        target: null,
-        device: null,
-        rule: null,
-      });
-    }
-    return boundaryFailure({
-      stage: "config",
-      code: "config-write-failed",
-      message: `cannot create ${CONFIG_NAME}`,
-      target: null,
-      device: null,
-      rule: null,
-    });
+  try { handle = await open(path, "wx"); }
+  catch (error) {
+    const code = error instanceof Error && "code" in error ? error.code : "";
+    return code === "EEXIST" || code === "EISDIR"
+      ? failure("config-already-exists", `${CONFIG_NAME} already exists`)
+      : failure("config-write-failed", `cannot create ${CONFIG_NAME}`);
   }
   let committed = false;
   try {
-    if (signalAborted(signal)) {
-      return boundaryFailure({
-        stage: "interrupt",
-        code: "signal-interrupt",
-        message: "operation cancelled",
-        target: null,
-        device: null,
-        rule: null,
-      });
-    }
-    await handle.writeFile(content, "utf8");
-    if (signalAborted(signal)) {
-      return boundaryFailure({
-        stage: "interrupt",
-        code: "signal-interrupt",
-        message: "operation cancelled",
-        target: null,
-        device: null,
-        rule: null,
-      });
-    }
+    if (signal?.aborted) return failure("signal-interrupt", "operation cancelled");
+    await handle.writeFile(`${JSON.stringify(config.value, null, 2)}\n`, "utf8");
+    if (signal?.aborted) return failure("signal-interrupt", "operation cancelled");
     committed = true;
     return boundarySuccess({ path });
-  } catch {
-    return boundaryFailure({
-      stage: "config",
-      code: "config-write-failed",
-      message: `cannot write ${CONFIG_NAME}`,
-      target: null,
-      device: null,
-      rule: null,
-    });
-  } finally {
+  } catch { return failure("config-write-failed", `cannot write ${CONFIG_NAME}`); }
+  finally {
     await handle.close().catch(() => undefined);
     if (!committed) await unlink(path).catch(() => undefined);
   }

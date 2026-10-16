@@ -1,6 +1,6 @@
 import type { RunResult } from "../contracts/result";
-import { publishResult } from "./publish";
+import { summarizeResult } from "./summary";
 
 export function renderJson(result: RunResult): string {
-  return `${JSON.stringify(publishResult(result))}\n`;
+  return `${JSON.stringify(summarizeResult(result))}\n`;
 }
