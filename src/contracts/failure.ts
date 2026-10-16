@@ -20,6 +20,8 @@ export type FailureCode =
   | "config-already-exists"
   | "config-write-failed"
   | "init-device-unavailable"
+  | "init-environment-required"
+  | "init-environment-invalid"
   | "targets-empty"
   | "provider-spawn-failed"
   | "provider-exit-nonzero"

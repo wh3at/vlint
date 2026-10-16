@@ -75,14 +75,14 @@ function target(url: string, overrides: TargetOverrides = {}): EffectiveAuditCas
 
 // Canonical standard devices, sourced from the same authority as `vlint init`
 // so the observed emulation matches the generated config byte-for-byte.
-const standardConfig = buildStandardConfig();
+const standardConfig = buildStandardConfig(["macos:chromium", "iphone:webkit"]);
 if (!standardConfig.ok) {
   throw new Error(`standard device config unavailable: ${standardConfig.failure.code}`);
 }
-const MACBOOK = standardConfig.value.devices.find((d) => d.name === "macbook-air-13-m5");
-const IPHONE = standardConfig.value.devices.find((d) => d.name === "iphone-17");
+const MACBOOK = standardConfig.value.devices.find((d) => d.name === "macos-chromium");
+const IPHONE = standardConfig.value.devices.find((d) => d.name === "iphone-webkit");
 if (MACBOOK === undefined || IPHONE === undefined) {
-  throw new Error("standard device config is missing macbook-air-13-m5 or iphone-17");
+  throw new Error("standard device config is missing selected desktop or phone");
 }
 
 interface CaseOverrides {

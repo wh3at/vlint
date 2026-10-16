@@ -5,7 +5,7 @@ import { boundaryFailure, boundarySuccess } from "./contracts/failure";
 import { runBrowserInstall } from "./commands/browser-install";
 import { runBrowserStatus, type BrowserStatusOutput } from "./commands/browser-status";
 import { runCheckCommand } from "./commands/check";
-import { CONFIG_NAME, runInitCommand, type InitResult } from "./commands/init";
+import { CONFIG_NAME, ENVIRONMENT_CHOICES, runInitCommand, type InitResult } from "./commands/init";
 import { runSetupCommand, type SetupResult } from "./commands/setup";
 import {
   isInstallerWorkerInvocation,
@@ -26,7 +26,7 @@ export type CliInvocation =
   | { readonly kind: "check"; readonly url: string | null; readonly format: OutputFormat }
   | { readonly kind: "browser-install"; readonly force: boolean }
   | { readonly kind: "browser-status"; readonly format: OutputFormat }
-  | { readonly kind: "init" }
+  | { readonly kind: "init"; readonly environments: readonly string[] }
   | { readonly kind: "setup" };
 
 export type CliParseResult =
@@ -48,7 +48,7 @@ export interface CliRuntime {
   check(url: string | null, signal?: AbortSignal): Promise<RunResult>;
   install(force: boolean, signal?: AbortSignal): Promise<BoundaryResult<BrowserInstallResult>>;
   status(format: "terminal" | "json", signal?: AbortSignal): Promise<BoundaryResult<BrowserStatusOutput>>;
-  init(signal?: AbortSignal): Promise<BoundaryResult<InitResult>>;
+  init(signal?: AbortSignal, environments?: readonly string[]): Promise<BoundaryResult<InitResult>>;
   setup(signal?: AbortSignal): Promise<BoundaryResult<SetupResult>>;
 }
 
@@ -173,9 +173,11 @@ function buildCliProgram(version: string, rawArgs: readonly string[]): {
 
   program
     .command("init")
-    .description(`Create ${CONFIG_NAME}.`)
-    .action(() => {
-      selected = { kind: "init" };
+    .description(`Create ${CONFIG_NAME} with explicit environment selections.`)
+    .option("--environment <platform:browser>", "Select an environment (repeatable).", (value: string, previous: string[]) => [...previous, value], [])
+    .addHelpText("after", `\nChoices:\n${ENVIRONMENT_CHOICES.map((choice) => `  ${choice}`).join("\n")}\n\nExamples:\n  vlint init --environment windows:chromium\n  vlint init --environment macos:webkit --environment iphone:webkit\n\nWithout flags, a terminal prompts for platform then browser.\n`)
+    .action((options: { environment: string[] }) => {
+      selected = { kind: "init", environments: options.environment };
     });
 
   program
@@ -280,7 +282,7 @@ export async function runCli(
     return statusResult.value.ready ? 0 : 2;
   }
   if (invocation.kind === "init") {
-    const initialized = await runtime.init(signal);
+    const initialized = await runtime.init(signal, invocation.environments);
     if (!initialized.ok) {
       io.stderr(`vlint: ${initialized.failure.code}: ${escapeTerminal(initialized.failure.message)}\n`);
       return 2;
@@ -326,7 +328,7 @@ const productionRuntime: CliRuntime = {
   version: TOOL_VERSION,
   check: (url, signal) =>
     runCheckCommand(process.cwd(), url, process.env, TOOL_VERSION, signal),
-  init: (signal) => runInitCommand(process.cwd(), signal),
+  init: (signal, environments) => runInitCommand(process.cwd(), signal, environments),
   setup: (signal) => runSetupCommand(process.cwd(), process.env, signal),
   async install(force, signal) {
     const args = force ? ["--force"] : [];
