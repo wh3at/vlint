@@ -23,10 +23,18 @@ const container = process.env.VLINT_INIT_CONTAINER;
     for (let repeat = 0; repeat < 2; repeat += 1) {
       const check = await command(["check", "--url", `http://127.0.0.1:${server.port}/`, "--format", "json"]);
       if (check.code !== 0) throw new Error(JSON.stringify(check));
-      const result = JSON.parse(check.output);
+      const summary = JSON.parse(check.output);
+      expect(summary.cases).toBeUndefined();
+      expect(summary.execution).toBeUndefined();
+      const stored = Bun.spawn(["docker", "exec", container!, "cat", summary.reportPath], { stdout: "pipe", stderr: "pipe" });
+      const result = JSON.parse(await new Response(stored.stdout).text());
+      expect(await stored.exited).toBe(0);
       expect(result.status).toBe("clean");
+      expect(result.summary).toEqual(summary.summary);
       expect(result.cases.map((item: any) => item.environment)).toEqual(selected.map((choice) => choice.replace(":", "-")));
+      expect(result.cases.every((item: any) => item.rules.length === 5 && item.rules.every((rule: any) => rule.status === "clean"))).toBe(true);
       expect(result.execution.engines.map((item: any) => item.engine).sort()).toEqual(["chromium", "firefox", "webkit"]);
+      expect(result.execution.engines.every((item: any) => item.obtainedVersion !== null)).toBe(true);
     }
   } finally { server.stop(true); await rm(directory, { recursive: true, force: true }); }
 }, 120_000);

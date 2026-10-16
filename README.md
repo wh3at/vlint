@@ -508,12 +508,18 @@ solves CAPTCHAs.
 
 ## Output: terminal vs JSON
 
-`--format terminal` (default) prints a human-readable summary with control
-characters escaped. Both terminal and JSON print configured `target.url` and
-the per-case `actualUrl` unredacted, including query values and fragments.
-Before browser arrival, `actualUrl` is null (shown as `-` in terminal).
-A detected transition also records the offending URL on the failure.
-Do not put secrets in URLs: both formats and CI logs retain them.
+`--format terminal` (default) and `--format json` show the same concise coverage:
+overall status, case partitions, environment-by-rule execution and inspected-element
+counts, and actionable failures/violations. Disabled and unexecuted evaluations are
+counted separately. Inspected elements are summed rule observations, not unique DOM
+nodes. Successful case detail is omitted from normal output.
+
+Both formats identify the complete same-run JSON file with `reportPath`. That file
+retains all cases, rule facts and common execution metadata; reading it does not
+rerun the inspection. Terminal escapes control characters. Diagnostic URLs and all
+report URLs retain raw query values and fragments. Before browser arrival,
+`actualUrl` is null. Do not put secrets in URLs or publish reports indiscriminately.
+See [complete reports and CI retention](docs/operations/reports.md).
 
 ---
 
@@ -531,46 +537,32 @@ A completed check with violations writes its normal result to stdout and exits `
 
 ## Machine consumption (JSON)
 
-`vlint check --format json` emits one object per run; pin the vlint version you parse
-against. Violations live under each case, keyed by rule:
+`vlint check --format json` emits one newline-terminated summary object per run;
+pin the vlint version you parse against. Its fields are:
 
-```jsonc
-{
-  "status": "clean | violations | incomplete",
-  "cases": [
-    {
-      "target": { "name": "settings", "url": "http://localhost:3000/settings" },
-      "actualUrl": "http://localhost:3000/settings",
-      "device": { "name": "macbook-air-13-m5", "viewport": { /* … */ } },
-      "status": "complete",
-      "rules": [
-        {
-          "name": "duplicate-spacing",
-          "type": "local",
-          "status": "violations",
-          "violations": [
-            {
-              "type": "local",
-              "message": "duplicate horizontal spacing in content region",
-              "locator": "#content",
-              "geometry": { "x": 16, "y": 16, "width": 200, "height": 40 },
-              "details": { "shellPaddingPx": 32, "contentPaddingPx": 32 }
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-```
+- `status`, `tool`, and `summary`: verdict, tool version, case/rule/count partitions.
+- `environmentRules`: each environment/rule's execution, inspection, clean,
+  violating, failed, disabled and unexecuted counts.
+- `diagnostics`: affected target, environment and device identities, specified and
+  observed URLs, failures and violating/failed rules.
+- `executionDiagnostics`: affected engine/environment configuration when relevant.
+- `ruleFinalizations` and `failures`: failing finalizations and run-wide failures.
+- `reportPath`: the private full report filename, or null when persistence failed.
 
-`cases` are ordered by target then device. Local violations use the `local` envelope
-of `message`, `locator`, `geometry`, and `details`. Table-header violations include
-`candidateSource`, `text`, `lineCount`, `lineTops`, `lineTopTolerancePx`, `geometry`,
-and `locator`; optional `candidateDiagnostics` on that rule result records excluded
-or generated-content-unmeasured candidates without representing them as violations.
-Table-cell text overlap violations add `adjacentLocator` and `overlapPx` (CSS pixels)
-to the source cell's `locator` and `geometry`; terminal output shows the same fields.
+Normal stdout does not contain the full `cases` or `execution`. Read `reportPath`
+for those fields. Full report cases are ordered by target, declared environment,
+then that environment's device-reference order. Case devices contain their names;
+common emulation settings live in `execution.devices`, UAs in
+`execution.environments`, and actual host/engine version information in
+`execution.host` / `execution.engines`. A failed rule retains its independent later
+rule results; URL/ready/font boundary failure stops that case's remaining rules.
+
+Local violations carry `message`, `locator`, `geometry`, and `details`. Table-header
+violations include `candidateSource`, `text`, `lineCount`, `lineTops`,
+`lineTopTolerancePx`, `geometry`, and `locator`. Rule `candidateDiagnostics` retain
+exclusions without turning them into violations. Table-cell overlap violations add
+`adjacentLocator` and `overlapPx`; SVG violations identify their clip and directions.
+The complete report retains successful facts and candidate diagnostics as well.
 
 ---
 
@@ -584,8 +576,13 @@ vlint check --format json          # in the step that runs your checks
 ```
 
 Preflight without downloading: `vlint browser status --format json` (exits `0` when
-ready). Gate on the exit code (see [Exit codes](#exit-codes)); an AI agent reads the
-JSON, fixes the layout from the rule type, geometry, and locator, and re-runs.
+ready). Neither status nor check installs, downloads or repairs missing engines.
+Use explicit `browser install` (or `browser install --force` for repair). Gate on
+the check exit code, inspect the same-run report, fix the layout, then re-run to
+verify the fix. Copy temporary reports for durable CI retention as described
+[here](docs/operations/reports.md). The integrated artifact validation record is
+[here](docs/operations/integrated-artifact-66-validation.md); it distinguishes
+completed Linux x64 acceptance from engine emulation and host-support limits.
 
 ---
 

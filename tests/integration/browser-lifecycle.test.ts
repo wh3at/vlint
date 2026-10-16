@@ -220,17 +220,17 @@ test("public and authenticated pages are isolated across separate contexts on th
   }
 });
 
-test("MacBook Air 13\" applies desktop viewport 1470x956, screen 1470x956, DPR 2, no touch, and the default Chromium user agent", async () => {
+test("selected Desktop Chrome applies viewport 1280x720, screen 1920x1080, DPR 1, no touch and environment UA", async () => {
   const t = await run.acquireCase(auditCase(MACBOOK, `${server.url}/index.html`));
   expect(t.ok).toBe(true);
   if (t.ok) {
     const vp = await probeViewport(t.value.page);
-    expect(vp.width).toBe(1470);
-    expect(vp.height).toBe(956);
+    expect(vp.width).toBe(1280);
+    expect(vp.height).toBe(720);
     const info = await observeDevice(t.value.page);
-    expect(info.devicePixelRatio).toBe(2);
-    expect(info.screenWidth).toBe(1470);
-    expect(info.screenHeight).toBe(956);
+    expect(info.devicePixelRatio).toBe(1);
+    expect(info.screenWidth).toBe(1920);
+    expect(info.screenHeight).toBe(1080);
     expect(info.touch).toBe(false);
     expect(info.userAgent).toContain("Chrome");
     expect(info.userAgent).not.toContain("iPhone");
@@ -297,7 +297,7 @@ test("two device contexts coexist on the shared browser without sharing cookies 
     expect(await phone.value.page.locator("#principal").textContent()).toBe("AUTHENTICATED");
     const macVp = await probeViewport(mac.value.page);
     const phoneVp = await probeViewport(phone.value.page);
-    expect(macVp.width).toBe(1470);
+    expect(macVp.width).toBe(1280);
     expect(phoneVp.width).toBe(402);
     const macInfo = await observeDevice(mac.value.page);
     const phoneInfo = await observeDevice(phone.value.page);
