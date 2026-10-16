@@ -1,6 +1,6 @@
 # Single-line and horizontal-overflow validation (#63)
 
-The primary seam is `dist/vlint-linux-x64 check --format json`, run as a real external process against fixed loopback HTML and explicit Windows/Chromium, Windows/Firefox and macOS/WebKit environments sharing an 800×600 desktop device. After report persistence is available, assertions read that process's complete report. No Playwright substitute or product test hook is used.
+The primary seam is `dist/vlint-linux-x64 check --format json`, run as a real external process against fixed loopback HTML and explicit Windows/Chromium, Windows/Firefox and macOS/WebKit environments sharing an 800×600 desktop device. Assertions read that process's complete report via stdout's `reportPath`, and check concise stdout counts against the report. No Playwright substitute or product test hook is used.
 
 ## Owned changes
 

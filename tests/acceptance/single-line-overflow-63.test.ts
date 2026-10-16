@@ -28,12 +28,18 @@ async function check(html: string, rules: unknown[]) {
     const process = Bun.spawn(["docker", "exec", "-e", "PLAYWRIGHT_DOWNLOAD_HOST=http://127.0.0.1:1", "-w", `/lane/tests/fixtures/${directory.split("/").at(-1)}`, container!, "/lane/dist/vlint-linux-x64", "check", "--format", "json"], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
     if (!stdout.trim()) throw new Error(`${code}: ${stderr}`);
-    let result = JSON.parse(stdout);
-    if (result.cases?.length === 0) throw new Error(JSON.stringify(result));
-    if (result.reportPath) {
-      const report = Bun.spawn(["docker", "exec", container!, "cat", result.reportPath], { stdout: "pipe" });
-      result = JSON.parse(await new Response(report.stdout).text());
-      expect(await report.exited).toBe(0);
+    const output = JSON.parse(stdout);
+    expect(output.reportPath).toBeString();
+    expect(output.cases).toBeUndefined();
+    const report = Bun.spawn(["docker", "exec", container!, "cat", output.reportPath], { stdout: "pipe" });
+    const result = JSON.parse(await new Response(report.stdout).text());
+    expect(await report.exited).toBe(0);
+    expect(output.status).toBe(result.status);
+    for (const item of result.cases) {
+      for (const rule of item.rules) {
+        const summary = output.environmentRules.find((row: any) => row.environment === item.environment && row.rule === rule.name);
+        expect(summary.elementsInspected).toBe(rule.elementsInspected);
+      }
     }
     expect(result.execution.environments.map(({ userAgent, ...environment }: any) => environment)).toEqual(environments);
     expect(result.execution.engines.map((engine: any) => engine.engine)).toEqual(["chromium", "firefox", "webkit"]);
