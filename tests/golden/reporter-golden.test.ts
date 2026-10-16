@@ -289,10 +289,10 @@ describe("reporter golden output", () => {
     const rendered = renderJson(violations);
     expect(rendered.endsWith("\n")).toBe(true);
     expect(rendered.split("\n")).toHaveLength(2);
-    const parsed = JSON.parse(rendered) as RunResult;
-    expect(parsed.cases[0]?.target.url).toBe(violations.cases[0]?.target.url);
+    const parsed = JSON.parse(rendered) as { status: string; diagnostics: RunResult["cases"] };
+    expect(parsed.diagnostics[0]?.target.url).toBe(violations.cases[0]?.target.url);
     expect(
-      parsed.cases[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
+      parsed.diagnostics[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
     ).toBe("first\r\nsecond\u202e");
     expect(parsed.status).toBe("violations");
   });
@@ -309,15 +309,15 @@ describe("reporter golden output", () => {
 
   test("terminal renders target and device as separate escaped fields", () => {
     const rendered = renderTerminal(violations);
-    expect(rendered).toContain("case target=settings\\u{1b}]8;;https://attacker.invalid\\u{7} environment=windows-chromium device=MacBook Air 13:");
-    expect(rendered).toContain("device=iPhone 17:");
-    expect(rendered).toContain("case target=second environment=windows-chromium device=MacBook Air 13:");
+    expect(rendered).toContain("case target=settings\\u{1b}]8;;https://attacker.invalid\\u{7} environment=windows-chromium device=MacBook Air 13 url=");
+    expect(rendered).not.toContain("device=iPhone 17 url=");
+    expect(rendered).not.toContain("case target=second");
   });
 
   test("terminal preserves the URL and case failure in the incomplete matrix", () => {
     const rendered = renderTerminal(incomplete);
-    expect(rendered).toContain("case target=only environment=windows-chromium device=MacBook Air 13: failed url=https://example.com/only actualUrl=-");
-    expect(rendered).toContain("case target=only environment=windows-chromium device=iPhone 17: complete url=https://example.com/only actualUrl=-");
+    expect(rendered).toContain("case target=only environment=windows-chromium device=MacBook Air 13 url=https://example.com/only actualUrl=-");
+    expect(rendered).not.toContain("device=iPhone 17 url=");
     expect(rendered).toContain("failure navigation/navigation-http-status target=only device=MacBook Air 13 rule=-");
     expect(hasRawControlOrBidi(rendered)).toBe(false);
   });
