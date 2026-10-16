@@ -5,15 +5,14 @@ finite set of declared UI targets, **without** sending images to an LLM. An AI a
 runs one command, reads structured diagnostics to locate the offending target and
 element, fixes the layout, and re-runs until clean.
 
-> **Supported platform: Ubuntu 24.04 x64 only.** vlint does not bundle a browser
-> executable.
+> **Distribution artifact: Linux x64.** Playwright prepares the managed browser
+> executables and determines actual host prerequisites and launch availability.
 
 ---
 
 ## Table of contents
 
 - [Install](#install)
-- [OS prerequisites](#os-prerequisites)
 - [Browser setup](#browser-setup)
 - [Command help](#command-help)
 - [Running checks](#running-checks)
@@ -63,7 +62,7 @@ base="https://github.com/wh3at/vlint/releases/download/$TAG"
 curl -fsSLO "$base/install-$TAG.sh"
 sh "install-$TAG.sh"
 export PATH="${VLINT_INSTALL_DIR:-$HOME/.local/bin}:$PATH"
-vlint browser install --with-deps   # only Playwright's apt subprocess elevates
+vlint browser install              # prepare all engines and dependencies through Playwright
 vlint init
 vlint check --url http://localhost:3000/
 ```
@@ -87,35 +86,45 @@ install -m 0755 vlint "$HOME/.local/bin/vlint"
 The archive contains only `vlint` (mode `0755`) and this `README.md`. `SHA256SUMS`
 is an integrity check, not a signature.
 
-## OS prerequisites
-
-- The `.deb` resolves Ubuntu packages through APT.
-- `vlint browser install --with-deps` installs them before the browser payload.
-- For locked-down hosts, install manually:
-
-```sh
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends \
-  ca-certificates fonts-liberation libasound2t64 libatk-bridge2.0-0t64 \
-  libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 libdbus-1-3 libdrm2 \
-  libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
-  libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2
-```
-
 ## Browser setup
 
-Browser acquisition is always a separate, explicit operation; `vlint check` never
-downloads or installs a browser.
+`vlint browser install` prepares the Chromium headless shell, Firefox, and WebKit
+required by this vlint build. Playwright owns browser downloads, host dependency
+preparation and validation, and any required privilege prompt. There is no
+separate dependency flag, engine selection, or independent version selection.
+A host is not rejected by vlint merely because its distribution is not Ubuntu;
+Playwright's actual preparation and launch results determine availability.
 
 ```sh
-vlint browser status                # readiness without downloading (--format json for CI)
-vlint browser install               # pinned Chromium headless shell
-vlint browser install --force       # repair/reinstall
-vlint browser install --with-deps   # Ubuntu libraries, then browser payload
+vlint browser install
+vlint browser install --force
+vlint browser status --format json
 ```
 
-`vlint setup` is the first-run convenience: it creates `vlint.config.json` only when
-absent and installs the browser payload, preserving an existing valid config.
+`--force` repairs all three managed engines. `browser status` requires no project
+configuration, downloads nothing, and does not install or repair dependencies.
+It launches each engine, creates and closes an empty page, and closes the browser.
+It exits 0 only when all three engines pass, otherwise 2; one unavailable engine
+does not prevent status from probing the others. `check` never installs browsers.
+
+Status JSON separates expected and obtained versions, version source, revision,
+Playwright-selected artifact and executable, execution host, dependency validation,
+launch, empty-page, and close results. Unavailable values remain null rather than
+being guessed. WebKit's `browser.version()` is identified as Playwright metadata,
+not independent binary verification; that provenance alone does not make it fail.
+
+The compiled three-engine preparation and offline status acceptance can be run
+in the existing Ubuntu 24.04 Docker fixture approach:
+
+```sh
+bun run build:linux-x64
+VLINT_BROWSER_CONTAINER_ACCEPTANCE=1 bun test tests/acceptance/browser-management-container.test.ts
+```
+
+This is an isolated validation environment, not a supported container distribution.
+The test uses a private browser cache with garbage collection disabled and removes
+only its own container. It exercises initial and repeated preparation, forced repair,
+offline launch readiness, and an executable-present launch failure.
 
 ## Command help
 

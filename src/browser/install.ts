@@ -1,3 +1,5 @@
+import { escapeTerminal } from "../output/terminal";
+import { inspectManagedBrowsers, prepareManagedBrowsers } from "./management";
 import { accessSync, constants, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -87,11 +89,6 @@ export interface InstallOptions {
   readonly executableAccessChecker?: ExecutableAccessChecker;
 }
 
-export interface InstallDependenciesOptions {
-  readonly signal?: AbortSignal;
-  /** Test-only seam overriding Playwright's privileged dependency installer. */
-  readonly installAction?: () => Promise<void>;
-}
 
 /**
  * Internal worker token. The compiled CLI dispatches an invocation whose argv
@@ -100,14 +97,10 @@ export interface InstallDependenciesOptions {
  * downloader descendant) runs inside a process group the parent owns.
  */
 export const INSTALLER_WORKER_TOKEN = "__vlint_internal_browser_installer_worker__";
-export const DEPENDENCIES_INSTALLER_WORKER_TOKEN =
-  "__vlint_internal_browser_dependencies_installer_worker__";
-export const DEPENDENCIES_SUPERVISOR_WORKER_TOKEN =
-  "__vlint_internal_browser_dependencies_supervisor_worker__";
 
 const VERSION_PROBE_TIMEOUT_MS = 15_000;
 const VERSION_PROBE_MAX_BUFFER = 64 * 1024;
-const VERSION_PATTERN = /\d+\.\d+\.\d+\.\d+/;
+const VERSION_PATTERN = /\d+\.\d+(?:\.\d+)*/;
 const WORKER_GRACE_MS = 3_000;
 
 function browserSetupFailure(code: Failure["code"], message: string): Failure {
@@ -120,13 +113,6 @@ export function isInstallerWorkerInvocation(argv: readonly string[]): boolean {
     && (argv[3] === "--force" || argv[3] === "--no-force");
 }
 
-export function isDependenciesInstallerWorkerInvocation(argv: readonly string[]): boolean {
-  return argv.length === 3 && argv[2] === DEPENDENCIES_INSTALLER_WORKER_TOKEN;
-}
-
-export function isDependenciesSupervisorWorkerInvocation(argv: readonly string[]): boolean {
-  return argv.length === 3 && argv[2] === DEPENDENCIES_SUPERVISOR_WORKER_TOKEN;
-}
 
 export function isOopDownloaderInvocation(firstArg: string | undefined): boolean {
   return firstArg !== undefined && firstArg.endsWith("/oopBrowserDownload.js");
@@ -136,68 +122,18 @@ export function runOopDownloaderMain(): void {
   bundle.registry.runOopDownloadBrowserMain();
 }
 
-/**
- * Internal installer worker entrypoint. Runs the Playwright install in-process
- * and exits 0 on success / nonzero on failure. Its stdout/stderr are piped and
- * discarded by the parent; its OOP downloader descendant inherits this worker's
- * process group, so nothing leaks and the whole group is killable on abort.
- * Exported for the compiled CLI's earliest dispatch.
- */
 export async function runInstallerWorkerMain(argv: readonly string[]): Promise<void> {
   process.env.PLAYWRIGHT_SKIP_BROWSER_GC = "1";
   const force = argv.includes("--force");
   try {
-    if (force) {
-      const executable = bundle.registry.registry.findExecutable(MANAGED_BROWSER_NAME);
-      await bundle.registry.registry.install([executable], { force: true });
-    } else {
-      await bundle.registry.installBrowsersForNpmInstall([MANAGED_BROWSER_NAME]);
-    }
+    await prepareManagedBrowsers(force);
     process.exit(0);
-  } catch {
+  } catch (error) {
+    console.error(escapeTerminal(error instanceof Error ? error.message : String(error)));
     process.exit(2);
   }
 }
 
-export async function runDependenciesInstallerWorkerMain(): Promise<void> {
-  try {
-    const executable = bundle.registry.registry.findExecutable(MANAGED_BROWSER_NAME);
-    await bundle.registry.registry.installDeps([executable], false);
-    process.exit(0);
-  } catch {
-    process.exit(2);
-  }
-}
-
-/**
- * Privileged dependency supervisor. Its detached child owns the apt process
- * group; an abort byte from the unprivileged parent lets this root process reap
- * the complete group before exiting.
- */
-export async function runDependenciesSupervisorWorkerMain(): Promise<void> {
-  if (typeof process.getuid === "function" && process.getuid() !== 0) process.exit(2);
-  const proc = Bun.spawn({
-    cmd: [process.execPath, DEPENDENCIES_INSTALLER_WORKER_TOKEN],
-    stdin: "ignore",
-    stdout: "inherit",
-    stderr: "inherit",
-    detached: true,
-  });
-  const abort = new Promise<"abort">((resolve) => {
-    process.stdin.once("data", () => resolve("abort"));
-    process.stdin.resume();
-  });
-  const outcome = await Promise.race([
-    proc.exited.then((code) => ({ kind: "exit" as const, code })),
-    abort.then(() => ({ kind: "abort" as const })),
-  ]);
-  if (outcome.kind === "abort") {
-    await terminateInstallerGroup(proc.pid);
-    await proc.exited.catch(() => undefined);
-    process.exit(130);
-  }
-  process.exit(outcome.code);
-}
 
 export function probeBrowserVersion(executablePath: string): VersionProbeResult {
   const proc = Bun.spawnSync([executablePath, "--version"], {
@@ -301,17 +237,6 @@ function withSuppressedConsole<T>(thunk: () => Promise<T>): Promise<T> {
   });
 }
 
-function drain(stream: unknown): void {
-  if (stream !== null && typeof stream === "object" && "getReader" in stream) {
-    void (async () => {
-      const reader = (stream as ReadableStream<Uint8Array>).getReader();
-      while (true) {
-        const { done } = await reader.read();
-        if (done) break;
-      }
-    })().catch(() => undefined);
-  }
-}
 
 /** SIGTERM the worker process group, wait a short grace, then SIGKILL. */
 async function terminateInstallerGroup(pid: number): Promise<void> {
@@ -338,8 +263,6 @@ async function terminateInstallerGroup(pid: number): Promise<void> {
 type InstallActionOutcome = { readonly aborted: boolean; readonly success: boolean };
 
 async function runInstallAction(options: InstallOptions): Promise<InstallActionOutcome> {
-  // Test seam: run the caller-supplied action in-process, with console output
-  // suppressed so Playwright progress never reaches the terminal.
   if (options.installAction !== undefined) {
     const action = options.installAction;
     try {
@@ -351,20 +274,16 @@ async function runInstallAction(options: InstallOptions): Promise<InstallActionO
     }
   }
 
-  // Production: detach the whole Playwright installer in a worker process whose
-  // group the parent owns, draining+discarding its stdio. The OOP downloader
-  // descendant inherits this group, so an abort reaps the entire tree.
   const tmp = mkdtempSync(join(tmpdir(), "vlint-install-"));
   try {
     const proc = Bun.spawn({
       cmd: [process.execPath, INSTALLER_WORKER_TOKEN, options.force ? "--force" : "--no-force"],
-      stdout: "pipe",
-      stderr: "pipe",
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
       detached: true,
       cwd: tmp,
     });
-    drain(proc.stdout);
-    drain(proc.stderr);
     const pid = proc.pid;
     try {
       const code = await raceAbort(options.signal, proc.exited);
@@ -381,222 +300,23 @@ async function runInstallAction(options: InstallOptions): Promise<InstallActionO
   }
 }
 
-async function acquireDependencyPrivileges(
-  signal: AbortSignal | undefined,
-): Promise<InstallActionOutcome | null> {
-  if (typeof process.getuid !== "function" || process.getuid() === 0) return null;
-  let proc;
-  try {
-    proc = Bun.spawn({
-      cmd: ["sudo", "-v"],
-      stdin: "inherit",
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-  } catch {
-    return { aborted: false, success: false };
-  }
-  try {
-    const code = await raceAbort(signal, proc.exited);
-    return code === 0 ? null : { aborted: false, success: false };
-  } catch (error) {
-    if (!isAbortError(error)) throw error;
-    proc.kill("SIGTERM");
-    await proc.exited.catch(() => undefined);
-    return { aborted: true, success: false };
-  }
-}
-
-async function runDependenciesInstallAction(
-  options: InstallDependenciesOptions,
-): Promise<InstallActionOutcome> {
-  if (options.installAction !== undefined) {
-    try {
-      await raceAbort(options.signal, options.installAction());
-      return { aborted: false, success: true };
-    } catch (error) {
-      if (isAbortError(error)) return { aborted: true, success: false };
-      return { aborted: false, success: false };
-    }
-  }
-
-  const privilege = await acquireDependencyPrivileges(options.signal);
-  if (privilege !== null) return privilege;
-
-  const tmp = mkdtempSync(join(tmpdir(), "vlint-install-deps-"));
-  try {
-    const supervisorCommand =
-      typeof process.getuid === "function" && process.getuid() === 0
-        ? [process.execPath, DEPENDENCIES_SUPERVISOR_WORKER_TOKEN]
-        : ["sudo", "--", process.execPath, DEPENDENCIES_SUPERVISOR_WORKER_TOKEN];
-    const proc = Bun.spawn({
-      cmd: supervisorCommand,
-      stdin: "pipe",
-      stdout: "inherit",
-      stderr: "inherit",
-      cwd: tmp,
-    });
-    try {
-      const code = await raceAbort(options.signal, proc.exited);
-      proc.stdin.end();
-      return { aborted: false, success: code === 0 };
-    } catch (error) {
-      if (isAbortError(error)) {
-        try {
-          proc.stdin.write("abort\n");
-          proc.stdin.end();
-        } catch {
-          /* supervisor already exited */
-        }
-        await proc.exited.catch(() => undefined);
-        return { aborted: true, success: false };
-      }
-      throw error;
-    }
-  } catch {
-    return { aborted: false, success: false };
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-}
-
-function postInstallVerify(
-  force: boolean,
-  wasReady: boolean,
-  options: InstallOptions,
-): BoundaryResult<InstallOutcome> {
-  const after = inspectBrowserRequirements({
-    ...(options.environment !== undefined ? { environment: options.environment } : {}),
-    ...(options.versionProbe !== undefined ? { versionProbe: options.versionProbe } : {}),
-    ...(options.directoryScanner !== undefined
-      ? { directoryScanner: options.directoryScanner }
-      : {}),
-    ...(options.existsChecker !== undefined ? { existsChecker: options.existsChecker } : {}),
-    ...(options.executableAccessChecker !== undefined
-      ? { executableAccessChecker: options.executableAccessChecker }
-      : {}),
-  });
-  if (!after.ok) {
-    return boundaryFailure(
-      browserSetupFailure("browser-install-failed", "Chromium installation failed; rerun 'vlint browser install'"),
-    );
-  }
-
-  const info = after.value;
-  if (info.status !== "ready") {
-    return boundaryFailure(
-      browserSetupFailure(
-        "browser-install-failed",
-        force
-          ? "Chromium installation completed but is not ready; rerun 'vlint browser install'"
-          : "Chromium installation failed; rerun 'vlint browser install'",
-      ),
-    );
-  }
-
-  const verified = verifyActualBrowserVersion(
-    info.requirements.executablePath,
-    info.requirements.browserVersion,
-    options.versionProbe,
-  );
-  if (!verified.ok) {
-    if (!force) return boundaryFailure(verified.failure);
-    return boundaryFailure(
-      browserSetupFailure(
-        "browser-install-failed",
-        "Chromium installation completed but the version check failed; rerun 'vlint browser install'",
-      ),
-    );
-  }
-
-  const kind: InstallOutcomeKind = force ? "repaired" : wasReady ? "already-present" : "installed";
-  return boundarySuccess({
-    kind,
-    browser: {
-      name: MANAGED_BROWSER_NAME,
-      revision: info.requirements.revision,
-      browserVersion: info.requirements.browserVersion,
-      executablePath: info.requirements.executablePath,
-    },
-  });
-}
-
-/**
- * Explicitly installs the Ubuntu libraries required by the pinned managed
- * browser. The worker remains in the terminal's foreground process group so
- * sudo can prompt and terminal cancellation reaches privileged descendants.
- * This path is never called by `vlint check`.
- */
-export async function installBrowserDependencies(
-  options: InstallDependenciesOptions = {},
-): Promise<BoundaryResult<void>> {
-  if (signalAborted(options.signal)) return boundaryFailure(interruptFailure());
-  const outcome = await runDependenciesInstallAction(options);
-  if (outcome.aborted) return boundaryFailure(interruptFailure());
-  if (!outcome.success) {
-    return boundaryFailure(
-      browserSetupFailure(
-        "browser-install-failed",
-        "Chromium system dependency installation failed; rerun 'vlint browser install --with-deps'",
-      ),
-    );
-  }
-  return boundarySuccess(undefined);
-}
-
-/**
- * Installs (or repairs) the managed Chromium headless shell via a detached
- * internal worker. Uses the cache-state classifier to no-op when ready,
- * or invoke the Playwright repair path for missing/partial/mismatched
- * cache states. Never downloads during `vlint check`.
- *
- * After the worker exits 0, the parent re-verifies the binary's actual
- * `--version`. A no-force install leaving a mismatched cache fails with
- * `browser-incompatible` (+ `--force` hint); a force repair that still
- * mismatches is `browser-install-failed`. An abort mid-install kills the
- * worker group (grace then force) and returns a sanitized `signal-interrupt`.
- * Raw downloader progress/exceptions never reach the terminal.
- */
 export async function installBrowser(options: InstallOptions): Promise<BoundaryResult<InstallOutcome>> {
-  const guard = rejectAmbientBrowserOverrides("install", options.environment);
-  if (!guard.ok) return boundaryFailure(guard.failure);
   if (signalAborted(options.signal)) return boundaryFailure(interruptFailure());
-
-  const before = inspectBrowserRequirements({
-    ...(options.environment !== undefined ? { environment: options.environment } : {}),
-    ...(options.versionProbe !== undefined ? { versionProbe: options.versionProbe } : {}),
-    ...(options.directoryScanner !== undefined
-      ? { directoryScanner: options.directoryScanner }
-      : {}),
-    ...(options.existsChecker !== undefined ? { existsChecker: options.existsChecker } : {}),
-    ...(options.executableAccessChecker !== undefined
-      ? { executableAccessChecker: options.executableAccessChecker }
-      : {}),
-  });
-  if (!before.ok) return boundaryFailure(before.failure);
-
-  const wasReady = before.value.status === "ready";
-
-  if (wasReady && !options.force) {
-    return boundarySuccess({
-      kind: "already-present",
-      browser: {
-        name: MANAGED_BROWSER_NAME,
-        revision: before.value.requirements.revision,
-        browserVersion: before.value.requirements.browserVersion,
-        executablePath: before.value.requirements.executablePath,
-      },
-    });
-  }
-
+  const before = await inspectManagedBrowsers(options.signal);
+  if (signalAborted(options.signal)) return boundaryFailure(interruptFailure());
   const outcome = await runInstallAction(options);
   if (outcome.aborted) return boundaryFailure(interruptFailure());
   if (!outcome.success) {
-    return boundaryFailure(
-      browserSetupFailure("browser-install-failed", "Chromium installation failed; rerun 'vlint browser install'"),
-    );
+    return boundaryFailure(browserSetupFailure("browser-install-failed", "Browser and OS dependency preparation failed; run 'vlint browser install' in a terminal with Playwright's required permissions"));
   }
-  return postInstallVerify(options.force, wasReady, options);
+  const after = await inspectManagedBrowsers(options.signal);
+  if (!after.ready) {
+    return boundaryFailure(browserSetupFailure("browser-install-failed", "Browser preparation completed but launch verification failed; run 'vlint browser status'"));
+  }
+  return boundarySuccess({
+    kind: options.force ? "repaired" : before.ready ? "already-present" : "installed",
+    browser: findManagedBrowser(),
+  });
 }
 
 function snapshotToDiagnostic(snapshot: BrowserSnapshot): BrowserSetupDiagnostic {

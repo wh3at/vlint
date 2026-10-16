@@ -40,7 +40,7 @@ function harness(options: {
   let installs = 0;
   let inits = 0;
   let setups = 0;
-  const installRequests: Array<{ force: boolean; withDeps: boolean }> = [];
+  const installRequests: Array<{ force: boolean }> = [];
   const io: CliIo = { stdout: (value) => stdout.push(value), stderr: (value) => stderr.push(value) };
   const runtime: CliRuntime = {
     version: "0.1.0",
@@ -48,9 +48,9 @@ function harness(options: {
       checks += 1;
       return options.checkResult ?? result("clean");
     },
-    async install(force, withDeps) {
+    async install(force) {
       installs += 1;
-      installRequests.push({ force, withDeps });
+      installRequests.push({ force });
       return boundarySuccess({ revision: "1228", action: force ? "reinstalled" : "installed" });
     },
     async init() {
@@ -138,18 +138,15 @@ describe("CLI process contract", () => {
   test("prints successful force reinstall on stdout", async () => {
     const testHarness = harness();
     expect(await runCli(["browser", "install", "--force"], testHarness.runtime, testHarness.io)).toBe(0);
-    expect(testHarness.stdout).toEqual(["vlint browser: chromium 1228 ready (reinstalled)\n"]);
+    expect(testHarness.stdout).toEqual(["vlint browser: chromium, firefox, webkit ready (reinstalled)\n"]);
     expect(testHarness.stderr).toEqual([]);
   });
 
-  test("passes explicit dependency installation through to the runtime", async () => {
+  test("prepares browsers and dependencies without a separate dependency mode", async () => {
     const testHarness = harness();
-    expect(await runCli(
-      ["browser", "install", "--with-deps"],
-      testHarness.runtime,
-      testHarness.io,
-    )).toBe(0);
-    expect(testHarness.installRequests).toEqual([{ force: false, withDeps: true }]);
+    expect(await runCli(["browser", "install"], testHarness.runtime, testHarness.io)).toBe(0);
+    expect(testHarness.installRequests).toEqual([{ force: false }]);
+    expect(await runCli(["browser", "install", "--with-deps"], testHarness.runtime, testHarness.io)).toBe(1);
   });
 
   test("prints sanitized installer failure on stderr only", async () => {

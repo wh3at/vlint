@@ -9,7 +9,7 @@ Options:
 
 Commands:
   check [options]  Run configured layout checks.
-  browser          Manage the pinned Chromium browser.
+  browser          Manage Chromium, Firefox, and WebKit.
   init             Create vlint.config.json.
   setup            Create config if needed and install the browser.
   help [command]   display help for command
@@ -28,25 +28,25 @@ Options:
 $ vlint browser --help
 Usage: vlint browser [options] [command]
 
-Manage the pinned Chromium browser.
+Manage Chromium, Firefox, and WebKit.
 
 Options:
   -h, --help         display help for command
 
 Commands:
-  install [options]  Install or repair the pinned Chromium browser.
+  install [options]  Prepare or repair all three browsers and OS dependencies
+                     using Playwright.
   status [options]   Show browser readiness without downloading or installing.
   help [command]     display help for command
 
 $ vlint browser install --help
 Usage: vlint browser install [options]
 
-Install or repair the pinned Chromium browser.
+Prepare or repair all three browsers and OS dependencies using Playwright.
 
 Options:
-  --force      Repair or reinstall the browser payload.
-  --with-deps  Install Ubuntu system dependencies first.
-  -h, --help   display help for command
+  --force     Repair or reinstall all browser payloads.
+  -h, --help  display help for command
 
 $ vlint browser status --help
 Usage: vlint browser status [options]

@@ -7,12 +7,8 @@ import { runCheckCommand } from "./commands/check";
 import { CONFIG_NAME, runInitCommand, type InitResult } from "./commands/init";
 import { runSetupCommand, type SetupResult } from "./commands/setup";
 import {
-  isDependenciesInstallerWorkerInvocation,
-  isDependenciesSupervisorWorkerInvocation,
   isInstallerWorkerInvocation,
   isOopDownloaderInvocation,
-  runDependenciesInstallerWorkerMain,
-  runDependenciesSupervisorWorkerMain,
   runInstallerWorkerMain,
   runOopDownloaderMain,
 } from "./browser/install";
@@ -27,7 +23,7 @@ export type OutputFormat = "terminal" | "json";
 
 export type CliInvocation =
   | { readonly kind: "check"; readonly url: string | null; readonly format: OutputFormat }
-  | { readonly kind: "browser-install"; readonly force: boolean; readonly withDeps: boolean }
+  | { readonly kind: "browser-install"; readonly force: boolean }
   | { readonly kind: "browser-status"; readonly format: OutputFormat }
   | { readonly kind: "init" }
   | { readonly kind: "setup" };
@@ -49,7 +45,7 @@ export interface BrowserInstallResult {
 export interface CliRuntime {
   readonly version: string;
   check(url: string | null, signal?: AbortSignal): Promise<RunResult>;
-  install(force: boolean, withDeps: boolean, signal?: AbortSignal): Promise<BoundaryResult<BrowserInstallResult>>;
+  install(force: boolean, signal?: AbortSignal): Promise<BoundaryResult<BrowserInstallResult>>;
   status(format: "terminal" | "json", signal?: AbortSignal): Promise<BoundaryResult<BrowserStatusOutput>>;
   init(signal?: AbortSignal): Promise<BoundaryResult<InitResult>>;
   setup(signal?: AbortSignal): Promise<BoundaryResult<SetupResult>>;
@@ -151,17 +147,15 @@ function buildCliProgram(version: string, rawArgs: readonly string[]): {
       selected = { kind: "check", url, format: options.format };
     });
 
-  const browser = program.command("browser").description("Manage the pinned Chromium browser.");
+  const browser = program.command("browser").description("Manage Chromium, Firefox, and WebKit.");
   browser
     .command("install")
-    .description("Install or repair the pinned Chromium browser.")
-    .option("--force", "Repair or reinstall the browser payload.")
-    .option("--with-deps", "Install Ubuntu system dependencies first.")
-    .action((options: { force?: boolean; withDeps?: boolean }) => {
+    .description("Prepare or repair all three browsers and OS dependencies using Playwright.")
+    .option("--force", "Repair or reinstall all browser payloads.")
+    .action((options: { force?: boolean }) => {
       selected = {
         kind: "browser-install",
         force: options.force === true,
-        withDeps: options.withDeps === true,
       };
     });
   browser
@@ -263,7 +257,7 @@ export async function runCli(
   }
   const invocation = parsed.invocation;
   if (invocation.kind === "browser-install") {
-    const installed = await runtime.install(invocation.force, invocation.withDeps, signal);
+    const installed = await runtime.install(invocation.force, signal);
     if (!installed.ok) {
       io.stderr(
         `vlint: ${installed.failure.code}: ${escapeTerminal(installed.failure.message)}\n`,
@@ -271,7 +265,7 @@ export async function runCli(
       return 2;
     }
     io.stdout(
-      `vlint browser: chromium ${escapeTerminal(installed.value.revision)} ready (${installed.value.action})\n`,
+      `vlint browser: chromium, firefox, webkit ready (${installed.value.action})\n`,
     );
     return 0;
   }
@@ -323,11 +317,8 @@ const productionRuntime: CliRuntime = {
     runCheckCommand(process.cwd(), url, process.env, TOOL_VERSION, signal),
   init: (signal) => runInitCommand(process.cwd(), signal),
   setup: (signal) => runSetupCommand(process.cwd(), process.env, signal),
-  async install(force, withDeps, signal) {
-    const args = [
-      ...(force ? ["--force"] : []),
-      ...(withDeps ? ["--with-deps"] : []),
-    ];
+  async install(force, signal) {
+    const args = force ? ["--force"] : [];
     const command = await runBrowserInstall({
       args,
       environment: process.env,
@@ -345,7 +336,6 @@ const productionRuntime: CliRuntime = {
     Promise.resolve(
       runBrowserStatus({
         format,
-        environment: process.env,
         ...(signal !== undefined ? { signal } : {}),
       }),
     ),
@@ -373,11 +363,7 @@ async function runProductionCli(): Promise<0 | 1 | 2> {
 }
 
 if (import.meta.main) {
-  if (isDependenciesSupervisorWorkerInvocation(process.argv)) {
-    await runDependenciesSupervisorWorkerMain();
-  } else if (isDependenciesInstallerWorkerInvocation(process.argv)) {
-    await runDependenciesInstallerWorkerMain();
-  } else if (isInstallerWorkerInvocation(process.argv)) {
+  if (isInstallerWorkerInvocation(process.argv)) {
     await runInstallerWorkerMain(process.argv);
   } else if (isPluginLoaderWorkerInvocation(process.argv)) {
     await runPluginLoaderWorkerMain(process.argv);
