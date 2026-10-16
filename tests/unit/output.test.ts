@@ -56,10 +56,10 @@ describe("output", () => {
     const second = renderJson(result);
     expect(first).toBe(second);
     expect(first.endsWith("\n")).toBe(true);
-    const parsed = JSON.parse(first) as RunResult;
-    expect(parsed.cases[0]?.target.url).toBe(result.cases[0]?.target.url);
+    const parsed = JSON.parse(first) as { diagnostics: RunResult["cases"] };
+    expect(parsed.diagnostics[0]?.target.url).toBe(result.cases[0]?.target.url);
     expect(
-      parsed.cases[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
+      parsed.diagnostics[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
     ).toBe("first\r\nsecond\u202e");
   });
 
@@ -187,8 +187,8 @@ describe("output", () => {
     };
 
     const terminal = renderTerminal(localResult);
-    const json = JSON.parse(renderJson(localResult)) as RunResult;
-    const violation = json.cases[0]?.rules[0]?.violations[0];
+    const json = JSON.parse(renderJson(localResult)) as { diagnostics: RunResult["cases"] };
+    const violation = json.diagnostics[0]?.rules[0]?.violations[0];
     if (!violation || !isLocalViolation(violation)) throw new Error("expected local violation");
 
     expect(terminal).toContain("message=duplicate horizontal spacing in content region");
@@ -316,8 +316,8 @@ describe("output", () => {
     expect(renderTerminal(tableResult)).toContain(
       "violation lines=2 tops=10.125,30.5 tolerance=1px source=native locator=#review\\nscore box=1,2,80,40 text=Review\\nscore",
     );
-    const parsed = JSON.parse(renderJson(tableResult)) as RunResult;
-    expect(parsed.cases[0]?.rules[0]?.candidateDiagnostics).toEqual([
+    const parsed = JSON.parse(renderJson(tableResult)) as { diagnostics: RunResult["cases"] };
+    expect(parsed.diagnostics[0]?.rules[0]?.candidateDiagnostics).toEqual([
       { kind: "excluded", locator: "#intentional", excludeSelector: ".allow-wrap" },
     ]);
   });
