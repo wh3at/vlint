@@ -11,7 +11,15 @@ async function command(cwd: string) {
   const proc = Bun.spawn(["docker", "exec", "-e", "PLAYWRIGHT_DOWNLOAD_HOST=http://127.0.0.1:1", "-w", cwd, container!, "/lane/dist/vlint-linux-x64", "check", "--format", "json"], { stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   if (!stdout.trim()) throw new Error(`${code}: ${stderr}`);
-  return { code, result: JSON.parse(stdout) };
+  const summary = JSON.parse(stdout);
+  expect(summary.cases).toBeUndefined();
+  expect(summary.execution).toBeUndefined();
+  const stored = Bun.spawn(["docker", "exec", container!, "cat", summary.reportPath], { stdout: "pipe", stderr: "pipe" });
+  const report = JSON.parse(await new Response(stored.stdout).text());
+  expect(await stored.exited).toBe(0);
+  expect(report.summary).toEqual(summary.summary);
+  expect(report.status).toBe(summary.status);
+  return { code, result: report };
 }
 
 (container ? test : test.skip)("compiled six environments preserve order, apply UA and explicit screens, and isolate engine loss", async () => {
@@ -46,7 +54,7 @@ async function command(cwd: string) {
       expect(observations.filter((observed) => observed.ua === item.userAgent)).toHaveLength(4);
       expect(item.userAgent).toMatch(item.platform === "windows" ? /Windows/ : item.platform === "android" ? /Android/ : item.platform === "iphone" ? /iPhone/ : /Macintosh/);
     }
-    const sabotage = Bun.spawn(["docker", "exec", container!, "sh", "-c", "find /tmp/browsers-57/firefox-* -type f -name firefox -exec chmod a-x {} +"], { stdout: "pipe", stderr: "pipe" });
+    const sabotage = Bun.spawn(["docker", "exec", container!, "sh", "-c", 'find "$PLAYWRIGHT_BROWSERS_PATH"/firefox-* -type f -name firefox -exec chmod a-x {} +'], { stdout: "pipe", stderr: "pipe" });
     expect(await sabotage.exited).toBe(0);
     try {
       const failed = await command(cwd);
@@ -57,7 +65,7 @@ async function command(cwd: string) {
       expect(failed.result.cases.filter((item: any) => item.environment !== "windows:firefox").every((item: any) => item.status === "complete")).toBe(true);
       expect(failed.result.execution.engines.find((item: any) => item.engine === "firefox").diagnostic).toBeTruthy();
     } finally {
-      const restore = Bun.spawn(["docker", "exec", container!, "sh", "-c", "find /tmp/browsers-57/firefox-* -type f -name firefox -exec chmod a+x {} +"]);
+      const restore = Bun.spawn(["docker", "exec", container!, "sh", "-c", 'find "$PLAYWRIGHT_BROWSERS_PATH"/firefox-* -type f -name firefox -exec chmod a+x {} +']);
       expect(await restore.exited).toBe(0);
     }
   } finally { server.stop(true); await rm(directory, { recursive: true, force: true }); }

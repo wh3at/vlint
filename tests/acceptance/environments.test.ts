@@ -50,12 +50,15 @@ test("compiled check launches only the selected engine and leaves an empty cache
     const proc = Bun.spawn([binary, "check", "--url", "http://127.0.0.1:1/", "--format", "json"], { cwd, env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: cache, PLAYWRIGHT_DOWNLOAD_HOST: "http://127.0.0.1:1" }, stdout: "pipe", stderr: "pipe" });
     const output = JSON.parse(await new Response(proc.stdout).text());
     expect(await proc.exited).toBe(2);
-    expect(output.execution.engines.map((item: any) => item.engine)).toEqual(["chromium"]);
-    expect(output.cases).toHaveLength(1);
-    expect(output.cases[0].environment).toBe("windows");
-    expect(output.cases[0].failures[0].code).toBe("browser-launch-failed");
-    expect(output.execution.engines[0].obtainedVersion).toBeNull();
-    expect(output.execution.engines[0].diagnostic).toContain("Executable doesn't exist");
+    expect(output.execution).toBeUndefined();
+    expect(output.cases).toBeUndefined();
+    const report = JSON.parse(await Bun.file(output.reportPath).text());
+    expect(report.execution.engines.map((item: any) => item.engine)).toEqual(["chromium"]);
+    expect(report.cases).toHaveLength(1);
+    expect(report.cases[0].environment).toBe("windows");
+    expect(report.cases[0].failures[0].code).toBe("browser-launch-failed");
+    expect(report.execution.engines[0].obtainedVersion).toBeNull();
+    expect(report.execution.engines[0].diagnostic).toContain("Executable doesn't exist");
     expect(await readdir(cache)).toEqual([]);
   } finally { await rm(cwd, { recursive: true, force: true }); await rm(cache, { recursive: true, force: true }); }
 });

@@ -45,12 +45,13 @@ test("measures ink clipped by each SVG viewport edge including fully hidden text
 });
 
 test("maps viewBox and scaled text to multiple HTML padding-box clips", async () => {
-  await page.setContent(`<style>body{margin:0}svg{display:block;font:20px monospace;overflow:visible}</style>
+  await page.setContent(`<style>@font-face{font-family:FixtureMono;src:url(${server.url}/font.ttf)}body{margin:0}svg{display:block;font:20px FixtureMono;overflow:visible}</style>
     <div id="outer" style="width:130px;height:100px;overflow:hidden;border:5px solid;padding:10px">
       <div id="inner" style="width:100px;height:70px;overflow:clip;padding:5px;border:3px solid;transform:scale(1.5);transform-origin:0 0">
         <svg width="100" height="60" viewBox="0 0 50 30"><text id="scaled" x="45" y="15">MMMM</text></svg>
       </div>
     </div>`);
+  await page.evaluate(async () => { await document.fonts.ready; });
   const result = await evaluateSvgTextClipping(page, rule);
   expect(result.failure).toBeNull();
   expect(result.facts.elementsInspected).toBe(1);
