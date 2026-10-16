@@ -1,10 +1,13 @@
+import { withEnvironments } from "../fixtures/environments";
 import { afterEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "../../src/config/load";
 import { mergeJsonSettings, resolveAdHocTarget, resolveTargets } from "../../src/config/merge";
-import { parseConfig, parseAdHocUrl } from "../../src/config/schema";
+import { parseConfig as parseRawConfig, parseAdHocUrl } from "../../src/config/schema";
+
+const parseConfig = (value: unknown) => parseRawConfig(withEnvironments(value));
 
 const temporaryDirectories: string[] = [];
 
@@ -15,7 +18,7 @@ async function temporaryDirectory(): Promise<string> {
 }
 
 async function writeConfig(directory: string, value: unknown): Promise<void> {
-  await Bun.write(join(directory, "vlint.config.json"), JSON.stringify(value));
+  await Bun.write(join(directory, "vlint.config.json"), JSON.stringify(withEnvironments(value)));
 }
 
 const DESKTOP_DEVICE = {
@@ -34,7 +37,6 @@ const MOBILE_DEVICE = {
   deviceScaleFactor: 3,
   isMobile: true,
   hasTouch: true,
-  userAgent: "Mozilla/5.0 (TestPhone)",
 };
 
 afterEach(async () => {
@@ -115,7 +117,7 @@ devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
     expect(plan.cases[1]).toMatchObject({
       viewport: { width: 402, height: 681 },
       isMobile: true,
-      userAgent: "Mozilla/5.0 (TestPhone)",
+      userAgent: null,
     });
   });
 
@@ -238,7 +240,7 @@ devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
   });
 
   test("accepts exactly 8 MiB and rejects one byte more", async () => {
-    const minimal = JSON.stringify({devices: [DESKTOP_DEVICE] });
+    const minimal = JSON.stringify(withEnvironments({ devices: [DESKTOP_DEVICE] }));
     const exactDirectory = await temporaryDirectory();
     await Bun.write(
       join(exactDirectory, "vlint.config.json"),

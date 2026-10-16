@@ -1,3 +1,4 @@
+import { desktopEnvironment } from "../fixtures/environments";
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { EffectiveLocalRule } from "../../src/contracts/config";
@@ -33,6 +34,7 @@ function makePlan(targetNames: readonly string[], rules: readonly EffectiveLocal
     name: target.name,
     url: target.url,
     deviceName: "desktop",
+    environment: desktopEnvironment,
     viewport: target.viewport,
     screen: target.viewport,
     deviceScaleFactor: target.deviceScaleFactor,
@@ -46,7 +48,7 @@ function makePlan(targetNames: readonly string[], rules: readonly EffectiveLocal
     readyCondition: target.readyCondition,
     rules: target.rules,
   }));
-  return { rules, targets, cases };
+  return { environments: [desktopEnvironment], rules, targets, cases };
 }
 
 function seededCases(plan: ReturnType<typeof makePlan>) {

@@ -1,3 +1,9 @@
+import { platform, arch, release } from "node:os";
+import type { BrowserEngine } from "../contracts/config";
+import type { EngineExecution, RunExecution } from "../contracts/result";
+import type { BrowserRunScope } from "../browser/lifecycle";
+import { managedExecutable } from "../browser/management";
+import { environmentUserAgent } from "../browser/emulation";
 import { evaluateSvgTextClipping } from "../rules/svg-text-clipping";
 import type { Page } from "playwright";
 import type { EffectiveAuditCase, EffectiveRuleForTarget, ResolvedCheckPlan } from "../contracts/config";
@@ -168,22 +174,67 @@ async function evaluateWithCancellation(
   }
 }
 
-function productionDependencies(pluginRegistry: PluginRuntimeRegistry | null): CheckDependencies<Page> {
+function productionDependencies(pluginRegistry: PluginRuntimeRegistry | null, plan: ResolvedCheckPlan): CheckDependencies<Page> {
   const auditCaseByPage = new WeakMap<Page, { auditCase: EffectiveAuditCase; fixedUrl: string }>();
   return {
     async launch(signal) {
-      const created = await createBrowserRunScope(signal === undefined ? {} : { signal });
-      if (!created.ok) return boundaryFailure(created.failure);
-      const scope = created.value;
+      const engines: EngineExecution[] = [...new Set(plan.environments.map((item) => item.browser))].map((engine) => {
+        const executable = managedExecutable(engine);
+        return { engine, expectedVersion: executable.browserVersion ?? null, obtainedVersion: null, versionSource: null, revision: executable.revision, artifact: { name: executable.name, directory: executable.directory, downloadURLs: executable.downloadURLs }, executablePath: executable.executablePath(), diagnostic: null };
+      });
+      const execution: RunExecution = {
+        host: { platform: platform(), architecture: arch(), release: release() }, engines,
+        environments: plan.environments.map((environment) => {
+          let userAgent: string | null = null;
+          try { userAgent = environmentUserAgent(environment); } catch {}
+          return { ...environment, userAgent };
+        }),
+        devices: [...new Map(plan.cases.map((item) => [item.deviceName, { name: item.deviceName, viewport: item.viewport, screen: item.screen, deviceScaleFactor: item.deviceScaleFactor, isMobile: item.isMobile, hasTouch: item.hasTouch }])).values()],
+      };
+      const scopes = new Map<BrowserEngine, Promise<BoundaryResult<BrowserRunScope>>>();
+      const acquireEngine = (engine: BrowserEngine) => {
+        let pending = scopes.get(engine);
+        if (pending === undefined) {
+          pending = createBrowserRunScope({ engine, ...(signal === undefined ? {} : { signal }) }).then(async (created) => {
+            const metadata = engines.find((item) => item.engine === engine)!;
+            if (!created.ok) { metadata.diagnostic = created.failure.message; return created; }
+            metadata.obtainedVersion = created.value.browserVersion;
+            metadata.versionSource = engine === "webkit" ? "playwright-metadata" : "browser.version";
+            if (metadata.expectedVersion !== null && metadata.obtainedVersion !== metadata.expectedVersion) {
+              await created.value.close();
+              metadata.diagnostic = "managed browser version does not match expected version";
+              return boundaryFailure({ stage: "browser-setup", code: "browser-launch-failed", message: metadata.diagnostic, target: null, device: null, rule: null });
+            }
+            return created;
+          });
+          scopes.set(engine, pending);
+        }
+        return pending;
+      };
       return boundarySuccess({
-        browserVersion: scope.browserVersion,
+        execution,
         openCase: async (auditCase, caseSignal) => {
-          const opened = await scope.acquireCase(auditCase, caseSignal);
+          const created = await acquireEngine(auditCase.environment.browser);
+          if (!created.ok) return created;
+          let appliedCase: EffectiveAuditCase;
+          try { appliedCase = { ...auditCase, userAgent: environmentUserAgent(auditCase.environment) }; } catch (error) {
+            return boundaryFailure({ stage: "browser-setup", code: "browser-context-failed", message: error instanceof Error ? error.message : "required environment preset is unavailable", target: auditCase.name, device: auditCase.deviceName, rule: null });
+          }
+          const opened = await created.value.acquireCase(appliedCase, caseSignal);
           if (!opened.ok) return opened;
-          auditCaseByPage.set(opened.value.page, { auditCase, fixedUrl: opened.value.actualUrl ?? auditCase.url });
+          auditCaseByPage.set(opened.value.page, { auditCase: appliedCase, fixedUrl: opened.value.actualUrl ?? auditCase.url });
           return opened;
         },
-        close: () => scope.close(),
+        close: async () => {
+          let failure: Failure | null = null;
+          for (const pending of scopes.values()) {
+            const created = await pending;
+            if (!created.ok) continue;
+            const closed = await created.value.close();
+            if (!closed.ok) failure ??= closed.failure;
+          }
+          return failure === null ? boundarySuccess(undefined) : boundaryFailure(failure);
+        },
       });
     },
     evaluate: (page, rule, signal) => {
@@ -246,7 +297,7 @@ export async function runCheckCommand(
       rule: null,
     });
   }
-  return runResolvedCheck(resolved.value.plan, productionDependencies(resolved.value.pluginRegistry), {
+  return runResolvedCheck(resolved.value.plan, productionDependencies(resolved.value.pluginRegistry, resolved.value.plan), {
     toolVersion,
     ...(signal === undefined ? {} : { signal }),
   });

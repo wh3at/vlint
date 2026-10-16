@@ -1,3 +1,6 @@
+import { desktopEnvironment } from "../fixtures/environments";
+import { environmentUserAgent } from "../../src/browser/emulation";
+const phoneEnvironment = { name: "iphone", platform: "iphone", browser: "webkit", devices: [] } as const;
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
@@ -16,7 +19,6 @@ import {
   readBrowserState,
   type BrowserRunScope,
 } from "../../src/browser/lifecycle";
-import { findManagedBrowser, type VersionProbe } from "../../src/browser/install";
 import { createDeadline } from "../../src/browser/readiness";
 import { startFixtureServer, type FixtureServer } from "../fixtures/app/server";
 
@@ -26,17 +28,10 @@ let server: FixtureServer;
 let run: BrowserRunScope;
 let tmp: string;
 
-// The dev cache (revision 1228 -> stale 1223 binary) fails the real version
-// probe, so lifecycle tests inject a probe that matches the registry metadata
-// to exercise launch/context/navigation/readiness independent of that check.
-function matchingProbe(): VersionProbe {
-  const version = findManagedBrowser().browserVersion;
-  return () => ({ exitCode: 0, timedOut: false, stdout: `Google Chrome for Testing ${version}` });
-}
 
 beforeAll(async () => {
   server = startFixtureServer();
-  const scope = await createBrowserRunScope({ versionProbe: matchingProbe() });
+  const scope = await createBrowserRunScope();
   if (!scope.ok) throw new Error(`browser launch failed in beforeAll: ${scope.failure.code}`);
   run = scope.value;
   tmp = await mkdtemp(join(tmpdir(), "vlint-state-"));
@@ -104,12 +99,13 @@ function auditCase(device: DeviceProfile, url: string, overrides: CaseOverrides 
     name: overrides.name ?? device.name,
     url,
     deviceName: device.name,
+    environment: device.isMobile ? phoneEnvironment : desktopEnvironment,
     viewport: device.viewport,
     screen: device.screen,
     deviceScaleFactor: device.deviceScaleFactor,
     isMobile: device.isMobile,
     hasTouch: device.hasTouch,
-    userAgent: device.userAgent ?? null,
+    userAgent: environmentUserAgent(device.isMobile ? phoneEnvironment : desktopEnvironment),
     locale: overrides.locale ?? "en-US",
     timezoneId: overrides.timezoneId ?? "UTC",
     timeoutMs: overrides.timeoutMs ?? 30_000,
@@ -187,7 +183,6 @@ test("exact context options (viewport, screen, device scale, mobile, touch, user
     deviceScaleFactor: 2,
     isMobile: true,
     hasTouch: true,
-    userAgent: "Mozilla/5.0 (TestPhone)",
   };
   const t = await run.acquireCase(
     auditCase(device, `${server.url}/index.html`, { locale: "fr-FR", timezoneId: "America/New_York" }),
@@ -202,7 +197,7 @@ test("exact context options (viewport, screen, device scale, mobile, touch, user
     expect(info.screenWidth).toBe(900);
     expect(info.screenHeight).toBe(700);
     expect(info.touch).toBe(true);
-    expect(info.userAgent).toBe("Mozilla/5.0 (TestPhone)");
+    expect(info.userAgent).toBe(environmentUserAgent(phoneEnvironment));
     expect(info.language).toBe("fr-FR");
     expect(info.timezone).toBe("America/New_York");
     expect((await t.value.close()).ok).toBe(true);
@@ -250,8 +245,7 @@ test("iPhone 17 applies viewport 402x681, screen 402x874, DPR 3, mobile, touch, 
   expect(IPHONE.deviceScaleFactor).toBe(3);
   expect(IPHONE.isMobile).toBe(true);
   expect(IPHONE.hasTouch).toBe(true);
-  const iphoneUa = IPHONE.userAgent;
-  if (typeof iphoneUa !== "string") throw new Error("iPhone 17 descriptor has no user agent");
+  const iphoneUa = environmentUserAgent(phoneEnvironment);
   expect(iphoneUa).toMatch(/iPhone/);
 
   const t = await run.acquireCase(auditCase(IPHONE, `${server.url}/index.html`));
@@ -441,7 +435,6 @@ test("createDeadline exposes a monotonic remaining budget", () => {
 
 test("a throwing launch maps to browser-launch-failed", async () => {
   const scope = await createBrowserRunScope({
-    versionProbe: matchingProbe(),
     launch: async () => {
       throw new Error("launch boom");
     },
@@ -505,7 +498,7 @@ test("run scope close surfaces a target-null cleanup failure and is idempotent",
       throw new Error("browser close boom");
     },
   } as unknown as Browser;
-  const scope = await createBrowserRunScope({ versionProbe: matchingProbe(), launch: async () => throwingBrowser });
+  const scope = await createBrowserRunScope({ launch: async () => throwingBrowser });
   expect(scope.ok).toBe(true);
   if (scope.ok) {
     const first = await scope.value.close();
@@ -520,7 +513,7 @@ test("run scope close surfaces a target-null cleanup failure and is idempotent",
 test("an aborted run-scope signal before launch returns signal-interrupt", async () => {
   const controller = new AbortController();
   controller.abort();
-  const scope = await createBrowserRunScope({ versionProbe: matchingProbe(), signal: controller.signal });
+  const scope = await createBrowserRunScope({ signal: controller.signal });
   if (!scope.ok) expect(scope.failure.code).toBe("signal-interrupt");
 });
 
@@ -534,7 +527,7 @@ test("an aborted run-scope signal during launch returns signal-interrupt and rea
     },
   } as unknown as Browser;
   const controller = new AbortController();
-  const scopePromise = createBrowserRunScope({ versionProbe: matchingProbe(), signal: controller.signal, launch: () => launchPromise });
+  const scopePromise = createBrowserRunScope({ signal: controller.signal, launch: () => launchPromise });
   controller.abort();
   const scope = await scopePromise;
   if (!scope.ok) expect(scope.failure.code).toBe("signal-interrupt");

@@ -1,3 +1,4 @@
+import { executionFixture } from "../fixtures/environments";
 import { describe, expect, test } from "bun:test";
 import type { RunResult } from "../../src/contracts/result";
 import type { BoundaryResult } from "../../src/contracts/failure";
@@ -10,7 +11,7 @@ function result(status: RunResult["status"]): RunResult {
   return {
     status,
     tool: { name: "vlint", version: "0.1.0" },
-    environment: { platform: "linux", arch: "x64", browser: { name: "chromium", version: null } },
+    execution: executionFixture,
     summary: {
       targets: { resolved: 0 },
       cases: { resolved: 0, complete: 0, partial: 0, failed: 0, notExecuted: 0 },

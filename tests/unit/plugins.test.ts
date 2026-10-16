@@ -1,3 +1,4 @@
+import { desktopEnvironment } from "../fixtures/environments";
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -32,6 +33,7 @@ function loadedConfig(directory: string, rules: LoadedConfig["rules"]): LoadedCo
   return {
     path: join(directory, "vlint.config.json"),
     directory,
+    environments: [{ ...desktopEnvironment, devices: ["desk"] }],
     devices: [
       {
         name: "desk",
@@ -109,6 +111,7 @@ describe("plugin loader", () => {
     await writeFile(
       join(directory, "vlint.config.json"),
       JSON.stringify({
+        environments: [{ ...desktopEnvironment, devices: ["desk"] }],
         devices: [
           {
             name: "desk",

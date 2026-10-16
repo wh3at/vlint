@@ -1,3 +1,4 @@
+import type { AuditEnvironment } from "../contracts/config";
 import { isAbsolute, resolve } from "node:path";
 import type {
   DeviceProfile,
@@ -222,6 +223,7 @@ function makeEffectiveTarget(
 function makeAuditCase(
   target: Target,
   device: DeviceProfile,
+  environment: AuditEnvironment,
   defaults: TargetDefaults,
   rules: readonly EffectiveRule[],
   directory: string,
@@ -231,12 +233,13 @@ function makeAuditCase(
     url: target.url,
     allowedUrls: target.allowedUrls,
     deviceName: device.name,
+    environment,
     viewport: device.viewport,
     screen: device.screen,
     deviceScaleFactor: device.deviceScaleFactor,
     isMobile: device.isMobile,
     hasTouch: device.hasTouch,
-    userAgent: device.userAgent ?? null,
+    userAgent: null,
     ...resolvePresentation(target, defaults, directory),
     rules: effectiveRulesForTarget(rules, target, device),
   };
@@ -290,11 +293,12 @@ export function resolveTargets(config: LoadedConfig, targets: readonly Target[])
           makeEffectiveTarget(target, primaryDevice, config.defaults, config.rules, config.directory),
         );
   const cases = targets.flatMap((target) =>
-    config.devices.map((device) =>
-      makeAuditCase(target, device, config.defaults, config.rules, config.directory),
-    ),
+    config.environments.flatMap((environment) => environment.devices.map((name) => {
+      const device = config.devices.find((item) => item.name === name)!;
+      return makeAuditCase(target, device, environment, config.defaults, config.rules, config.directory);
+    })),
   );
-  return { ok: true, value: { targets: logicalTargets, cases, rules: config.rules } };
+  return { ok: true, value: { environments: config.environments, targets: logicalTargets, cases, rules: config.rules } };
 }
 
 export function resolveAdHocTarget(config: LoadedConfig, url: string): PlanResolution {

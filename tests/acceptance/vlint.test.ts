@@ -1,3 +1,4 @@
+import { withEnvironments } from "../fixtures/environments";
 import { existsSync } from "node:fs";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -38,9 +39,6 @@ const TEST_DEVICE = {
   hasTouch: false,
 } as const;
 
-/** Exact iPhone 17 user agent from Playwright 1.61.1 registry. */
-const IPHONE_UA =
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1";
 
 /** Standard MacBook Air 13" (M5) profile — matches vlint init output. */
 const MACBOOK_DEVICE = {
@@ -60,7 +58,6 @@ const IPHONE_DEVICE = {
   deviceScaleFactor: 3,
   isMobile: true,
   hasTouch: true,
-  userAgent: IPHONE_UA,
 } as const;
 
 const STANDARD_DEVICES = [MACBOOK_DEVICE, IPHONE_DEVICE] as const;
@@ -92,13 +89,17 @@ async function tempDir(): Promise<string> {
 async function writeConfig(directory: string, value: unknown): Promise<void> {
   const content = typeof value === "string"
     ? value
-    : JSON.stringify({ devices: [TEST_DEVICE], ...(value as Record<string, unknown>) });
+    : JSON.stringify(withEnvironments({ devices: [TEST_DEVICE], ...(value as Record<string, unknown>) }));
   await writeFile(join(directory, "vlint.config.json"), content);
 }
 
 async function readConfigFile(directory: string): Promise<Record<string, unknown>> {
   const content = await readFile(join(directory, "vlint.config.json"), "utf8");
   return JSON.parse(content) as Record<string, unknown>;
+}
+
+function deviceFor(result: RunResult, index: number) {
+  return result.execution.devices.find((device) => device.name === result.cases[index]?.device.name)!;
 }
 
 function firstFailure(result: RunResult): RunResult["failures"][number] | undefined {
@@ -159,9 +160,9 @@ describe("compiled vlint binary acceptance", () => {
       const parsed = JSON.parse(result.stdout) as RunResult;
       expect(parsed.status).toBe("clean");
       expect(parsed.tool).toEqual({ name: "vlint", version: vlintPackage.version });
-      expect(parsed.environment).toMatchObject({ platform: "linux", arch: "x64" });
-      expect(typeof parsed.environment.browser.version).toBe("string");
-      expect(parsed.environment.browser.version!.length).toBeGreaterThan(0);
+      expect(parsed.execution.host).toMatchObject({ platform: "linux", architecture: "x64" });
+      expect(typeof parsed.execution.engines[0]?.obtainedVersion).toBe("string");
+      expect(parsed.execution.engines[0]!.obtainedVersion!.length).toBeGreaterThan(0);
       expect(parsed.summary.cases).toMatchObject({ resolved: 1, complete: 1, failed: 0, notExecuted: 0 });
       expect(parsed.summary.violations).toBe(0);
       expect(parsed.summary.elementsInspected).toBe(2);
@@ -192,8 +193,8 @@ describe("compiled vlint binary acceptance", () => {
       const auditCase = parsed.cases[0]!;
       expect(auditCase.target.name).toBe("settings");
       expect(auditCase.target.url).toBe(targetUrl);
-      expect(auditCase.device.viewport).toEqual({ width: 1280, height: 720 });
-      expect(auditCase.device.deviceScaleFactor).toBe(1);
+      expect(deviceFor(parsed, 0).viewport).toEqual({ width: 1280, height: 720 });
+      expect(deviceFor(parsed, 0).deviceScaleFactor).toBe(1);
       expect(auditCase.status).toBe("complete");
 
       const rule = auditCase.rules[0]!;
@@ -376,7 +377,7 @@ describe("compiled vlint binary acceptance", () => {
       expect(parsed.cases[0]!.target.name).toBe("adhoc");
       expect(parsed.cases[0]!.target.url).toBe(adhocUrl);
       // Config device applied.
-      expect(parsed.cases[0]!.device.viewport).toEqual({ width: 800, height: 600 });
+      expect(deviceFor(parsed, 0).viewport).toEqual({ width: 800, height: 600 });
       // Global rule from config applied.
       expect(parsed.cases[0]!.rules[0]!.name).toBe("custom-tabs");
       expect(parsed.cases[0]!.rules[0]!.status).toBe("clean");
@@ -586,8 +587,8 @@ describe("compiled vlint binary acceptance", () => {
         deviceScaleFactor: 3,
         isMobile: true,
         hasTouch: true,
-        userAgent: IPHONE_UA,
       });
+      expect(devices[1]).not.toHaveProperty("userAgent");
 
       // Standard rules pinned into the config.
       const rules = config.rules as readonly Record<string, unknown>[];
@@ -640,13 +641,13 @@ describe("compiled vlint binary acceptance", () => {
       expect(parsed.cases).toHaveLength(2);
       expect(parsed.cases[0]!.target).toEqual({ name: "adhoc", url: targetUrl });
       expect(parsed.cases[0]!.device.name).toBe("macbook-air-13-m5");
-      expect(parsed.cases[0]!.device.viewport).toEqual({ width: 1470, height: 956 });
-      expect(parsed.cases[0]!.device.deviceScaleFactor).toBe(2);
+      expect(deviceFor(parsed, 0).viewport).toEqual({ width: 1470, height: 956 });
+      expect(deviceFor(parsed, 0).deviceScaleFactor).toBe(2);
       expect(parsed.cases[1]!.target).toEqual({ name: "adhoc", url: targetUrl });
       expect(parsed.cases[1]!.device.name).toBe("iphone-17");
-      expect(parsed.cases[1]!.device.viewport).toEqual({ width: 402, height: 681 });
-      expect(parsed.cases[1]!.device.isMobile).toBe(true);
-      expect(parsed.cases[1]!.device.userAgent).toBe(IPHONE_UA);
+      expect(deviceFor(parsed, 1).viewport).toEqual({ width: 402, height: 681 });
+      expect(deviceFor(parsed, 1).isMobile).toBe(true);
+      expect(parsed.execution.environments[0]!.userAgent).toContain("Windows");
       expect(firstFailure(parsed)).toBeUndefined();
     }, CHECK_TIMEOUT);
 
@@ -700,10 +701,10 @@ describe("compiled vlint binary acceptance", () => {
       }
 
       // Device-specific viewport confirmed for each case.
-      expect(parsed.cases[0]!.device.viewport).toEqual({ width: 1470, height: 956 });
-      expect(parsed.cases[1]!.device.viewport).toEqual({ width: 402, height: 681 });
-      expect(parsed.cases[2]!.device.viewport).toEqual({ width: 1470, height: 956 });
-      expect(parsed.cases[3]!.device.viewport).toEqual({ width: 402, height: 681 });
+      expect(deviceFor(parsed, 0).viewport).toEqual({ width: 1470, height: 956 });
+      expect(deviceFor(parsed, 1).viewport).toEqual({ width: 402, height: 681 });
+      expect(deviceFor(parsed, 2).viewport).toEqual({ width: 1470, height: 956 });
+      expect(deviceFor(parsed, 3).viewport).toEqual({ width: 402, height: 681 });
     }, CHECK_TIMEOUT);
 
     // -------- AE6: one navigation failure, remaining multi-device cases complete
@@ -778,7 +779,7 @@ describe("compiled vlint binary acceptance", () => {
       expect(parsed.summary.cases.resolved).toBe(1);
       expect(parsed.cases).toHaveLength(1);
       expect(parsed.cases[0]!.device.name).toBe("iphone-17");
-      expect(parsed.cases[0]!.device.viewport).toEqual({ width: 402, height: 681 });
+      expect(deviceFor(parsed, 0).viewport).toEqual({ width: 402, height: 681 });
     }, CHECK_TIMEOUT);
 
     // ----------------------- AE8: no config file → check rejected pre-browser
@@ -820,7 +821,7 @@ describe("compiled vlint binary acceptance", () => {
       // MacBook case: the wide label fits on one line → clean.
       const macbook = parsed.cases[0]!;
       expect(macbook.device.name).toBe("macbook-air-13-m5");
-      expect(macbook.device.viewport).toEqual({ width: 1470, height: 956 });
+      expect(deviceFor(parsed, 0).viewport).toEqual({ width: 1470, height: 956 });
       expect(macbook.status).toBe("complete");
       expect(macbook.rules[0]!.status).toBe("clean");
       expect(macbook.rules[0]!.violations).toHaveLength(0);
@@ -828,7 +829,7 @@ describe("compiled vlint binary acceptance", () => {
       // iPhone case: same label wraps at 402px → violation detected.
       const iphone = parsed.cases[1]!;
       expect(iphone.device.name).toBe("iphone-17");
-      expect(iphone.device.viewport).toEqual({ width: 402, height: 681 });
+      expect(deviceFor(parsed, 1).viewport).toEqual({ width: 402, height: 681 });
       expect(iphone.status).toBe("complete");
       expect(iphone.rules[0]!.status).toBe("violations");
       expect(iphone.rules[0]!.violations.length).toBeGreaterThanOrEqual(1);

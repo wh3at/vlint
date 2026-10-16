@@ -1,3 +1,10 @@
+import { platform, arch, release } from "node:os";
+import type { RunExecution } from "../contracts/result";
+
+function emptyExecution(): RunExecution {
+  return { host: { platform: platform(), architecture: arch(), release: release() }, engines: [], environments: [], devices: [] };
+}
+
 import type {
   EffectiveAuditCase,
   EffectiveRuleForTarget,
@@ -29,7 +36,7 @@ interface TargetScope<PageHandle> {
 }
 
 interface BrowserRun<PageHandle> {
-  readonly browserVersion: string | null;
+  readonly execution: RunExecution;
   openCase(auditCase: EffectiveAuditCase, signal?: AbortSignal): Promise<BoundaryResult<TargetScope<PageHandle>>>;
   close(): Promise<BoundaryResult<void>>;
 }
@@ -68,15 +75,8 @@ interface MutableRuleResult {
 interface MutableCaseResult {
   target: { name: string; url: string };
   actualUrl: string | null;
-  device: {
-    name: string;
-    viewport: { width: number; height: number };
-    screen: { width: number; height: number };
-    deviceScaleFactor: number;
-    isMobile: boolean;
-    hasTouch: boolean;
-    userAgent: string | null;
-  };
+  device: { name: string };
+  environment: string;
   locale: string;
   timezoneId: string;
   status: CaseStatus;
@@ -102,15 +102,8 @@ function seededCases(plan: ResolvedCheckPlan): MutableCaseResult[] {
   return plan.cases.map((auditCase) => ({
     target: { name: auditCase.name, url: auditCase.url },
     actualUrl: null,
-    device: {
-      name: auditCase.deviceName,
-      viewport: auditCase.viewport,
-      screen: auditCase.screen,
-      deviceScaleFactor: auditCase.deviceScaleFactor,
-      isMobile: auditCase.isMobile,
-      hasTouch: auditCase.hasTouch,
-      userAgent: auditCase.userAgent,
-    },
+    device: { name: auditCase.deviceName },
+    environment: auditCase.environment.name,
     locale: auditCase.locale,
     timezoneId: auditCase.timezoneId,
     status: "not-executed",
@@ -177,7 +170,7 @@ function summarize(
 
 function completedResult(
   toolVersion: string,
-  browserVersion: string | null,
+  execution: RunExecution,
   targetCount: number,
   cases: readonly CaseResult[],
   finalizations: readonly RuleFinalization[],
@@ -187,11 +180,7 @@ function completedResult(
   return {
     status: summary.executionFailures > 0 ? "incomplete" : summary.violations > 0 ? "violations" : "clean",
     tool: { name: "vlint", version: toolVersion },
-    environment: {
-      platform: "linux",
-      arch: "x64",
-      browser: { name: "chromium", version: browserVersion },
-    },
+    execution,
     summary,
     cases,
     ruleFinalizations: finalizations,
@@ -200,7 +189,7 @@ function completedResult(
 }
 
 export function resultForResolutionFailure(toolVersion: string, failure: Failure): RunResult {
-  return completedResult(toolVersion, null, 0, [], [], [failure]);
+  return completedResult(toolVersion, emptyExecution(), 0, [], [], [failure]);
 }
 
 export function exitCodeForResult(result: RunResult): 0 | 1 | 2 {
@@ -271,7 +260,7 @@ export async function runResolvedCheck<PageHandle>(
   const cases = seededCases(plan);
   let finalizations = seededFinalizations(plan);
   const runFailures: Failure[] = [];
-  let browserVersion: string | null = null;
+  let execution = emptyExecution();
   let interrupted = false;
   let interruptRecorded = false;
 
@@ -307,11 +296,11 @@ export async function runResolvedCheck<PageHandle>(
   if (!launch.ok) {
     if (launch.failure.code === "signal-interrupt") recordInterrupt();
     else runFailures.push(scopeFailure(launch.failure, null, null, null));
-    return completedResult(options.toolVersion, null, plan.targets.length, cases, finalizations, runFailures);
+    return completedResult(options.toolVersion, execution, plan.targets.length, cases, finalizations, runFailures);
   }
 
   const browser = launch.value;
-  browserVersion = browser.browserVersion;
+  execution = browser.execution;
 
   const runCase = async (caseIndex: number): Promise<void> => {
     const auditCase = plan.cases[caseIndex];
@@ -472,5 +461,5 @@ export async function runResolvedCheck<PageHandle>(
   } catch {
     runFailures.push(unexpectedFailure("browser-cleanup-failed", null, null, null));
   }
-  return completedResult(options.toolVersion, browserVersion, plan.targets.length, cases, finalizations, runFailures);
+  return completedResult(options.toolVersion, execution, plan.targets.length, cases, finalizations, runFailures);
 }

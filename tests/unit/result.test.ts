@@ -1,3 +1,4 @@
+import { desktopEnvironment, executionFixture } from "../fixtures/environments";
 import { describe, expect, test } from "bun:test";
 import type {
   EffectiveAuditCase,
@@ -71,6 +72,7 @@ function makeCase(t: EffectiveTarget): EffectiveAuditCase {
     name: t.name,
     url: t.url,
     deviceName: "desktop",
+    environment: desktopEnvironment,
     viewport: t.viewport,
     screen: t.viewport,
     deviceScaleFactor: t.deviceScaleFactor,
@@ -90,6 +92,7 @@ function plan(targetNames: readonly string[], rules: readonly EffectiveRule[], d
   const targets = targetNames.map((name) => target(name, rules, disabled[name] ?? []));
   return {
     rules,
+    environments: [desktopEnvironment],
     targets,
     cases: targets.map(makeCase),
   };
@@ -116,7 +119,7 @@ function dependencies(options: DependencyOptions = {}): CheckDependencies<string
     async launch() {
       if (options.launchFailure !== undefined) return boundaryFailure(options.launchFailure);
       return boundarySuccess({
-        browserVersion: "149.0.7827.55",
+        execution: executionFixture,
         async openCase(item) {
           const failure = options.openFailure?.[item.name];
           if (failure !== undefined) return boundaryFailure(failure);
@@ -651,11 +654,7 @@ describe("result contracts", () => {
     const result: RunResult = {
       status: "incomplete",
       tool: { name: "vlint", version: "0.4.1" },
-      environment: {
-        platform: "linux",
-        arch: "x64",
-        browser: { name: "chromium", version: null },
-      },
+      execution: executionFixture,
       summary: {
         targets: { resolved: 0 },
         cases: { resolved: 0, complete: 0, partial: 0, failed: 0, notExecuted: 0 },
@@ -677,11 +676,7 @@ describe("result contracts", () => {
     const result: RunResult = {
       status: "violations",
       tool: { name: "vlint", version: "0.4.1" },
-      environment: {
-        platform: "linux",
-        arch: "x64",
-        browser: { name: "chromium", version: "149.0.0.0" },
-      },
+      execution: executionFixture,
       summary: {
         targets: { resolved: 1 },
         cases: { resolved: 1, complete: 1, partial: 0, failed: 0, notExecuted: 0 },
@@ -696,13 +691,8 @@ describe("result contracts", () => {
           target: { name: "settings", url: "https://example.com/settings" },
           device: {
             name: "desk",
-            viewport: { width: 1280, height: 720 },
-            screen: { width: 1280, height: 720 },
-            deviceScaleFactor: 1,
-            isMobile: false,
-            hasTouch: false,
-            userAgent: null,
           },
+          environment: desktopEnvironment.name,
           locale: "en-US",
           timezoneId: "UTC",
           status: "complete",
