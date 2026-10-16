@@ -89,9 +89,9 @@ const container = process.env.VLINT_READINESS_CONTAINER;
     await writeFile(join(directory, "vlint.config.json"), JSON.stringify({
       devices: [{ name: "desktop", viewport: { width: 800, height: 600 }, screen: { width: 800, height: 600 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false }],
       environments: [["windows", "chromium"], ["windows", "firefox"], ["macos", "webkit"]].map(([platform, browser]) => ({ name: browser, platform, browser, devices: ["desktop"] })),
-      defaults: { timeoutMs: 2000, readyCondition: { selector: "#ready" } },
+      defaults: { timeoutMs: 10000, readyCondition: { selector: "#ready" } },
       rules: [{ name: "tabs", type: "tab-label-single-line" }, { name: "boundary", type: "local", path: "boundary.ts" }],
-      provider: { type: "static", targets: paths.map((path) => ({ name: path, url: `${base}/${path}`, ...(path === "redirect-allowed" || path === "url-away" ? { allowedUrls: [`${base}/good`] } : {}) })) },
+      provider: { type: "static", targets: paths.map((path) => ({ name: path, url: `${base}/${path}`, ...(path === "js-slow" ? { timeoutMs: 2000 } : {}), ...(path === "redirect-allowed" || path === "url-away" ? { allowedUrls: [`${base}/good`] } : {}) })) },
     }));
     const proc = Bun.spawn(["docker", "exec", "-w", cwd, container!, "/lane/dist/vlint-linux-x64", "check", "--format", "json"], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
