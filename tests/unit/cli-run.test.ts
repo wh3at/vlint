@@ -4,7 +4,6 @@ import type { RunResult } from "../../src/contracts/result";
 import type { BoundaryResult } from "../../src/contracts/failure";
 import { boundaryFailure, boundarySuccess } from "../../src/contracts/failure";
 import type { InitResult } from "../../src/commands/init";
-import type { SetupResult } from "../../src/commands/setup";
 import { runCli, type CliIo, type CliRuntime } from "../../src/cli";
 
 function result(status: RunResult["status"]): RunResult {
@@ -33,14 +32,12 @@ function result(status: RunResult["status"]): RunResult {
 function harness(options: {
   checkResult?: RunResult;
   initResult?: BoundaryResult<InitResult>;
-  setupResult?: BoundaryResult<SetupResult>;
 } = {}) {
   const stdout: string[] = [];
   const stderr: string[] = [];
   let checks = 0;
   let installs = 0;
   let inits = 0;
-  let setups = 0;
   const installRequests: Array<{ force: boolean }> = [];
   const io: CliIo = { stdout: (value) => stdout.push(value), stderr: (value) => stderr.push(value) };
   const runtime: CliRuntime = {
@@ -58,21 +55,6 @@ function harness(options: {
       inits += 1;
       return options.initResult ?? boundarySuccess({ path: "/cwd/vlint.config.json" });
     },
-    async setup() {
-      setups += 1;
-      return options.setupResult ?? boundarySuccess({
-        config: "created",
-        browser: {
-          kind: "installed",
-          browser: {
-            name: "chromium-headless-shell",
-            revision: "1228",
-            browserVersion: "122.8.0.0",
-            executablePath: "/cache/chromium",
-          },
-        },
-      });
-    },
     async status() {
       return boundarySuccess({ output: "browser status: ready\n", ready: true });
     },
@@ -83,7 +65,7 @@ function harness(options: {
     io,
     runtime,
     installRequests,
-    counts: () => ({ checks, installs, inits, setups }),
+    counts: () => ({ checks, installs, inits }),
   };
 }
 
@@ -93,7 +75,7 @@ describe("CLI process contract", () => {
     expect(await runCli(["--version"], testHarness.runtime, testHarness.io)).toBe(0);
     expect(testHarness.stdout).toEqual(["vlint 0.1.0\n"]);
     expect(testHarness.stderr).toEqual([]);
-    expect(testHarness.counts()).toEqual({ checks: 0, installs: 0, inits: 0, setups: 0 });
+    expect(testHarness.counts()).toEqual({ checks: 0, installs: 0, inits: 0 });
   });
 
   test("rejects grammar and ad hoc URL errors without creating a result", async () => {
@@ -121,7 +103,7 @@ describe("CLI process contract", () => {
     expect(testHarness.stdout).toHaveLength(1);
     expect(testHarness.stdout[0]).toContain(usage);
     expect(testHarness.stderr).toEqual([]);
-    expect(testHarness.counts()).toEqual({ checks: 0, installs: 0, inits: 0, setups: 0 });
+    expect(testHarness.counts()).toEqual({ checks: 0, installs: 0, inits: 0 });
   });
 
   test.each([
@@ -180,7 +162,7 @@ describe("CLI process contract", () => {
     expect(await runCli(["init"], testHarness.runtime, testHarness.io)).toBe(0);
     expect(testHarness.stdout).toEqual(["vlint init: created vlint.config.json\n"]);
     expect(testHarness.stderr).toEqual([]);
-    expect(testHarness.counts()).toEqual({ checks: 0, installs: 0, inits: 1, setups: 0 });
+    expect(testHarness.counts()).toEqual({ checks: 0, installs: 0, inits: 1 });
   });
 
   test("prints sanitized init failure on stderr only with exit 2", async () => {
@@ -202,41 +184,13 @@ describe("CLI process contract", () => {
     expect(testHarness.counts().inits).toBe(1);
   });
 
-  test("prints successful setup with config and browser outcomes", async () => {
-    const testHarness = harness();
-    expect(await runCli(["setup"], testHarness.runtime, testHarness.io)).toBe(0);
-    expect(testHarness.stdout).toEqual([
-      "vlint setup: config created; chromium 1228 ready (installed)\n",
-    ]);
-    expect(testHarness.stderr).toEqual([]);
-    expect(testHarness.counts().setups).toBe(1);
-  });
-
-  test("prints a sanitized setup failure", async () => {
-    const testHarness = harness({
-      setupResult: boundaryFailure({
-        stage: "config",
-        code: "config-invalid-json",
-        message: "invalid\u001b",
-        target: null,
-        device: null,
-        rule: null,
-      }),
-    });
-    expect(await runCli(["setup"], testHarness.runtime, testHarness.io)).toBe(2);
-    expect(testHarness.stdout).toEqual([]);
-    expect(testHarness.stderr).toEqual([
-      "vlint: config-invalid-json: invalid\\u{1b}\n",
-    ]);
-  });
-
   test("status returns ready for a ready runtime and does not increment check/install counters", async () => {
     const testHarness = harness();
     expect(await runCli(["browser", "status"], testHarness.runtime, testHarness.io)).toBe(0);
     expect(testHarness.stdout).toHaveLength(1);
     expect(testHarness.stdout[0]).toContain("browser status:");
     expect(testHarness.stderr).toEqual([]);
-    expect(testHarness.counts()).toEqual({ checks: 0, installs: 0, inits: 0, setups: 0 });
+    expect(testHarness.counts()).toEqual({ checks: 0, installs: 0, inits: 0 });
   });
 
   test("status with invalid format exits 1 as parse error before runtime", async () => {
