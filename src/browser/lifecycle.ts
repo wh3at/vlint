@@ -193,7 +193,7 @@ export async function createBrowserRunScope(
   const launchPromise =
     options.launch !== undefined
       ? options.launch()
-      : { chromium, firefox, webkit }[engine].launch({ headless: true, timeout: timeoutMs });
+      : { chromium, firefox, webkit }[engine].launch({ headless: true, timeout: timeoutMs, handleSIGINT: false, handleSIGTERM: false });
 
   let browser: Browser;
   try {
