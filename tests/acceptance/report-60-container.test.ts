@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { resolve, join } from "node:path";
+import { exec } from "./docker-exec";
 
 const container = process.env.VLINT_REPORT_CONTAINER;
 (container ? test : test.skip)("compiled three-engine reports retain clean, violating, and incomplete same-run evidence", async () => {
@@ -11,11 +12,6 @@ const container = process.env.VLINT_REPORT_CONTAINER;
     visits++;
     return new Response('<!doctype html><html><body style="margin:0"><div style="width:1200px">fixed</div></body></html>', { headers: { "content-type": "text/html" } });
   } });
-  async function exec(args: string[]) {
-    const proc = Bun.spawn(["docker", "exec", ...args], { stdout: "pipe", stderr: "pipe" });
-    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    return { stdout, stderr, code };
-  }
   try {
     const url = `http://127.0.0.1:${server.port}/?raw=secret#fragment`;
     for (const [width, minimum, status, code] of [[1600, 0, "clean", 0], [800, 0, "violations", 1], [1600, 2, "incomplete", 2]] as const) {

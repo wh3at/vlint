@@ -1,4 +1,4 @@
-import type { AuditEnvironment } from "../contracts/config";
+import { SUPPORTED_ENVIRONMENTS, type AuditEnvironment } from "../contracts/config";
 import type {
   CommandProviderConfig,
   CommandProviderOutput,
@@ -516,7 +516,7 @@ function environmentsAt(value: unknown, devices: readonly DeviceProfile[]): read
     names.add(name);
     const platform = stringAt(object.platform, `${at}.platform`);
     const browser = stringAt(object.browser, `${at}.browser`);
-    if (!["windows:chromium", "windows:firefox", "macos:chromium", "macos:webkit", "iphone:webkit", "android:chromium"].includes(`${platform}:${browser}`)) issue(at, "unsupported platform/browser combination");
+    if (!Object.hasOwn(SUPPORTED_ENVIRONMENTS, `${platform}:${browser}`)) issue(at, "unsupported platform/browser combination");
     const references = stringArrayAt(object.devices, `${at}.devices`);
     if (references.length === 0) issue(`${at}.devices`, "expected non-empty array");
     for (const reference of references) {
