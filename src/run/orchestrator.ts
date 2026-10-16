@@ -381,7 +381,10 @@ export async function runResolvedCheck<PageHandle>(
             effectiveRule.name,
           );
           pairFailedAt = ruleIndex;
-          break;
+          if (outcome.failure.stage === "navigation" || outcome.failure.stage === "web-font" || outcome.failure.stage === "ready-condition") {
+            break;
+          }
+          continue;
         }
         ruleResult.status = outcome.facts.violations.length > 0 ? "violations" : "clean";
       }
