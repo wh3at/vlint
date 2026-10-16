@@ -37,9 +37,9 @@ const container = process.env.VLINT_TABLE_CELL_CONTAINER;
       for (const item of result.cases) {
         const cells = item.rules.find((rule: any) => rule.name === "cells");
         expect(item.rules.find((rule: any) => rule.name === "tab-label-single-line").status).toBe("clean");
-        expect(item.rules.find((rule: any) => rule.name === "overflow").status).toBe(item.target.name === "/unmeasurable" ? "not-executed" : "clean");
+        expect(item.rules.find((rule: any) => rule.name === "overflow").status).toBe("clean");
         if (item.target.name === "/unmeasurable") {
-          expect(item.status).toBe("partial");
+          expect(item.status).toBe("failed");
           expect(cells.status).toBe("failed");
           expect(cells.failure.code).toBe("rule-script-failed");
         } else {

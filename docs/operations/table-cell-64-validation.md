@@ -35,7 +35,7 @@ Each test repeats the same compiled executable, fixed pages, configuration and b
 
 - Chromium 149.0.7827.55 (1228), Firefox 151.0 (1532), WebKit 26.5 (2311; version from metadata) all execute real pages.
 - Clean path clipping inspects one source cell and finds no overlap. The excluded neighbor still participates in violation detection: the unclipped source reports `#source` against `#neighbor`, overlap 60 CSS pixels. Excluded sources and hidden tables inspect zero cells.
-- A fixed page returning null from the browser's Canvas `getContext` now gives `rule-script-failed`, incomplete exit 2, a partial case, and retains the earlier rule's clean result. Subsequent rules remain explicitly not-executed. Other cases retain their successful results and violations in the report.
+- A fixed page returning null from the browser's Canvas `getContext` now gives `rule-script-failed`, incomplete exit 2, a failed case, and retains the earlier rule's clean result. After merging #62's failure-isolation contract, subsequent independent rules also complete cleanly. Other cases retain their successful results and violations in the report.
 - Existing edges, clipping and clip-shapes pages inspect 19, 30 and 26 cells respectively in every engine. Exact expected violation identity sets are checked, including rowspan adjacency, escaping positioned text, scaled/rounded/circular/elliptical/polygon/path/SVG-reference clips and object-bounding-box shapes.
 - Firefox exposes null `svg.viewBox.baseVal` when a viewBox is absent. The rule now falls back to rendered viewport dimensions, as it already did for an empty viewBox in other engines. A direct Firefox page evaluation reproduced the null-access failure; compiled acceptance failed before this fix and passed afterward.
 
