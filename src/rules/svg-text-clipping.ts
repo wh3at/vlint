@@ -82,7 +82,7 @@ function extractSvgText({ excludeSelectors, tolerancePx }: {
             (current instanceof SVGTextContentElement && current !== element && current !== run)) supported = false;
         const rectangularClip = [css.overflowX, css.overflowY].some((value) => ["hidden", "clip", "auto", "scroll"].includes(value));
         if (rectangularClip && ([css.borderTopLeftRadius, css.borderTopRightRadius, css.borderBottomLeftRadius, css.borderBottomRightRadius].some((radius) => /[1-9]/.test(radius)) ||
-            !(current instanceof SVGSVGElement ? ["0px", "content-box"] : ["0px"]).includes(css.overflowClipMargin))) supported = false;
+            !(current instanceof SVGSVGElement ? ["0px", "content-box"] : ["0px"]).includes(css.getPropertyValue("overflow-clip-margin") || "0px"))) supported = false;
       }
       if (!supported) continue;
       const matrix = run.getScreenCTM();
