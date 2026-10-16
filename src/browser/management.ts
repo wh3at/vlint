@@ -4,7 +4,7 @@ import { chromium, firefox, webkit, type Browser } from "playwright";
 import coreBundle from "playwright-core/lib/coreBundle";
 import { escapeTerminal } from "../output/terminal";
 
-export type BrowserEngine = "chromium" | "firefox" | "webkit";
+import type { BrowserEngine } from "../contracts/config";
 
 interface Executable {
   readonly name: string;

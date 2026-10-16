@@ -128,6 +128,15 @@ export type RuleInstance =
 export type EnvironmentPlatform = "windows" | "macos" | "iphone" | "android";
 export type BrowserEngine = "chromium" | "firefox" | "webkit";
 
+export const SUPPORTED_ENVIRONMENTS = {
+  "windows:chromium": "Desktop Chrome",
+  "windows:firefox": "Desktop Firefox",
+  "macos:chromium": "Desktop Chrome",
+  "macos:webkit": "Desktop Safari",
+  "iphone:webkit": "iPhone 17",
+  "android:chromium": "Pixel 10",
+} as const;
+
 export interface AuditEnvironment {
   readonly name: string;
   readonly platform: EnvironmentPlatform;

@@ -302,7 +302,6 @@ const productionRuntime: CliRuntime = {
     const args = force ? ["--force"] : [];
     const command = await runBrowserInstall({
       args,
-      environment: process.env,
       ...(signal === undefined ? {} : { signal }),
     });
     if (!command.ok) return boundaryFailure(command.failure);

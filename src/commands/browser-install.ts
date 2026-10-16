@@ -1,9 +1,8 @@
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../contracts/failure";
-import { installBrowser, type EnvironmentView, type InstallOptions, type InstallOutcome } from "../browser/install";
+import { installBrowser, type InstallOptions, type InstallOutcome } from "../browser/install";
 
 export interface BrowserInstallCommandOptions {
   readonly args: readonly string[];
-  readonly environment?: EnvironmentView;
   readonly signal?: AbortSignal;
   readonly browserInstaller?: (options: InstallOptions) => Promise<BoundaryResult<InstallOutcome>>;
 }
@@ -30,7 +29,6 @@ export async function runBrowserInstall(options: BrowserInstallCommandOptions): 
   if (!parsed.ok) return { ok: false, failure: parsed.failure };
   const result = await (options.browserInstaller ?? installBrowser)({
     force: parsed.value.force,
-    ...(options.environment === undefined ? {} : { environment: options.environment }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
   if (!result.ok) return { ok: false, failure: result.failure };

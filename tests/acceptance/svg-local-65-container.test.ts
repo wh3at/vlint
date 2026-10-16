@@ -1,15 +1,10 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { resolve, join } from "node:path";
+import { exec } from "./docker-exec";
 
 const container = process.env.VLINT_SVG_LOCAL_CONTAINER;
 const engines = ["windows:chromium", "windows:firefox", "macos:webkit"];
-
-async function exec(args: string[]) {
-  const proc = Bun.spawn(["docker", "exec", ...args], { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-  return { stdout, stderr, code };
-}
 
 (container ? test : test.skip)("compiled SVG and local evaluations retain three-engine facts, isolate failure and repeat stably", async () => {
   const directory = await mkdtemp(resolve("tests/fixtures/svg-local-65-"));

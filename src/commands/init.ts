@@ -2,22 +2,14 @@ import { open, unlink } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { devices as playwrightDevices } from "playwright";
-import type { Config, DeviceProfile, AuditEnvironment } from "../contracts/config";
+import { SUPPORTED_ENVIRONMENTS, type Config, type DeviceProfile, type AuditEnvironment } from "../contracts/config";
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type FailureCode } from "../contracts/failure";
 
 export const CONFIG_NAME = "vlint.config.json";
 export interface InitResult { readonly path: string }
 export type DeviceSource = Readonly<Record<string, unknown>>;
 
-const PRESETS = {
-  "windows:chromium": "Desktop Chrome",
-  "windows:firefox": "Desktop Firefox",
-  "macos:chromium": "Desktop Chrome",
-  "macos:webkit": "Desktop Safari",
-  "iphone:webkit": "iPhone 17",
-  "android:chromium": "Pixel 10",
-} as const;
-export const ENVIRONMENT_CHOICES = Object.keys(PRESETS);
+export const ENVIRONMENT_CHOICES = Object.keys(SUPPORTED_ENVIRONMENTS);
 
 function failure(code: FailureCode, message: string): BoundaryResult<never> {
   return boundaryFailure({ stage: code === "signal-interrupt" ? "interrupt" : "config", code, message, target: null, device: null, rule: null });
@@ -34,9 +26,9 @@ export function buildStandardConfig(selections: readonly string[], source: Devic
   const devices: DeviceProfile[] = [];
   const environments: AuditEnvironment[] = [];
   for (const selection of new Set(selections)) {
-    if (!Object.hasOwn(PRESETS, selection)) return failure("init-environment-invalid", `Unsupported environment ${selection}; see vlint init --help`);
-    const key = selection as keyof typeof PRESETS;
-    const preset = PRESETS[key];
+    if (!Object.hasOwn(SUPPORTED_ENVIRONMENTS, selection)) return failure("init-environment-invalid", `Unsupported environment ${selection}; see vlint init --help`);
+    const key = selection as keyof typeof SUPPORTED_ENVIRONMENTS;
+    const preset = SUPPORTED_ENVIRONMENTS[key];
     const descriptor = source[preset];
     if (typeof descriptor !== "object" || descriptor === null
       || !("viewport" in descriptor) || !viewport(descriptor.viewport)

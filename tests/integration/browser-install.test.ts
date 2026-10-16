@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { installBrowser, verifyActualBrowserVersion } from "../../src/browser/install";
+import { installBrowser } from "../../src/browser/install";
 import { parseBrowserInstallArgs } from "../../src/commands/browser-install";
 
 test("browser install accepts repair but not independent engines, versions, or dependency modes", () => {
@@ -16,10 +16,4 @@ test("browser repair reports an interrupted operation before starting preparatio
   const result = await installBrowser({ force: true, signal: controller.signal });
   expect(result.ok).toBe(false);
   if (!result.ok) expect(result.failure.code).toBe("signal-interrupt");
-});
-
-test("binary version probe distinguishes a mismatch from an obtained matching version", () => {
-  const probe = () => ({ exitCode: 0, timedOut: false, stdout: "Firefox 151.0" });
-  expect(verifyActualBrowserVersion("/unused", "151.0", probe).ok).toBe(true);
-  expect(verifyActualBrowserVersion("/unused", "150.0", probe).ok).toBe(false);
 });

@@ -54,6 +54,9 @@ async function command(cwd: string) {
       expect(observations.filter((observed) => observed.ua === item.userAgent)).toHaveLength(4);
       expect(item.userAgent).toMatch(item.platform === "windows" ? /Windows/ : item.platform === "android" ? /Android/ : item.platform === "iphone" ? /iPhone/ : /Macintosh/);
     }
+    const macChromium = result.execution.environments.find((item: any) => item.name === "macos:chromium");
+    const chromiumVersion = result.execution.engines.find((item: any) => item.engine === "chromium").expectedVersion;
+    expect(macChromium.userAgent).toContain(`Chrome/${chromiumVersion}`);
     const sabotage = Bun.spawn(["docker", "exec", container!, "sh", "-c", 'find "$PLAYWRIGHT_BROWSERS_PATH"/firefox-* -type f -name firefox -exec chmod a-x {} +'], { stdout: "pipe", stderr: "pipe" });
     expect(await sabotage.exited).toBe(0);
     try {
