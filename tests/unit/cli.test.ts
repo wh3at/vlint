@@ -23,7 +23,6 @@ describe("Commander CLI grammar", () => {
     [["browser", "install"], { kind: "browser-install", force: false }],
     [["browser", "install", "--force"], { kind: "browser-install", force: true }],
     [["init"], { kind: "init", environments: [] }],
-    [["setup"], { kind: "setup" }],
   ] as const)("accepts Commander-standard invocation %#", (args, expected) => {
     expect(invocation(args)).toEqual(expected);
   });
@@ -48,7 +47,6 @@ describe("Commander CLI grammar", () => {
     [["browser", "--help"], "Usage: vlint browser", "install"],
     [["browser", "install", "-h"], "Usage: vlint browser install", "all three browsers"],
     [["init", "--help"], "Usage: vlint init", "Create vlint.config.json"],
-    [["setup", "--help"], "Usage: vlint setup", "install the browser"],
     [["help", "check"], "Usage: vlint check", "--format"],
     [["browser", "help", "install"], "Usage: vlint browser install", "all three browsers"],
   ] as const)("renders scoped help for %#", (args, usage, detail) => {

@@ -12,7 +12,6 @@ Commands:
   browser          Manage Chromium, Firefox, and WebKit.
   init [options]   Create vlint.config.json with explicit environment
                    selections.
-  setup            Create config if needed and install the browser.
   help [command]   display help for command
 
 $ vlint check --help
@@ -68,11 +67,3 @@ Options:
   --environment <platform:browser>  Select an environment (repeatable).
                                     (default: [])
   -h, --help                        display help for command
-
-$ vlint setup --help
-Usage: vlint setup [options]
-
-Create config if needed and install the browser.
-
-Options:
-  -h, --help  display help for command

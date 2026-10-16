@@ -6,7 +6,6 @@ import { runBrowserInstall } from "./commands/browser-install";
 import { runBrowserStatus, type BrowserStatusOutput } from "./commands/browser-status";
 import { runCheckCommand } from "./commands/check";
 import { CONFIG_NAME, ENVIRONMENT_CHOICES, runInitCommand, type InitResult } from "./commands/init";
-import { runSetupCommand, type SetupResult } from "./commands/setup";
 import {
   isInstallerWorkerInvocation,
   isOopDownloaderInvocation,
@@ -26,8 +25,7 @@ export type CliInvocation =
   | { readonly kind: "check"; readonly url: string | null; readonly format: OutputFormat }
   | { readonly kind: "browser-install"; readonly force: boolean }
   | { readonly kind: "browser-status"; readonly format: OutputFormat }
-  | { readonly kind: "init"; readonly environments: readonly string[] }
-  | { readonly kind: "setup" };
+  | { readonly kind: "init"; readonly environments: readonly string[] };
 
 export type CliParseResult =
   | { readonly kind: "invocation"; readonly invocation: CliInvocation }
@@ -49,7 +47,6 @@ export interface CliRuntime {
   install(force: boolean, signal?: AbortSignal): Promise<BoundaryResult<BrowserInstallResult>>;
   status(format: "terminal" | "json", signal?: AbortSignal): Promise<BoundaryResult<BrowserStatusOutput>>;
   init(signal?: AbortSignal, environments?: readonly string[]): Promise<BoundaryResult<InitResult>>;
-  setup(signal?: AbortSignal): Promise<BoundaryResult<SetupResult>>;
 }
 
 export interface CliIo {
@@ -180,13 +177,6 @@ function buildCliProgram(version: string, rawArgs: readonly string[]): {
       selected = { kind: "init", environments: options.environment };
     });
 
-  program
-    .command("setup")
-    .description("Create config if needed and install the browser.")
-    .action(() => {
-      selected = { kind: "setup" };
-    });
-
   return { program, stdout, stderr, invocation: () => selected };
 }
 
@@ -290,20 +280,6 @@ export async function runCli(
     io.stdout(`vlint init: created ${CONFIG_NAME}\n`);
     return 0;
   }
-  if (invocation.kind === "setup") {
-    const setup = await runtime.setup(signal);
-    if (!setup.ok) {
-      io.stderr(`vlint: ${setup.failure.code}: ${escapeTerminal(setup.failure.message)}\n`);
-      return 2;
-    }
-    const action = setup.value.browser.kind === "repaired"
-      ? "reinstalled"
-      : setup.value.browser.kind;
-    io.stdout(
-      `vlint setup: config ${setup.value.config}; chromium ${escapeTerminal(setup.value.browser.browser.revision)} ready (${action})\n`,
-    );
-    return 0;
-  }
   const result = await persistReport(await runtime.check(invocation.url, signal));
   io.stdout(invocation.format === "json" ? renderJson(result) : renderTerminal(result));
   if (invocation.format !== "json" && result.reportPath !== null) {
@@ -322,7 +298,6 @@ const productionRuntime: CliRuntime = {
   check: (url, signal) =>
     runCheckCommand(process.cwd(), url, process.env, TOOL_VERSION, signal),
   init: (signal, environments) => runInitCommand(process.cwd(), signal, environments),
-  setup: (signal) => runSetupCommand(process.cwd(), process.env, signal),
   async install(force, signal) {
     const args = force ? ["--force"] : [];
     const command = await runBrowserInstall({

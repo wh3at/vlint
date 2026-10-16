@@ -31,29 +31,11 @@ element, fixes the layout, and re-runs until clean.
 
 ## Install
 
-Pick one path to install the latest published release. None requires Node.js, Bun,
-npm, or another runtime. To pin a version (recommended for CI), replace the first
-two `TAG` lines in your chosen snippet with `TAG=vX.Y.Z` from
-[Releases](https://github.com/wh3at/vlint/releases).
+Use the same installer for first installation and updates. No Node.js, Bun or
+npm runtime is required. Pin `TAG=vX.Y.Z` for CI instead of resolving latest.
+The Linux x64 artifact is the only distributed platform.
 
-### Ubuntu package (`.deb`)
-
-Installs vlint and declares all required Chromium shared libraries:
-
-```sh
-TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/wh3at/vlint/releases/latest)"
-TAG="${TAG##*/}"
-VERSION="${TAG#v}"
-base="https://github.com/wh3at/vlint/releases/download/$TAG"
-curl -fsSLO "$base/vlint_${VERSION}_amd64.deb"
-curl -fsSLO "$base/SHA256SUMS"
-awk -v name="vlint_${VERSION}_amd64.deb" '$2 == name { print }' SHA256SUMS | sha256sum -c -
-sudo apt install "./vlint_${VERSION}_amd64.deb"
-vlint setup
-vlint check --url http://localhost:3000/
-```
-
-### User-local installer (no sudo)
+### Common installer
 
 ```sh
 TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/wh3at/vlint/releases/latest)"
@@ -62,29 +44,24 @@ base="https://github.com/wh3at/vlint/releases/download/$TAG"
 curl -fsSLO "$base/install-$TAG.sh"
 sh "install-$TAG.sh"
 export PATH="${VLINT_INSTALL_DIR:-$HOME/.local/bin}:$PATH"
-vlint browser install              # prepare all engines and dependencies through Playwright
 vlint init
 vlint check --url http://localhost:3000/
 ```
 
-If the destination is not on `PATH`, the installer prints the directory to add.
+The installer verifies the archive checksum, stages the candidate executable,
+and uses Playwright to prepare OS dependencies and all three managed engines.
+It launch-checks each engine with an empty page before atomically replacing
+the installed executable. If preparation, launch or interruption fails, the
+previous executable remains installed and the failure is reported. Browser
+garbage collection is disabled during preparation to preserve older assets.
+Playwright may request privileges; OS package changes are not rolled back.
 
-### Manual fallback
-
-```sh
-TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/wh3at/vlint/releases/latest)"
-TAG="${TAG##*/}"
-base="https://github.com/wh3at/vlint/releases/download/$TAG"
-archive="vlint-$TAG-linux-x64.tar.gz"
-curl -fsSLO "$base/$archive"
-curl -fsSLO "$base/SHA256SUMS"
-awk -v name="$archive" '$2 == name { print }' SHA256SUMS | sha256sum -c -
-tar -xzf "$archive"
-install -m 0755 vlint "$HOME/.local/bin/vlint"
-```
-
-The archive contains only `vlint` (mode `0755`) and this `README.md`. `SHA256SUMS`
-is an integrity check, not a signature.
+The default destination is `$HOME/.local/bin`; override `VLINT_INSTALL_DIR` if
+needed. If it is not on `PATH`, the installer prints the directory to add.
+After installation, use `vlint init --help` to select project environments.
+Use `vlint browser install --force` for repair; `.deb` and `setup` are retired.
+The archive contains `vlint` (mode `0755`) and `README.md`. `SHA256SUMS` is an
+integrity check, not a signature.
 
 ## Browser setup
 
@@ -135,15 +112,13 @@ vlint browser --help
 vlint browser install --help
 vlint browser status --help
 vlint init --help
-vlint setup --help
 ```
 
 Run `vlint` with no arguments for the top-level overview.
 
 ## Running checks
 
-Every check requires a project-local `vlint.config.json`; run `vlint init` or
-`vlint setup` first.
+Every check requires a project-local `vlint.config.json`; run `vlint init` first.
 
 ```sh
 vlint check --url http://localhost:3000/
@@ -664,7 +639,7 @@ publication, and recovery.
 
 ## Limitations
 
-- **Ubuntu 24.04 x64 only.**
+- **Linux x64 distribution only.** Playwright determines actual host prerequisites and availability.
 - Inspects exactly the declared target set — no route discovery or full-site coverage.
 - No screenshot comparison, image understanding, pixel-diff, or click/input/scroll interaction.
 - Each rule checks the fixed target URL, font loading completion, and any declared `readyCondition` only at the start and end of its evaluation. A failed boundary check returns `incomplete` and discards that rule's facts. Changes during evaluation are not monitored: temporary URL changes, document reloads, hide/show, ready-element replacement, and font loading are allowed if the final boundary satisfies all conditions. Without `readyCondition`, no application-specific readiness is checked. Initial page acquisition still validates redirects and waits for loading, fonts, and the declared ready condition.

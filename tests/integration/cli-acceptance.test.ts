@@ -8,7 +8,6 @@ import { boundarySuccess } from "../../src/contracts/failure";
 import { runCli, type BrowserInstallResult, type CliIo, type CliRuntime } from "../../src/cli";
 import { runCheckCommand } from "../../src/commands/check";
 import { runInitCommand } from "../../src/commands/init";
-import type { SetupResult } from "../../src/commands/setup";
 import { loadConfig } from "../../src/config/load";
 
 /**
@@ -75,18 +74,6 @@ function runtimeFor(cwd: string, version = "0.1.0"): CliRuntime {
     version,
     check: (url, signal) => runCheckCommand(cwd, url, process.env, version, signal),
     init: () => runInitCommand(cwd),
-    setup: async () => boundarySuccess<SetupResult>({
-      config: "already-present",
-      browser: {
-        kind: "already-present",
-        browser: {
-          name: "chromium-headless-shell",
-          revision: "test",
-          browserVersion: "test",
-          executablePath: "/test/chromium",
-        },
-      },
-    }),
     // No scenario in this file invokes `browser install` or `browser status`;
     // the fakes exist only to satisfy the CliRuntime contract deterministically.
     install: async () =>
