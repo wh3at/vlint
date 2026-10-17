@@ -35,6 +35,19 @@ describe("clusterLineCount", () => {
     expect(clusterLineCount([label, badge])).toBe(1);
   });
 
+  test("baseline-aligned mixed font sizes remain one line with a smaller inherited line-height", () => {
+    const large = frag(8, -43, 72.21875, 111, 10);
+    const small = frag(80.21875, 37, 6.671875, 11, 10);
+    expect(clusterLineCount([large, small])).toBe(1);
+    expect(clusterLineCount([small, large])).toBe(1);
+  });
+
+  test("equal-height wrapped glyphs remain separate when their rectangles overlap", () => {
+    const first = frag(0, 0, 60, 19, 10);
+    const second = frag(0, 10, 60, 19, 10);
+    expect(clusterLineCount([first, second])).toBe(2);
+  });
+
   test("wrapped text across two baselines is two lines", () => {
     const first = frag(0, 100, 200, 16, 16);
     const second = frag(0, 140, 120, 16, 16); // 40px below, no overlap

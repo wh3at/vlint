@@ -175,3 +175,15 @@ function facts(result: any) {
     previous = measured;
   }
 }, 120_000);
+
+(container ? test : test.skip)("compiled tabs keep mixed-size baseline text on one line without merging overlapping wrapped glyphs", async () => {
+  const html = '<!doctype html><style>body{font:16px/10px sans-serif}[role=tab]{margin-bottom:120px}.large{font-size:100px}.small{font-size:10px}.single{white-space:nowrap}</style><div role="tab" id="large-first" class="single"><span class="large">A</span><span class="small">B</span></div><div role="tab" id="small-first" class="single"><span class="small">B</span><span class="large">A</span></div><div role="tab" id="wrapped">first<br>second</div>';
+  const { code, result } = await check(html, measuredRules);
+  expect(code).toBe(1);
+  for (const item of result.cases) {
+    const tabs = item.rules.find((rule: any) => rule.name === ruleNames[0]);
+    expect(tabs.status).toBe("violations");
+    expect(tabs.elementsInspected).toBe(3);
+    expect(tabs.violations.map((violation: any) => [violation.locator, violation.lineCount])).toEqual([["#wrapped", 2]]);
+  }
+}, 120_000);

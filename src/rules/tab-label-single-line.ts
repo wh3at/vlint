@@ -106,6 +106,9 @@ function fragmentCenter(frag: TextFragment): number {
 }
 
 function sameLine(a: TextFragment, b: TextFragment): boolean {
+  const aBottom = a.y + a.height;
+  const bBottom = b.y + b.height;
+  if ((a.y <= b.y && aBottom >= bBottom) || (b.y <= a.y && bBottom >= aBottom)) return true;
   const distance = Math.abs(fragmentCenter(a) - fragmentCenter(b));
   const overlapHeight = (Math.min(a.height, a.lineHeight) + Math.min(b.height, b.lineHeight)) / 2;
   if (distance < overlapHeight) return true;
