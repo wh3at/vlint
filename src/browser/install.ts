@@ -26,7 +26,6 @@ export type InstallOutcomeKind = "already-present" | "installed" | "repaired";
 
 export interface InstallOutcome {
   readonly kind: InstallOutcomeKind;
-  readonly browser: ManagedBrowserInfo;
 }
 
 export interface InstallOptions {
@@ -164,6 +163,5 @@ export async function installBrowser(options: InstallOptions): Promise<BoundaryR
   }
   return boundarySuccess({
     kind: options.force ? "repaired" : before.ready ? "already-present" : "installed",
-    browser: findManagedBrowser(),
   });
 }

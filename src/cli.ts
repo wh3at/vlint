@@ -37,7 +37,6 @@ export type CliParseResult =
     };
 
 export interface BrowserInstallResult {
-  readonly revision: string;
   readonly action: "installed" | "already-present" | "reinstalled";
 }
 
@@ -307,10 +306,7 @@ const productionRuntime: CliRuntime = {
     if (!command.ok) return boundaryFailure(command.failure);
     const action =
       command.outcome.kind === "repaired" ? "reinstalled" : command.outcome.kind;
-    return boundarySuccess({
-      revision: command.outcome.browser.revision,
-      action,
-    });
+    return boundarySuccess({ action });
   },
   status: (format, signal) =>
     Promise.resolve(

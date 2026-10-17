@@ -49,7 +49,7 @@ function harness(options: {
     async install(force) {
       installs += 1;
       installRequests.push({ force });
-      return boundarySuccess({ revision: "1228", action: force ? "reinstalled" : "installed" });
+      return boundarySuccess({ action: force ? "reinstalled" : "installed" });
     },
     async init() {
       inits += 1;

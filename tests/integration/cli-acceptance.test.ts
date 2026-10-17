@@ -77,7 +77,7 @@ function runtimeFor(cwd: string, version = "0.1.0"): CliRuntime {
     // No scenario in this file invokes `browser install` or `browser status`;
     // the fakes exist only to satisfy the CliRuntime contract deterministically.
     install: async () =>
-      boundarySuccess<BrowserInstallResult>({ revision: "test", action: "already-present" }),
+      boundarySuccess<BrowserInstallResult>({ action: "already-present" }),
     status: async () =>
       boundarySuccess({ output: "browser status: ready\n", ready: true }),
   };
