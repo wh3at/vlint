@@ -31,7 +31,7 @@ const enabled = process.env.VLINT_INSTALLER_CONTAINER_ACCEPTANCE === "1";
     }
     await copyFile(`${stage}/vlint-v${version}-linux-x64.tar.gz`, `${stage}/vlint-v${candidateVersion}-linux-x64.tar.gz`);
     await writeFile(`${stage}/install-v${candidateVersion}.sh`, renderInstaller(candidateVersion, "wh3at/vlint"));
-    await docker("run", "--name", name, "-d", "-e", "DEBUG=pw:browser", "-e", "PLAYWRIGHT_SKIP_BROWSER_GC=1", "-e", "PLAYWRIGHT_BROWSERS_PATH=/tmp/browsers-59", "-e", "VLINT_INSTALL_DIR=/tmp/bin", "-v", `${stage}:/assets:ro`, "ubuntu:24.04", "sleep", "infinity");
+    await docker("run", "--name", name, "-d", "-e", "DEBUG=pw:browser", "-e", "PLAYWRIGHT_SKIP_BROWSER_GC=1", "-e", "PLAYWRIGHT_BROWSERS_PATH=/tmp/browsers-59", "-e", "VLINT_INSTALL_DIR=/tmp/bin", "-v", `${stage}:/assets:ro`, "ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf", "sleep", "infinity");
     await shell("apt-get update >/tmp/bootstrap.log 2>&1 && apt-get install -y ca-certificates curl >>/tmp/bootstrap.log 2>&1; mkdir -p /transport /release; cp /assets/*.tar.gz /release/; cd /release; sha256sum *.tar.gz >SHA256SUMS");
     await shell(`cat > /transport/curl <<'EOF'
 #!/bin/sh

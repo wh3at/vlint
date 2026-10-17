@@ -12,7 +12,7 @@ const enabled = process.env.VLINT_BROWSER_CONTAINER_ACCEPTANCE === "1";
     return stdout;
   }
   try {
-    await docker("run", "--name", name, "-d", "-e", "PLAYWRIGHT_SKIP_BROWSER_GC=1", "-e", "PLAYWRIGHT_BROWSERS_PATH=/tmp/browsers-56", "-v", `${resolve("dist")}:/artifacts:ro`, "ubuntu:24.04", "sleep", "infinity");
+    await docker("run", "--name", name, "-d", "-e", "PLAYWRIGHT_SKIP_BROWSER_GC=1", "-e", "PLAYWRIGHT_BROWSERS_PATH=/tmp/browsers-56", "-v", `${resolve("dist")}:/artifacts:ro`, "ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf", "sleep", "infinity");
     await docker("exec", name, "sh", "-c", "apt-get update >/tmp/bootstrap.log 2>&1 && apt-get install -y ca-certificates >>/tmp/bootstrap.log 2>&1");
     for (const args of [[], [], ["--force"]]) {
       const output = await docker("exec", name, "/artifacts/vlint-linux-x64", "browser", "install", ...args);
