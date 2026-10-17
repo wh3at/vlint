@@ -1,6 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { resolve, join } from "node:path";
+import { readReport } from "./docker-exec";
 
 const container = process.env.VLINT_RULES_63_CONTAINER;
 const environments = [
@@ -31,9 +32,7 @@ async function check(html: string, rules: unknown[]) {
     const output = JSON.parse(stdout);
     expect(output.reportPath).toBeString();
     expect(output.cases).toBeUndefined();
-    const report = Bun.spawn(["docker", "exec", container!, "cat", output.reportPath], { stdout: "pipe" });
-    const result = JSON.parse(await new Response(report.stdout).text());
-    expect(await report.exited).toBe(0);
+    const result = await readReport(container!, output.reportPath);
     expect(output.status).toBe(result.status);
     for (const item of result.cases) {
       for (const rule of item.rules) {

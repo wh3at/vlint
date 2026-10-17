@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { resolve, join } from "node:path";
+import { readReport } from "./docker-exec";
 
 const container = process.env.VLINT_TABLE_CELL_CONTAINER;
 
@@ -26,9 +27,7 @@ const container = process.env.VLINT_TABLE_CELL_CONTAINER;
       const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
       if (!stdout.trim()) throw new Error(`${code}: ${stderr}`);
       const summary = JSON.parse(stdout);
-      const stored = Bun.spawn(["docker", "exec", container!, "cat", summary.reportPath], { stdout: "pipe", stderr: "pipe" });
-      const result = JSON.parse(await new Response(stored.stdout).text());
-      expect(await stored.exited).toBe(0);
+      const result = await readReport(container!, summary.reportPath);
       expect(code).toBe(2);
       expect(summary.status).toBe("incomplete");
       expect(result.cases).toHaveLength(15);
@@ -87,9 +86,7 @@ const container = process.env.VLINT_TABLE_CELL_CONTAINER;
       if (!stdout.trim()) throw new Error(`${code}: ${stderr}`);
       expect(code).toBe(1);
       const summary = JSON.parse(stdout);
-      const stored = Bun.spawn(["docker", "exec", container!, "cat", summary.reportPath], { stdout: "pipe", stderr: "pipe" });
-      const report = JSON.parse(await new Response(stored.stdout).text());
-      expect(await stored.exited).toBe(0);
+      const report = await readReport(container!, summary.reportPath);
       expect(report.cases).toHaveLength(9);
       for (const item of report.cases) {
         const fixture = fixtures.find(fixture => fixture.page === item.target.name)!;

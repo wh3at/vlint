@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { resolve, join } from "node:path";
+import { readReport } from "./docker-exec";
 
 const container = process.env.VLINT_ENVIRONMENT_CONTAINER;
 const selected = ["windows:chromium", "windows:firefox", "macos:chromium", "macos:webkit", "iphone:webkit", "android:chromium"];
@@ -14,9 +15,7 @@ async function command(cwd: string) {
   const summary = JSON.parse(stdout);
   expect(summary.cases).toBeUndefined();
   expect(summary.execution).toBeUndefined();
-  const stored = Bun.spawn(["docker", "exec", container!, "cat", summary.reportPath], { stdout: "pipe", stderr: "pipe" });
-  const report = JSON.parse(await new Response(stored.stdout).text());
-  expect(await stored.exited).toBe(0);
+  const report = await readReport(container!, summary.reportPath);
   expect(report.summary).toEqual(summary.summary);
   expect(report.status).toBe(summary.status);
   return { code, result: report };
