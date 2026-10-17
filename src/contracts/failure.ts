@@ -87,27 +87,6 @@ export type FailureCode =
   | "local-fact-invalid"
   | "signal-interrupt";
 
-export interface BrowserSetupDiagnostic {
-  readonly requirements: {
-    readonly name: string;
-    readonly revision: string;
-    readonly browserVersion: string;
-    readonly executablePath: string;
-    readonly cacheRoot: string;
-  };
-  readonly status: string;
-  readonly environment: {
-    readonly xdgCacheHome: string | undefined;
-    readonly playwrightBrowsersPath: string | undefined;
-  };
-  readonly detectedRevisions: readonly {
-    readonly revision: string;
-    readonly path: string;
-  }[];
-  readonly executablePresent: boolean;
-  readonly executableAccessible: boolean;
-}
-
 export interface Failure {
   readonly stage: FailureStage;
   readonly code: FailureCode;
@@ -116,7 +95,6 @@ export interface Failure {
   readonly device: string | null;
   readonly rule: string | null;
   readonly actualUrl?: string;
-  readonly browserDiagnostic?: BrowserSetupDiagnostic;
 }
 
 export type BoundaryResult<T> =

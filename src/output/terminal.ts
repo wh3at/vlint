@@ -43,26 +43,8 @@ function failureLine(failure: {
   readonly device: string | null;
   readonly rule: string | null;
   readonly actualUrl?: string;
-  readonly browserDiagnostic?: {
-    readonly status: string;
-    readonly requirements: {
-      readonly revision: string;
-      readonly cacheRoot: string;
-    };
-    readonly detectedRevisions: readonly {
-      readonly revision: string;
-    }[];
-  };
 }): string {
-  let line = `failure ${failure.stage}/${failure.code} target=${escapeNullable(failure.target)} device=${escapeNullable(failure.device)} rule=${escapeNullable(failure.rule)}${failure.actualUrl === undefined ? "" : ` actualUrl=${escapeTerminal(failure.actualUrl)}`}: ${escapeTerminal(failure.message)}`;
-  if (failure.browserDiagnostic !== undefined) {
-    const diag = failure.browserDiagnostic;
-    const revisions = diag.detectedRevisions.length > 0
-      ? ` revisions=${escapeTerminal(diag.detectedRevisions.map((e) => e.revision).join(","))}`
-      : "";
-    line += `\n  browser status=${escapeTerminal(diag.status)} revision=${escapeTerminal(diag.requirements.revision)} cache=${escapeTerminal(diag.requirements.cacheRoot)}${revisions}`;
-  }
-  return line;
+  return `failure ${failure.stage}/${failure.code} target=${escapeNullable(failure.target)} device=${escapeNullable(failure.device)} rule=${escapeNullable(failure.rule)}${failure.actualUrl === undefined ? "" : ` actualUrl=${escapeTerminal(failure.actualUrl)}`}: ${escapeTerminal(failure.message)}`;
 }
 
 export function renderTerminal(result: RunResult): string {
