@@ -1,8 +1,6 @@
 import { escapeTerminal } from "../output/terminal";
 import { inspectManagedBrowsers, managedExecutable, prepareManagedBrowsers } from "./management";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
 import coreBundle from "playwright-core/lib/coreBundle";
 import {
   boundaryFailure,
@@ -130,30 +128,24 @@ async function terminateInstallerTree(pid: number): Promise<void> {
 type InstallActionOutcome = { readonly aborted: boolean; readonly success: boolean };
 
 async function runInstallAction(options: InstallOptions): Promise<InstallActionOutcome> {
-  const tmp = mkdtempSync(join(tmpdir(), "vlint-install-"));
+  const proc = Bun.spawn({
+    cmd: [process.execPath, INSTALLER_WORKER_TOKEN, options.force ? "--force" : "--no-force"],
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+    detached: false,
+  });
+  const pid = proc.pid;
   try {
-    const proc = Bun.spawn({
-      cmd: [process.execPath, INSTALLER_WORKER_TOKEN, options.force ? "--force" : "--no-force"],
-      stdin: "inherit",
-      stdout: "inherit",
-      stderr: "inherit",
-      detached: false,
-      cwd: tmp,
-    });
-    const pid = proc.pid;
-    try {
-      const code = await raceAbort(options.signal, proc.exited);
-      return { aborted: false, success: code === 0 };
-    } catch (error) {
-      if (isAbortError(error)) {
-        await terminateInstallerTree(pid);
-        await proc.exited;
-        return { aborted: true, success: false };
-      }
-      throw error;
+    const code = await raceAbort(options.signal, proc.exited);
+    return { aborted: false, success: code === 0 };
+  } catch (error) {
+    if (isAbortError(error)) {
+      await terminateInstallerTree(pid);
+      await proc.exited;
+      return { aborted: true, success: false };
     }
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    throw error;
   }
 }
 

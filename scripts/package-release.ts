@@ -66,6 +66,7 @@ if [ "$(uname -s)" != "Linux" ] || { [ "$(uname -m)" != "x86_64" ] && [ "$(uname
   exit 2
 fi
 
+INVOCATION_DIR=$(pwd)
 WORK_DIR=$(mktemp -d)
 cd "$WORK_DIR"
 BASE="https://github.com/$REPOSITORY/releases/download/$TAG"
@@ -81,8 +82,8 @@ tar -xzf "$ARCHIVE" vlint
 mkdir -p "$INSTALL_DIR"
 TARGET=$(mktemp "$INSTALL_DIR/.vlint.XXXXXX")
 install -m 0755 vlint "$TARGET"
-PLAYWRIGHT_SKIP_BROWSER_GC=1 "$TARGET" browser install
-"$TARGET" browser status
+(cd "$INVOCATION_DIR" && PLAYWRIGHT_SKIP_BROWSER_GC=1 "$TARGET" browser install)
+(cd "$INVOCATION_DIR" && "$TARGET" browser status)
 mv -f "$TARGET" "$INSTALL_DIR/vlint"
 TARGET=
 COMMITTED=true
