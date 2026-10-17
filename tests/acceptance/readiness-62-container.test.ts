@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
+import { readReport } from "./docker-exec";
 
 const container = process.env.VLINT_READINESS_CONTAINER;
 
@@ -33,12 +34,8 @@ const container = process.env.VLINT_READINESS_CONTAINER;
     const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     expect(stderr).toBe("");
     const output = JSON.parse(stdout);
-    let result = output;
-    if (output.reportPath) {
-      const read = Bun.spawn(["docker", "exec", container!, "cat", output.reportPath], { stdout: "pipe" });
-      result = JSON.parse(await new Response(read.stdout).text());
-      expect(await read.exited).toBe(0);
-    }
+    expect(output.cases).toBeUndefined();
+    const result = await readReport(container!, output.reportPath);
     expect(code).toBe(2);
     expect(result.cases).toHaveLength(3);
     for (const item of result.cases) {
@@ -98,12 +95,8 @@ const container = process.env.VLINT_READINESS_CONTAINER;
     expect(stderr).toBe("");
     expect(code).toBe(2);
     const output = JSON.parse(stdout);
-    let result = output;
-    if (output.reportPath) {
-      const read = Bun.spawn(["docker", "exec", container!, "cat", output.reportPath], { stdout: "pipe" });
-      result = JSON.parse(await new Response(read.stdout).text());
-      expect(await read.exited).toBe(0);
-    }
+    expect(output.cases).toBeUndefined();
+    const result = await readReport(container!, output.reportPath);
     expect(result.cases).toHaveLength(45);
     for (const engine of ["chromium", "firefox", "webkit"]) {
       const cases = result.cases.filter((item: any) => item.environment === engine);
@@ -170,12 +163,8 @@ const container = process.env.VLINT_READINESS_CONTAINER;
       expect(stderr).toBe("");
       expect(code).toBe(2);
       const output = JSON.parse(stdout);
-      let result = output;
-      if (output.reportPath) {
-        const read = Bun.spawn(["docker", "exec", container!, "cat", output.reportPath], { stdout: "pipe" });
-        result = JSON.parse(await new Response(read.stdout).text());
-        expect(await read.exited).toBe(0);
-      }
+      expect(output.cases).toBeUndefined();
+      const result = await readReport(container!, output.reportPath);
       expect(result.cases[0].status).toBe("complete");
       expect(result.cases[0].rules.every((rule: any) => rule.status === "clean")).toBe(true);
       expect(result.cases[3].status).toBe("not-executed");
