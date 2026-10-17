@@ -73,10 +73,9 @@ describe.skipIf(!binaryPresent)(
       [["--help"], "Usage: vlint", "browser"],
       [["check", "--help"], "Usage: vlint check", "--format"],
       [["browser", "--help"], "Usage: vlint browser", "install"],
-      [["browser", "install", "--help"], "Usage: vlint browser install", "--with-deps"],
+      [["browser", "install", "--help"], "Usage: vlint browser install", "--force"],
       [["browser", "status", "--help"], "Usage: vlint browser status", "--format"],
       [["init", "--help"], "Usage: vlint init", "Create vlint.config.json"],
-      [["setup", "--help"], "Usage: vlint setup", "install the browser"],
       [["help", "check"], "Usage: vlint check", "--format"],
     ] as const)("renders compiled help for %#", async (args, usage, detail) => {
       const cwd = await temporaryDirectory();
@@ -86,6 +85,18 @@ describe.skipIf(!binaryPresent)(
       expect(result.stdout).toContain(detail);
       expect(result.stdout.endsWith("\n")).toBe(true);
       expect(result.stderr).toBe("");
+      expect(await readdir(cwd)).toEqual([]);
+    });
+
+    test.each([
+      { args: ["setup"] },
+      { args: ["browser", "install", "--with-deps"] },
+    ])("rejects retired interface %j", async ({ args }) => {
+      const cwd = await temporaryDirectory();
+      const result = await execBinary(args, cwd);
+      expect(result.exitCode, result.stdout).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("unknown");
       expect(await readdir(cwd)).toEqual([]);
     });
 
