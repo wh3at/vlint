@@ -116,4 +116,23 @@ describe("release workflow boundaries", () => {
     expect(cleanup).toContain(".targetCommitish == $sha");
     expect(cleanup).toContain('if [ "$tag_sha" != "$SHA" ]; then');
   });
+
+  test("consumes the flat release artifact layout in validation and publication", async () => {
+    const release = await workflow("release.yml");
+    const upload = release.jobs.build.steps.find((step: any) => step.name === "Upload immutable release artifact");
+    expect(upload.with.path.trim()).toBe("dist/release/");
+    for (const name of ["validate", "publish"]) {
+      const steps = release.jobs[name].steps as Array<Record<string, any>>;
+      const download = steps.find(step => step.uses?.startsWith("actions/download-artifact@"));
+      expect(download?.with.path).toBe("release-artifacts");
+      const manifest = steps.find(step => step.env?.MANIFEST !== undefined);
+      expect(manifest?.env.MANIFEST).toBe("release-artifacts/SHA256SUMS");
+    }
+    const validation = release.jobs.validate.steps.find((step: any) => step.env?.ARCHIVE !== undefined);
+    expect(validation.env.ARCHIVE).toBe("release-artifacts/${{ needs.provenance.outputs.archive }}");
+    expect(validation.env.INSTALLER).toBe("release-artifacts/${{ needs.provenance.outputs.installer }}");
+    expect(validation.env.CHECKSUM).toBe("release-artifacts/SHA256SUMS");
+    const publication = release.jobs.publish.steps.find((step: any) => step.env?.ASSET_DIR !== undefined);
+    expect(publication.env.ASSET_DIR).toBe("release-artifacts");
+  });
 });

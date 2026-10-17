@@ -208,7 +208,7 @@ jobs:
       - name: Verify immutable manifest handoff
         env:
           EXPECTED: ${{ needs.build.outputs.manifest_sha256 }}
-          MANIFEST: release-artifacts/release/SHA256SUMS
+          MANIFEST: release-artifacts/SHA256SUMS
         run: |
           set -euo pipefail
           actual="$(sha256sum "$MANIFEST" | awk '{print $1}')"
@@ -221,9 +221,9 @@ jobs:
 
       - name: Validate release in clean Ubuntu 24.04 guest
         env:
-          ARCHIVE: release-artifacts/release/${{ needs.provenance.outputs.archive }}
-          INSTALLER: release-artifacts/release/${{ needs.provenance.outputs.installer }}
-          CHECKSUM: release-artifacts/release/SHA256SUMS
+          ARCHIVE: release-artifacts/${{ needs.provenance.outputs.archive }}
+          INSTALLER: release-artifacts/${{ needs.provenance.outputs.installer }}
+          CHECKSUM: release-artifacts/SHA256SUMS
         run: |
           chmod 0755 "$INSTALLER"
           sh tests/release/validate.sh release \
@@ -245,7 +245,7 @@ jobs:
       - name: Re-verify manifest before publication
         env:
           EXPECTED: ${{ needs.build.outputs.manifest_sha256 }}
-          MANIFEST: release-artifacts/release/SHA256SUMS
+          MANIFEST: release-artifacts/SHA256SUMS
         run: |
           set -euo pipefail
           actual="$(sha256sum "$MANIFEST" | awk '{print $1}')"
@@ -284,7 +284,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.provenance.outputs.tag }}
           REPO: ${{ github.repository }}
-          ASSET_DIR: release-artifacts/release
+          ASSET_DIR: release-artifacts
         run: |
           set -euo pipefail
           gh release upload "$TAG" --repo "$REPO" "$ASSET_DIR"/*
