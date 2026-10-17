@@ -1,10 +1,9 @@
 import { boundaryFailure, boundarySuccess, type BoundaryResult, type Failure } from "../contracts/failure";
-import { installBrowser, type InstallOptions, type InstallOutcome } from "../browser/install";
+import { installBrowser, type InstallOutcome } from "../browser/install";
 
 export interface BrowserInstallCommandOptions {
   readonly args: readonly string[];
   readonly signal?: AbortSignal;
-  readonly browserInstaller?: (options: InstallOptions) => Promise<BoundaryResult<InstallOutcome>>;
 }
 
 export type BrowserInstallCommandResult =
@@ -27,7 +26,7 @@ export function parseBrowserInstallArgs(args: readonly string[]): BoundaryResult
 export async function runBrowserInstall(options: BrowserInstallCommandOptions): Promise<BrowserInstallCommandResult> {
   const parsed = parseBrowserInstallArgs(options.args);
   if (!parsed.ok) return { ok: false, failure: parsed.failure };
-  const result = await (options.browserInstaller ?? installBrowser)({
+  const result = await installBrowser({
     force: parsed.value.force,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
