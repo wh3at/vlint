@@ -2,7 +2,7 @@ import { platform, arch, release } from "node:os";
 import type { BrowserEngine } from "../contracts/config";
 import type { EngineExecution, RunExecution } from "../contracts/result";
 import type { BrowserRunScope } from "../browser/lifecycle";
-import { managedExecutable } from "../browser/management";
+import { managedEngineExecution } from "../browser/management";
 import { environmentUserAgent } from "../browser/emulation";
 import { evaluateSvgTextClipping } from "../rules/svg-text-clipping";
 import type { Page } from "playwright";
@@ -178,10 +178,7 @@ function productionDependencies(pluginRegistry: PluginRuntimeRegistry | null, pl
   const auditCaseByPage = new WeakMap<Page, { auditCase: EffectiveAuditCase; fixedUrl: string }>();
   return {
     async launch(signal) {
-      const engines: EngineExecution[] = [...new Set(plan.environments.map((item) => item.browser))].map((engine) => {
-        const executable = managedExecutable(engine);
-        return { engine, expectedVersion: executable.browserVersion ?? null, obtainedVersion: null, versionSource: null, revision: executable.revision, artifact: { name: executable.name, directory: executable.directory, downloadURLs: executable.downloadURLs }, executablePath: executable.executablePath(), diagnostic: null };
-      });
+      const engines: EngineExecution[] = [...new Set(plan.environments.map((item) => item.browser))].map((engine) => managedEngineExecution(engine));
       const execution: RunExecution = {
         host: { platform: platform(), architecture: arch(), release: release() }, engines,
         environments: plan.environments.map((environment) => {
@@ -198,8 +195,7 @@ function productionDependencies(pluginRegistry: PluginRuntimeRegistry | null, pl
           pending = createBrowserRunScope({ engine, ...(signal === undefined ? {} : { signal }) }).then(async (created) => {
             const metadata = engines.find((item) => item.engine === engine)!;
             if (!created.ok) { metadata.diagnostic = created.failure.message; return created; }
-            metadata.obtainedVersion = created.value.browserVersion;
-            metadata.versionSource = engine === "webkit" ? "playwright-metadata" : "browser.version";
+            Object.assign(metadata, managedEngineExecution(engine, created.value.browserVersion));
             if (metadata.expectedVersion !== null && metadata.obtainedVersion !== metadata.expectedVersion) {
               await created.value.close();
               metadata.diagnostic = "managed browser version does not match expected version";

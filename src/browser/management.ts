@@ -5,6 +5,7 @@ import coreBundle from "playwright-core/lib/coreBundle";
 import { escapeTerminal } from "../output/terminal";
 
 import type { BrowserEngine } from "../contracts/config";
+import type { EngineExecution } from "../contracts/result";
 
 interface Executable {
   readonly name: string;
@@ -25,15 +26,8 @@ interface Registry {
 const registry = (coreBundle as unknown as { registry: { registry: Registry } }).registry.registry;
 const engines = { chromium, firefox, webkit };
 
-export interface EngineReadiness {
-  readonly engine: BrowserEngine;
+export interface EngineReadiness extends EngineExecution {
   readonly status: "ready" | "unavailable";
-  readonly expectedVersion: string | null;
-  readonly obtainedVersion: string | null;
-  readonly versionSource: "browser.version" | "playwright-metadata" | null;
-  readonly revision: string;
-  readonly artifact: { readonly name: string; readonly directory: string; readonly downloadURLs: readonly string[] };
-  readonly executablePath: string;
   readonly executablePresent: boolean;
   readonly dependencyValidation: "passed" | "failed" | "not-run";
   readonly launch: "passed" | "failed" | "not-run";
@@ -44,6 +38,20 @@ export interface EngineReadiness {
 
 export function managedExecutable(engine: BrowserEngine): Executable {
   return registry.findExecutable(engine === "chromium" ? "chromium-headless-shell" : engine);
+}
+
+export function managedEngineExecution(engine: BrowserEngine, obtainedVersion: string | null = null): EngineExecution {
+  const executable = managedExecutable(engine);
+  return {
+    engine,
+    expectedVersion: executable.browserVersion ?? null,
+    obtainedVersion,
+    versionSource: obtainedVersion === null ? null : engine === "webkit" ? "playwright-metadata" : "browser.version",
+    revision: executable.revision,
+    artifact: { name: executable.name, directory: executable.directory, downloadURLs: executable.downloadURLs },
+    executablePath: executable.executablePath(),
+    diagnostic: null,
+  };
 }
 
 export async function prepareManagedBrowsers(force: boolean): Promise<void> {
@@ -96,10 +104,8 @@ export async function inspectManagedBrowsers(signal?: AbortSignal): Promise<{ re
       }
     }
     const ready = dependencyValidation === "passed" && launch === "passed" && emptyPage === "passed" && close === "passed";
-    results.push({ engine, status: ready ? "ready" : "unavailable", expectedVersion: executable.browserVersion ?? null,
-      obtainedVersion, versionSource: obtainedVersion === null ? null : engine === "webkit" ? "playwright-metadata" : "browser.version",
-      revision: executable.revision, artifact: { name: executable.name, directory: executable.directory, downloadURLs: executable.downloadURLs },
-      executablePath: path, executablePresent: existsSync(path), dependencyValidation, launch, emptyPage, close, diagnostic });
+    results.push({ ...managedEngineExecution(engine, obtainedVersion), status: ready ? "ready" : "unavailable",
+      executablePresent: existsSync(path), dependencyValidation, launch, emptyPage, close, diagnostic });
   }
   return { ready: results.every((result) => result.status === "ready"), host: { platform: platform(), architecture: arch(), release: release() }, engines: results };
 }

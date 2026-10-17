@@ -25,12 +25,19 @@ mock.module(${JSON.stringify(join(root, "node_modules/playwright/index.mjs"))}, 
     }),
   }]),
 ));
-const { inspectManagedBrowsers } = await import(${JSON.stringify(join(root, "src/browser/management.ts"))});
+const { inspectManagedBrowsers, managedEngineExecution } = await import(${JSON.stringify(join(root, "src/browser/management.ts"))});
 const status = await inspectManagedBrowsers();
 expect(status.ready).toBe(mismatch === null);
 for (const engine of status.engines) {
   expect(engine.status).toBe(engine.engine === mismatch ? "unavailable" : "ready");
   expect(engine.versionSource).toBe(engine.engine === "webkit" ? "playwright-metadata" : "browser.version");
+  const initial = managedEngineExecution(engine.engine);
+  expect(initial.obtainedVersion).toBeNull();
+  expect(initial.versionSource).toBeNull();
+  const identity = managedEngineExecution(engine.engine, engine.obtainedVersion);
+  for (const key of ["engine", "expectedVersion", "obtainedVersion", "versionSource", "revision", "artifact", "executablePath"]) {
+    expect(identity[key]).toEqual(engine[key]);
+  }
   if (engine.engine === mismatch) {
     expect(engine.expectedVersion).not.toBe(engine.obtainedVersion);
     expect(engine.diagnostic).toContain("version");
