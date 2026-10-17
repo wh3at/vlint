@@ -75,6 +75,9 @@ export async function inspectManagedBrowsers(signal?: AbortSignal): Promise<{ re
       browser = await engines[engine].launch({ headless: true, timeout: 30_000 });
       launch = "passed";
       obtainedVersion = browser.version();
+      if (executable.browserVersion !== undefined && obtainedVersion !== executable.browserVersion) {
+        throw new Error(`managed browser version does not match expected version: expected ${executable.browserVersion}, obtained ${obtainedVersion}`);
+      }
       emptyPage = "failed";
       const page = await browser.newPage();
       await page.close();
