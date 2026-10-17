@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import vlintPackage from "../../package.json";
+import { exec as dockerExec } from "./docker-exec";
 
 const container = process.env.VLINT_ARTIFACT_CONTAINER;
 
@@ -13,10 +14,8 @@ const container = process.env.VLINT_ARTIFACT_CONTAINER;
     visits++;
     return new Response('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body><button role="tab">Tab</button><table><thead><tr><th scope="col">Header</th></tr></thead><tbody><tr><td>Cell</td></tr></tbody></table><svg width="200" height="60" style="overflow:hidden;font:20px Arial"><text x="10" y="30">Hello</text></svg></body>', { headers: { "content-type": "text/html" } });
   } });
-  async function exec(args: string[]) {
-    const proc = Bun.spawn(["docker", "exec", "--user", `${process.getuid!()}:${process.getgid!()}`, "-e", "HOME=/tmp", "-e", "PLAYWRIGHT_DOWNLOAD_HOST=http://127.0.0.1:1", "-w", cwd, container!, ...args], { stdout: "pipe", stderr: "pipe" });
-    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    return { stdout, stderr, code };
+  function exec(args: string[]) {
+    return dockerExec(["--user", `${process.getuid!()}:${process.getgid!()}`, "-e", "HOME=/tmp", "-e", "PLAYWRIGHT_DOWNLOAD_HOST=http://127.0.0.1:1", "-w", cwd, container!, ...args]);
   }
   try {
     const archive = `/lane/dist/release/vlint-v${vlintPackage.version}-linux-x64.tar.gz`;
