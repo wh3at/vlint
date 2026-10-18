@@ -619,6 +619,10 @@ scrollports, pixel/percentage units, and supported/unsupported clip combinations
 `bun run release:validate` (Docker) exercises the archive in a clean Ubuntu 24.04 x64
 guest; `bun run test:feasibility` runs the compiled-Playwright feasibility probe.
 
+The required three-engine and privilege CI gates also have local entrypoints:
+`bun run test:acceptance:three-engine` and `bun run test:acceptance:privilege`.
+Both consume the compiled binary and own their disposable Docker environments.
+
 Releases use a reviewed Release Please PR for the version and changelog. PRs must have
 Conventional Commit titles; squash merges preserve those titles on `main`. See
 [Release operations](docs/operations/release.md) for classification, approval,

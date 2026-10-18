@@ -14,6 +14,8 @@
     "test:unit": "bun run check:runtime && bun test tests/unit tests/golden",
     "test:integration": "bun run check:runtime && bun run scripts/test-integration.ts",
     "test:acceptance": "bun run check:runtime && bun test tests/acceptance",
+    "test:acceptance:three-engine": "bun run check:runtime && bun run scripts/test-three-engine.ts",
+    "test:acceptance:privilege": "bun run check:runtime && bun run scripts/test-three-engine.ts --group privilege",
     "test:all": "bun run check:runtime && bun run typecheck && bun run check:architecture && bun run check:container-images && bun run test:unit && bun run build:linux-x64 && bun run test:integration && bun run test:acceptance",
     "build:linux-x64": "bun run check:runtime && bun run scripts/build.ts linux-x64",
     "build:feasibility": "bun run check:runtime && bun run scripts/build.ts feasibility",
