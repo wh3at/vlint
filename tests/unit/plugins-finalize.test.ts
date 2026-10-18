@@ -1,3 +1,5 @@
+import type { Page } from "playwright";
+import { evaluateLocalRule } from "../../src/plugins/evaluate";
 import { desktopEnvironment } from "../fixtures/environments";
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
@@ -125,6 +127,55 @@ function payloadForObservationBytes(
 }
 
 describe("plugin finalizer adapter", () => {
+  test("evaluation and finalization distinguish the same target and device in two environments", async () => {
+    const rule = localRule("passing", "finalize-passing-rule.ts");
+    const loaded = await loadPluginContract({
+      configDirectory: fixtureRoot,
+      relativePath: rule.path,
+      ruleName: rule.name,
+    });
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    const plan = makePlan(["same", "same"], [rule]);
+    plan.cases[1]!.environment = { ...desktopEnvironment, name: "firefox", browser: "firefox" };
+    const expected = plan.cases.map(({ environment }) => ({
+      name: environment.name, platform: environment.platform, browser: environment.browser,
+    }));
+    const contexts: unknown[] = [];
+    const page = {
+      evaluate: async (fn: (args: unknown) => Promise<unknown>, args: unknown) => {
+        contexts.push((args as { context: unknown }).context);
+        return fn(args);
+      },
+    } as unknown as Page;
+    for (const auditCase of plan.cases) {
+      const outcome = await evaluateLocalRule(page, rule, {
+        ...loaded.value,
+        evaluateJs: `(context) => ({ elementsInspected: context.environment.browser === "firefox" ? 2 : 1, violations: [] })`,
+      }, auditCase);
+      expect(outcome.failure).toBeNull();
+      expect(outcome.facts.elementsInspected).toBe(auditCase.environment.browser === "firefox" ? 2 : 1);
+    }
+    expect(contexts).toEqual(expected.map((environment) => expect.objectContaining({
+      target: { name: "same", url: "https://example.com/same" },
+      device: expect.objectContaining({ name: "desktop" }),
+      environment,
+    })));
+    let received: unknown;
+    const result = await finalizeLocalRule(rule, {
+      ...loaded.value,
+      finalize: async (input) => { received = input; return { status: "passed" }; },
+    }, plan, seededCases(plan), 0);
+    expect(result.status).toBe("passed");
+    expect(received).toEqual(expect.objectContaining({
+      cases: expected.map((environment) => expect.objectContaining({
+        target: { name: "same", url: "https://example.com/same" },
+        device: { name: "desktop" },
+        environment,
+      })),
+    }));
+  });
+
   test("passing finalizer records passed", async () => {
     const rule = localRule("passing", "finalize-passing-rule.ts");
     const loaded = await loadPluginContract({
