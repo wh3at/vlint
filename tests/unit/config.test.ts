@@ -899,3 +899,62 @@ devices: [DESKTOP_DEVICE],
   });
 
 });
+
+describe("environment device references", () => {
+  test.each([
+    ["unused conflict", ["phone"], undefined, true],
+    ["used conflict", ["desk"], undefined, false],
+    ["combination override", ["desk"], { desk: { tabs: 4 } }, true],
+    ["unknown minimum device", ["phone"], { missing: { tabs: 4 } }, false],
+  ])("resolves minimums for %s", async (_name, references, deviceRuleMinimums, accepted) => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      devices: [{ ...DESKTOP_DEVICE, ruleMinimums: { tabs: 2 } }, MOBILE_DEVICE],
+      environments: [{ name: "desktop", platform: "windows", browser: "chromium", devices: references }],
+      rules: [{ name: "tabs", type: "tab-label-single-line" }],
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok) throw new Error(loaded.failure.message);
+    const resolution = resolveTargets(loaded.value, [{
+      name: "page", url: "https://example.com", ruleOverrides: { tabs: { minimumInspected: 3 } }, ...(deviceRuleMinimums === undefined ? {} : { deviceRuleMinimums }),
+    }]);
+    expect(resolution.ok).toBe(accepted);
+    if (resolution.ok) {
+      expect(resolution.value.cases).toHaveLength(1);
+      expect(resolution.value.cases[0]?.deviceName).toBe(references[0]);
+      expect(resolution.value.cases[0]?.rules.find((rule) => rule.name === "tabs")?.minimumInspected).toBe(deviceRuleMinimums ? 4 : 3);
+    } else {
+      expect(resolution.violation.reason).toBe(deviceRuleMinimums ? "unknown-device" : "conflicting-minimums");
+    }
+  });
+
+  test("rejects duplicate references within an environment", () => {
+    const parsed = parseRawConfig({
+      devices: [DESKTOP_DEVICE],
+      environments: [{ name: "desktop", platform: "windows", browser: "chromium", devices: ["desk", "desk"] }],
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.failure.code).toBe("config-schema-invalid");
+      expect(parsed.failure.message).toBe("config.environments[0].devices: duplicate device reference: desk");
+    }
+  });
+
+  test("allows sharing devices across environments and preserves reference order", async () => {
+    const directory = await temporaryDirectory();
+    await writeConfig(directory, {
+      devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
+      environments: [
+        { name: "first", platform: "windows", browser: "chromium", devices: ["phone", "desk"] },
+        { name: "second", platform: "windows", browser: "firefox", devices: ["desk", "phone"] },
+      ],
+    });
+    const loaded = await loadConfig(directory);
+    if (!loaded.ok) throw new Error(loaded.failure.message);
+    const resolution = resolveAdHocTarget(loaded.value, "https://example.com");
+    if (!resolution.ok) throw new Error(resolution.violation.message);
+    expect(resolution.value.cases.map((item) => `${item.environment.name}/${item.deviceName}`)).toEqual([
+      "first/phone", "first/desk", "second/desk", "second/phone",
+    ]);
+  });
+});

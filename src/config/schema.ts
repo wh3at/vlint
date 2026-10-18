@@ -519,8 +519,11 @@ function environmentsAt(value: unknown, devices: readonly DeviceProfile[]): read
     if (!Object.hasOwn(SUPPORTED_ENVIRONMENTS, `${platform}:${browser}`)) issue(at, "unsupported platform/browser combination");
     const references = stringArrayAt(object.devices, `${at}.devices`);
     if (references.length === 0) issue(`${at}.devices`, "expected non-empty array");
+    const seenReferences = new Set<string>();
     for (const reference of references) {
       if (!devices.some((device) => device.name === reference)) issue(`${at}.devices`, `unknown device: ${reference}`);
+      if (seenReferences.has(reference)) issue(`${at}.devices`, `duplicate device reference: ${reference}`);
+      seenReferences.add(reference);
     }
     return { name, platform, browser, devices: references } as AuditEnvironment;
   });

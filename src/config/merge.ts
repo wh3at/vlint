@@ -264,8 +264,10 @@ function minimumViolation(config: LoadedConfig, targets: readonly Target[]): Min
       if (!names.has(device)) return { reason: "unknown-device", message: `unknown device minimum: ${device}`, target: target.name, device, rule: null };
     }
   }
+  const referencedDevices = new Set(config.environments.flatMap((environment) => environment.devices));
   for (const target of targets) {
     for (const device of config.devices) {
+      if (!referencedDevices.has(device.name)) continue;
       for (const rule of config.rules) {
         const targetMinimum = target.ruleOverrides?.[rule.name]?.minimumInspected;
         const deviceMinimum = device.ruleMinimums?.[rule.name];
