@@ -38,7 +38,7 @@ interface TargetScope<PageHandle> {
 interface BrowserRun<PageHandle> {
   readonly execution: RunExecution;
   openCase(auditCase: EffectiveAuditCase, signal?: AbortSignal): Promise<BoundaryResult<TargetScope<PageHandle>>>;
-  close(): Promise<BoundaryResult<void>>;
+  close(): Promise<readonly Failure[]>;
 }
 
 export interface CheckDependencies<PageHandle> {
@@ -457,9 +457,9 @@ export async function runResolvedCheck<PageHandle>(
 
   try {
     const close = await browser.close();
-    if (!close.ok) {
-      if (close.failure.code === "signal-interrupt") recordInterrupt();
-      else runFailures.push(scopeFailure(close.failure, null, null, null));
+    for (const failure of close) {
+      if (failure.code === "signal-interrupt") recordInterrupt();
+      else runFailures.push(scopeFailure(failure, null, null, null));
     }
   } catch {
     runFailures.push(unexpectedFailure("browser-cleanup-failed", null, null, null));

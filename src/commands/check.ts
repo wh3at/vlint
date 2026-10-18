@@ -222,14 +222,22 @@ function productionDependencies(pluginRegistry: PluginRuntimeRegistry | null, pl
           return opened;
         },
         close: async () => {
-          let failure: Failure | null = null;
-          for (const pending of scopes.values()) {
-            const created = await pending;
-            if (!created.ok) continue;
-            const closed = await created.value.close();
-            if (!closed.ok) failure ??= closed.failure;
+          const failures: Failure[] = [];
+          for (const [engine, pending] of scopes) {
+            try {
+              const created = await pending;
+              if (!created.ok) continue;
+              const closed = await created.value.close();
+              if (!closed.ok) failures.push({ ...closed.failure, message: `${engine}: ${closed.failure.message}` });
+            } catch (error) {
+              failures.push({
+                stage: "browser-setup", code: "browser-cleanup-failed",
+                message: `${engine}: ${error instanceof Error ? error.message : "internal adapter operation failed"}`,
+                target: null, device: null, rule: null,
+              });
+            }
           }
-          return failure === null ? boundarySuccess(undefined) : boundaryFailure(failure);
+          return failures;
         },
       });
     },

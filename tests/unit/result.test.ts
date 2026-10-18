@@ -135,8 +135,8 @@ function dependencies(options: DependencyOptions = {}): CheckDependencies<string
         },
         async close() {
           return options.closeFailure === undefined
-            ? boundarySuccess(undefined)
-            : boundaryFailure(options.closeFailure);
+            ? []
+            : [options.closeFailure];
         },
       });
     },

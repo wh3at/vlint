@@ -446,7 +446,7 @@ test("live browser counts below a per-case minimum produce incomplete exit 2", a
           if (!opened.ok) return opened;
           return boundarySuccess({ ...opened.value, actualUrl: opened.value.page.url() });
         },
-        close: async () => boundarySuccess(undefined),
+        close: async () => [],
       }),
       evaluate: async (page) => measureRule(page, audit, page.url(), (guarded) => evaluateTabLabelSingleLine(guarded, audit.rules[0]!, audit.name)),
     },
@@ -485,7 +485,7 @@ test("an interrupt after browser arrival reports the observed URL and one run-le
         launch: async () => boundarySuccess({
           execution: executionFixture,
           openCase: async (item, signal) => browser.acquireCase(item, signal),
-          close: async () => boundarySuccess(undefined),
+          close: async () => [],
         }),
         evaluate: async (page) => measureRule(page, audit, page.url(), (guarded) => evaluatePageHorizontalOverflow(guarded, rule, audit.name)),
       },

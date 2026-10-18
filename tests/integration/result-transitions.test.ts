@@ -142,8 +142,8 @@ function dependencies(options: DepOptions = {}): CheckDependencies<string> {
         },
         async close() {
           return options.closeFailure === undefined
-            ? boundarySuccess(undefined)
-            : boundaryFailure(options.closeFailure);
+            ? []
+            : [options.closeFailure];
         },
       });
     },
@@ -522,7 +522,7 @@ function concurrencyHarness(options: HarnessOptions = {}) {
           });
         },
         async close() {
-          return options.closeFailure === undefined ? boundarySuccess(undefined) : boundaryFailure(options.closeFailure);
+          return options.closeFailure === undefined ? [] : [options.closeFailure];
         },
       });
     },
