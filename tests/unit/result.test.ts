@@ -1,3 +1,4 @@
+import { desktopEnvironment, executionFixture } from "../fixtures/environments";
 import { describe, expect, test } from "bun:test";
 import type {
   EffectiveAuditCase,
@@ -71,6 +72,7 @@ function makeCase(t: EffectiveTarget): EffectiveAuditCase {
     name: t.name,
     url: t.url,
     deviceName: "desktop",
+    environment: desktopEnvironment,
     viewport: t.viewport,
     screen: t.viewport,
     deviceScaleFactor: t.deviceScaleFactor,
@@ -90,6 +92,7 @@ function plan(targetNames: readonly string[], rules: readonly EffectiveRule[], d
   const targets = targetNames.map((name) => target(name, rules, disabled[name] ?? []));
   return {
     rules,
+    environments: [desktopEnvironment],
     targets,
     cases: targets.map(makeCase),
   };
@@ -116,7 +119,7 @@ function dependencies(options: DependencyOptions = {}): CheckDependencies<string
     async launch() {
       if (options.launchFailure !== undefined) return boundaryFailure(options.launchFailure);
       return boundarySuccess({
-        browserVersion: "149.0.7827.55",
+        execution: executionFixture,
         async openCase(item) {
           const failure = options.openFailure?.[item.name];
           if (failure !== undefined) return boundaryFailure(failure);
@@ -132,8 +135,8 @@ function dependencies(options: DependencyOptions = {}): CheckDependencies<string
         },
         async close() {
           return options.closeFailure === undefined
-            ? boundarySuccess(undefined)
-            : boundaryFailure(options.closeFailure);
+            ? []
+            : [options.closeFailure];
         },
       });
     },
@@ -250,7 +253,7 @@ describe("orchestrator result model", () => {
     expect(firstFailure(result)).toMatchObject({ target: "broken", rule: null });
   });
 
-  test("keeps evaluator facts and marks mixed attempted/not-executed cases partial across all cases", async () => {
+  test("keeps evaluator facts and continues later rules after rule-specific failures across all cases", async () => {
     const rules = [rule("first"), rule("fails"), rule("later")];
     const result = await runResolvedCheck(
       plan(["a", "b"], rules),
@@ -277,10 +280,9 @@ describe("orchestrator result model", () => {
       }),
       { toolVersion: "0.1.0" },
     );
-    // collect-all: both cases run; the failing rule makes each case partial.
-    expect(result.cases.map((item) => item.status)).toEqual(["partial", "partial"]);
-    expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "not-executed"]);
-    expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "not-executed"]);
+    expect(result.cases.map((item) => item.status)).toEqual(["failed", "failed"]);
+    expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "clean"]);
+    expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "clean"]);
     expect(result.cases[0]?.rules[1]).toMatchObject({ elementsInspected: 2, violations: [{ text: "observed-before-failure" }] });
     expect(firstFailure(result)).toMatchObject({ target: "a", rule: "fails" });
   });
@@ -309,15 +311,14 @@ describe("orchestrator result model", () => {
       }),
       { toolVersion: "0.1.0" },
     );
-    // collect-all: the second case runs and its failing rule fails too.
-    expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["disabled", "failed", "not-executed"]);
-    expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["disabled", "failed", "not-executed"]);
+    expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["disabled", "failed", "clean"]);
+    expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["disabled", "failed", "clean"]);
     expect(result.summary.ruleEvaluations).toEqual({
-      clean: 0,
+      clean: 2,
       violations: 0,
       failed: 2,
       disabled: 2,
-      notExecuted: 2,
+      notExecuted: 0,
     });
   });
 
@@ -651,11 +652,7 @@ describe("result contracts", () => {
     const result: RunResult = {
       status: "incomplete",
       tool: { name: "vlint", version: "0.4.1" },
-      environment: {
-        platform: "linux",
-        arch: "x64",
-        browser: { name: "chromium", version: null },
-      },
+      execution: executionFixture,
       summary: {
         targets: { resolved: 0 },
         cases: { resolved: 0, complete: 0, partial: 0, failed: 0, notExecuted: 0 },
@@ -677,11 +674,7 @@ describe("result contracts", () => {
     const result: RunResult = {
       status: "violations",
       tool: { name: "vlint", version: "0.4.1" },
-      environment: {
-        platform: "linux",
-        arch: "x64",
-        browser: { name: "chromium", version: "149.0.0.0" },
-      },
+      execution: executionFixture,
       summary: {
         targets: { resolved: 1 },
         cases: { resolved: 1, complete: 1, partial: 0, failed: 0, notExecuted: 0 },
@@ -696,13 +689,8 @@ describe("result contracts", () => {
           target: { name: "settings", url: "https://example.com/settings" },
           device: {
             name: "desk",
-            viewport: { width: 1280, height: 720 },
-            screen: { width: 1280, height: 720 },
-            deviceScaleFactor: 1,
-            isMobile: false,
-            hasTouch: false,
-            userAgent: null,
           },
+          environment: desktopEnvironment.name,
           locale: "en-US",
           timezoneId: "UTC",
           status: "complete",

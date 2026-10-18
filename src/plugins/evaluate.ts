@@ -25,6 +25,7 @@ export interface PluginBrowserContext {
     readonly name: string;
     readonly url: string;
   };
+  readonly environment: Pick<EffectiveAuditCase["environment"], "name" | "platform" | "browser">;
   readonly device: {
     readonly name: string;
     readonly viewport: { readonly width: number; readonly height: number };
@@ -68,6 +69,11 @@ function buildContextForRule(rule: EffectiveLocalRule, auditCase: EffectiveAudit
   return {
     settings: { ...rule.settings },
     target: { name: auditCase.name, url: auditCase.url },
+    environment: {
+      name: auditCase.environment.name,
+      platform: auditCase.environment.platform,
+      browser: auditCase.environment.browser,
+    },
     device: {
       name: auditCase.deviceName,
       viewport: auditCase.viewport,

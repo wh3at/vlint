@@ -1,5 +1,5 @@
 import type { RunResult } from "../contracts/result";
-import { publishResult } from "./publish";
+import { summarizeResult } from "./summary";
 
 const BIDI_CONTROLS: Record<number, true> = {
   0x061c: true,
@@ -43,30 +43,12 @@ function failureLine(failure: {
   readonly device: string | null;
   readonly rule: string | null;
   readonly actualUrl?: string;
-  readonly browserDiagnostic?: {
-    readonly status: string;
-    readonly requirements: {
-      readonly revision: string;
-      readonly cacheRoot: string;
-    };
-    readonly detectedRevisions: readonly {
-      readonly revision: string;
-    }[];
-  };
 }): string {
-  let line = `failure ${failure.stage}/${failure.code} target=${escapeNullable(failure.target)} device=${escapeNullable(failure.device)} rule=${escapeNullable(failure.rule)}${failure.actualUrl === undefined ? "" : ` actualUrl=${escapeTerminal(failure.actualUrl)}`}: ${escapeTerminal(failure.message)}`;
-  if (failure.browserDiagnostic !== undefined) {
-    const diag = failure.browserDiagnostic;
-    const revisions = diag.detectedRevisions.length > 0
-      ? ` revisions=${escapeTerminal(diag.detectedRevisions.map((e) => e.revision).join(","))}`
-      : "";
-    line += `\n  browser status=${escapeTerminal(diag.status)} revision=${escapeTerminal(diag.requirements.revision)} cache=${escapeTerminal(diag.requirements.cacheRoot)}${revisions}`;
-  }
-  return line;
+  return `failure ${failure.stage}/${failure.code} target=${escapeNullable(failure.target)} device=${escapeNullable(failure.device)} rule=${escapeNullable(failure.rule)}${failure.actualUrl === undefined ? "" : ` actualUrl=${escapeTerminal(failure.actualUrl)}`}: ${escapeTerminal(failure.message)}`;
 }
 
 export function renderTerminal(result: RunResult): string {
-  const published = publishResult(result);
+  const published = summarizeResult(result);
   const lines = [
     `vlint ${escapeTerminal(published.tool.version)}: ${published.status}`,
     `targets resolved=${published.summary.targets.resolved}`,
@@ -74,9 +56,15 @@ export function renderTerminal(result: RunResult): string {
     `rules clean=${published.summary.ruleEvaluations.clean} violations=${published.summary.ruleEvaluations.violations} failed=${published.summary.ruleEvaluations.failed} disabled=${published.summary.ruleEvaluations.disabled} not-executed=${published.summary.ruleEvaluations.notExecuted}`,
     `elements=${published.summary.elementsInspected} violations=${published.summary.violations} failures=${published.summary.executionFailures}`,
   ];
-  for (const caseResult of published.cases) {
+  for (const row of published.environmentRules) {
+    lines.push(`environment=${escapeTerminal(row.environment)} rule=${escapeTerminal(row.rule)} executions=${row.executions} elements=${row.elementsInspected} clean=${row.clean} violations=${row.violations} failed=${row.failed} disabled=${row.disabled} not-executed=${row.notExecuted}`);
+  }
+  for (const engine of published.executionDiagnostics?.engines ?? []) {
+    lines.push(`engine=${escapeTerminal(engine.engine)} expected=${escapeNullable(engine.expectedVersion)} obtained=${escapeNullable(engine.obtainedVersion)} source=${escapeNullable(engine.versionSource)} revision=${escapeTerminal(engine.revision)} diagnostic=${escapeNullable(engine.diagnostic)}`);
+  }
+  for (const caseResult of published.diagnostics) {
     lines.push(
-      `case target=${escapeTerminal(caseResult.target.name)} device=${escapeTerminal(caseResult.device.name)}: ${caseResult.status} url=${escapeTerminal(caseResult.target.url)} actualUrl=${escapeNullable(caseResult.actualUrl ?? null)} viewport=${caseResult.device.viewport.width}x${caseResult.device.viewport.height}@${caseResult.device.deviceScaleFactor}`,
+      `case target=${escapeTerminal(caseResult.target.name)} environment=${escapeTerminal(caseResult.environment)} device=${escapeTerminal(caseResult.device.name)} url=${escapeTerminal(caseResult.target.url)} actualUrl=${escapeNullable(caseResult.actualUrl)}`,
     );
     for (const rule of caseResult.rules) {
       lines.push(

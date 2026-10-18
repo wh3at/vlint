@@ -1,3 +1,4 @@
+import { desktopEnvironment, executionFixture } from "../fixtures/environments";
 import { chromium, selectors, type Browser } from "playwright";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createBrowserRunScope, type BrowserRunScope } from "../../src/browser/lifecycle";
@@ -24,6 +25,7 @@ function auditCase(url: string, options: { allowedUrls?: readonly string[]; read
   return {
     name: "page", url, ...(options.allowedUrls === undefined ? {} : { allowedUrls: options.allowedUrls }),
     deviceName: "desktop", viewport: { width: 800, height: 600 }, screen: { width: 800, height: 600 },
+    environment: desktopEnvironment,
     deviceScaleFactor: 1, isMobile: false, hasTouch: false, userAgent: null,
     locale: "en-US", timezoneId: "UTC", timeoutMs: 5000, browserState: null,
     readyCondition: options.ready === undefined ? null : { selector: options.ready, state: "visible" },
@@ -86,9 +88,7 @@ beforeAll(async () => {
   }), { contentScript: false });
   server = startFixtureServer();
   pages = startPageServer();
-  const version = findManagedBrowser().browserVersion;
   const launched = await createBrowserRunScope({
-    versionProbe: () => ({ exitCode: 0, timedOut: false, stdout: `Google Chrome for Testing ${version}` }),
     launch: async () => {
       nativeBrowser = await chromium.launch({ headless: true, executablePath: findManagedBrowser().executablePath });
       return nativeBrowser;
@@ -437,16 +437,16 @@ test("an evaluator error is rethrown when the final boundary is satisfied", asyn
 test("live browser counts below a per-case minimum produce incomplete exit 2", async () => {
   const audit = { ...auditCase(`${server.url}/`), rules: [{ name: "tabs", type: "tab-label-single-line" as const, enabled: true, additionalCandidateSelectors: [], excludeSelectors: [], labelSelector: null, minimumInspected: 2 }] };
   const result = await runResolvedCheck(
-    { targets: [{ ...audit, viewport: audit.viewport, deviceScaleFactor: 1 }], cases: [audit], rules: audit.rules },
+    { environments: [desktopEnvironment], targets: [{ ...audit, viewport: audit.viewport, deviceScaleFactor: 1 }], cases: [audit], rules: audit.rules },
     {
       launch: async () => boundarySuccess({
-        browserVersion: browser.browserVersion,
+        execution: executionFixture,
         openCase: async (item) => {
           const opened = await browser.acquireCase(item);
           if (!opened.ok) return opened;
           return boundarySuccess({ ...opened.value, actualUrl: opened.value.page.url() });
         },
-        close: async () => boundarySuccess(undefined),
+        close: async () => [],
       }),
       evaluate: async (page) => measureRule(page, audit, page.url(), (guarded) => evaluateTabLabelSingleLine(guarded, audit.rules[0]!, audit.name)),
     },
@@ -480,12 +480,12 @@ test("an interrupt after browser arrival reports the observed URL and one run-le
   const controller = new AbortController();
   try {
     const runP = runResolvedCheck(
-      { targets: [audit], cases: [audit], rules: audit.rules },
+      { environments: [desktopEnvironment], targets: [audit], cases: [audit], rules: audit.rules },
       {
         launch: async () => boundarySuccess({
-          browserVersion: browser.browserVersion,
+          execution: executionFixture,
           openCase: async (item, signal) => browser.acquireCase(item, signal),
-          close: async () => boundarySuccess(undefined),
+          close: async () => [],
         }),
         evaluate: async (page) => measureRule(page, audit, page.url(), (guarded) => evaluatePageHorizontalOverflow(guarded, rule, audit.name)),
       },

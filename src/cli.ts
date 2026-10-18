@@ -1,18 +1,14 @@
+import { persistReport } from "./output/report";
 import { Command, CommanderError, Option } from "commander";
 import vlintPackage from "../package.json";
 import { boundaryFailure, boundarySuccess } from "./contracts/failure";
 import { runBrowserInstall } from "./commands/browser-install";
 import { runBrowserStatus, type BrowserStatusOutput } from "./commands/browser-status";
 import { runCheckCommand } from "./commands/check";
-import { CONFIG_NAME, runInitCommand, type InitResult } from "./commands/init";
-import { runSetupCommand, type SetupResult } from "./commands/setup";
+import { CONFIG_NAME, ENVIRONMENT_CHOICES, runInitCommand, type InitResult } from "./commands/init";
 import {
-  isDependenciesInstallerWorkerInvocation,
-  isDependenciesSupervisorWorkerInvocation,
   isInstallerWorkerInvocation,
   isOopDownloaderInvocation,
-  runDependenciesInstallerWorkerMain,
-  runDependenciesSupervisorWorkerMain,
   runInstallerWorkerMain,
   runOopDownloaderMain,
 } from "./browser/install";
@@ -27,10 +23,9 @@ export type OutputFormat = "terminal" | "json";
 
 export type CliInvocation =
   | { readonly kind: "check"; readonly url: string | null; readonly format: OutputFormat }
-  | { readonly kind: "browser-install"; readonly force: boolean; readonly withDeps: boolean }
+  | { readonly kind: "browser-install"; readonly force: boolean }
   | { readonly kind: "browser-status"; readonly format: OutputFormat }
-  | { readonly kind: "init" }
-  | { readonly kind: "setup" };
+  | { readonly kind: "init"; readonly environments: readonly string[] };
 
 export type CliParseResult =
   | { readonly kind: "invocation"; readonly invocation: CliInvocation }
@@ -42,17 +37,15 @@ export type CliParseResult =
     };
 
 export interface BrowserInstallResult {
-  readonly revision: string;
   readonly action: "installed" | "already-present" | "reinstalled";
 }
 
 export interface CliRuntime {
   readonly version: string;
   check(url: string | null, signal?: AbortSignal): Promise<RunResult>;
-  install(force: boolean, withDeps: boolean, signal?: AbortSignal): Promise<BoundaryResult<BrowserInstallResult>>;
+  install(force: boolean, signal?: AbortSignal): Promise<BoundaryResult<BrowserInstallResult>>;
   status(format: "terminal" | "json", signal?: AbortSignal): Promise<BoundaryResult<BrowserStatusOutput>>;
-  init(signal?: AbortSignal): Promise<BoundaryResult<InitResult>>;
-  setup(signal?: AbortSignal): Promise<BoundaryResult<SetupResult>>;
+  init(signal?: AbortSignal, environments?: readonly string[]): Promise<BoundaryResult<InitResult>>;
 }
 
 export interface CliIo {
@@ -151,17 +144,15 @@ function buildCliProgram(version: string, rawArgs: readonly string[]): {
       selected = { kind: "check", url, format: options.format };
     });
 
-  const browser = program.command("browser").description("Manage the pinned Chromium browser.");
+  const browser = program.command("browser").description("Manage Chromium, Firefox, and WebKit.");
   browser
     .command("install")
-    .description("Install or repair the pinned Chromium browser.")
-    .option("--force", "Repair or reinstall the browser payload.")
-    .option("--with-deps", "Install Ubuntu system dependencies first.")
-    .action((options: { force?: boolean; withDeps?: boolean }) => {
+    .description("Prepare or repair all three browsers and OS dependencies using Playwright.")
+    .option("--force", "Repair or reinstall all browser payloads.")
+    .action((options: { force?: boolean }) => {
       selected = {
         kind: "browser-install",
         force: options.force === true,
-        withDeps: options.withDeps === true,
       };
     });
   browser
@@ -178,16 +169,11 @@ function buildCliProgram(version: string, rawArgs: readonly string[]): {
 
   program
     .command("init")
-    .description(`Create ${CONFIG_NAME}.`)
-    .action(() => {
-      selected = { kind: "init" };
-    });
-
-  program
-    .command("setup")
-    .description("Create config if needed and install the browser.")
-    .action(() => {
-      selected = { kind: "setup" };
+    .description(`Create ${CONFIG_NAME} with explicit environment selections.`)
+    .option("--environment <platform:browser>", "Select an environment (repeatable).", (value: string, previous: string[]) => [...previous, value], [])
+    .addHelpText("after", `\nChoices:\n${ENVIRONMENT_CHOICES.map((choice) => `  ${choice}`).join("\n")}\n\nExamples:\n  vlint init --environment windows:chromium\n  vlint init --environment macos:webkit --environment iphone:webkit\n\nWithout flags, a terminal prompts for platform then browser.\n`)
+    .action((options: { environment: string[] }) => {
+      selected = { kind: "init", environments: options.environment };
     });
 
   return { program, stdout, stderr, invocation: () => selected };
@@ -263,7 +249,7 @@ export async function runCli(
   }
   const invocation = parsed.invocation;
   if (invocation.kind === "browser-install") {
-    const installed = await runtime.install(invocation.force, invocation.withDeps, signal);
+    const installed = await runtime.install(invocation.force, signal);
     if (!installed.ok) {
       io.stderr(
         `vlint: ${installed.failure.code}: ${escapeTerminal(installed.failure.message)}\n`,
@@ -271,7 +257,7 @@ export async function runCli(
       return 2;
     }
     io.stdout(
-      `vlint browser: chromium ${escapeTerminal(installed.value.revision)} ready (${installed.value.action})\n`,
+      `vlint browser: chromium, firefox, webkit ready (${installed.value.action})\n`,
     );
     return 0;
   }
@@ -285,7 +271,7 @@ export async function runCli(
     return statusResult.value.ready ? 0 : 2;
   }
   if (invocation.kind === "init") {
-    const initialized = await runtime.init(signal);
+    const initialized = await runtime.init(signal, invocation.environments);
     if (!initialized.ok) {
       io.stderr(`vlint: ${initialized.failure.code}: ${escapeTerminal(initialized.failure.message)}\n`);
       return 2;
@@ -293,22 +279,11 @@ export async function runCli(
     io.stdout(`vlint init: created ${CONFIG_NAME}\n`);
     return 0;
   }
-  if (invocation.kind === "setup") {
-    const setup = await runtime.setup(signal);
-    if (!setup.ok) {
-      io.stderr(`vlint: ${setup.failure.code}: ${escapeTerminal(setup.failure.message)}\n`);
-      return 2;
-    }
-    const action = setup.value.browser.kind === "repaired"
-      ? "reinstalled"
-      : setup.value.browser.kind;
-    io.stdout(
-      `vlint setup: config ${setup.value.config}; chromium ${escapeTerminal(setup.value.browser.browser.revision)} ready (${action})\n`,
-    );
-    return 0;
-  }
-  const result = await runtime.check(invocation.url, signal);
+  const result = await persistReport(await runtime.check(invocation.url, signal));
   io.stdout(invocation.format === "json" ? renderJson(result) : renderTerminal(result));
+  if (invocation.format !== "json" && result.reportPath !== null) {
+    io.stdout(`reportPath: ${escapeTerminal(result.reportPath)}\n`);
+  }
   if (result.status === "incomplete") return 2;
   return result.status === "violations" ? 1 : 0;
 }
@@ -321,31 +296,22 @@ const productionRuntime: CliRuntime = {
   version: TOOL_VERSION,
   check: (url, signal) =>
     runCheckCommand(process.cwd(), url, process.env, TOOL_VERSION, signal),
-  init: (signal) => runInitCommand(process.cwd(), signal),
-  setup: (signal) => runSetupCommand(process.cwd(), process.env, signal),
-  async install(force, withDeps, signal) {
-    const args = [
-      ...(force ? ["--force"] : []),
-      ...(withDeps ? ["--with-deps"] : []),
-    ];
+  init: (signal, environments) => runInitCommand(process.cwd(), signal, environments),
+  async install(force, signal) {
+    const args = force ? ["--force"] : [];
     const command = await runBrowserInstall({
       args,
-      environment: process.env,
       ...(signal === undefined ? {} : { signal }),
     });
     if (!command.ok) return boundaryFailure(command.failure);
     const action =
       command.outcome.kind === "repaired" ? "reinstalled" : command.outcome.kind;
-    return boundarySuccess({
-      revision: command.outcome.browser.revision,
-      action,
-    });
+    return boundarySuccess({ action });
   },
   status: (format, signal) =>
     Promise.resolve(
       runBrowserStatus({
         format,
-        environment: process.env,
         ...(signal !== undefined ? { signal } : {}),
       }),
     ),
@@ -373,11 +339,7 @@ async function runProductionCli(): Promise<0 | 1 | 2> {
 }
 
 if (import.meta.main) {
-  if (isDependenciesSupervisorWorkerInvocation(process.argv)) {
-    await runDependenciesSupervisorWorkerMain();
-  } else if (isDependenciesInstallerWorkerInvocation(process.argv)) {
-    await runDependenciesInstallerWorkerMain();
-  } else if (isInstallerWorkerInvocation(process.argv)) {
+  if (isInstallerWorkerInvocation(process.argv)) {
     await runInstallerWorkerMain(process.argv);
   } else if (isPluginLoaderWorkerInvocation(process.argv)) {
     await runPluginLoaderWorkerMain(process.argv);

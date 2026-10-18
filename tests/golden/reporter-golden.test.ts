@@ -1,3 +1,4 @@
+import { executionFixture } from "../fixtures/environments";
 import { describe, expect, test } from "bun:test";
 import type { RunResult } from "../../src/contracts/result";
 import { isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
@@ -7,32 +8,16 @@ import { renderTerminal } from "../../src/output/terminal";
 
 const MACBOOK = {
   name: "MacBook Air 13",
-  viewport: { width: 1470, height: 956 },
-  screen: { width: 1470, height: 956 },
-  deviceScaleFactor: 2,
-  isMobile: false,
-  hasTouch: false,
-  userAgent: null,
 } as const;
 
 const IPHONE = {
   name: "iPhone 17",
-  viewport: { width: 402, height: 681 },
-  screen: { width: 402, height: 874 },
-  deviceScaleFactor: 3,
-  isMobile: true,
-  hasTouch: true,
-  userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
 } as const;
 
 const violations: RunResult = {
   status: "violations",
   tool: { name: "vlint", version: "0.1.0" },
-  environment: {
-    platform: "linux",
-    arch: "x64",
-    browser: { name: "chromium", version: "149.0.7827.55" },
-  },
+  execution: executionFixture,
   summary: {
     targets: { resolved: 2 },
     cases: { resolved: 4, complete: 4, partial: 0, failed: 0, notExecuted: 0 },
@@ -49,6 +34,7 @@ const violations: RunResult = {
         url: "https://example.com/settings?token=secret&token=second#private",
       },
       device: MACBOOK,
+      environment: "windows-chromium",
       locale: "en-US",
       timezoneId: "UTC",
       status: "complete",
@@ -81,6 +67,7 @@ const violations: RunResult = {
         url: "https://example.com/settings?token=secret&token=second#private",
       },
       device: IPHONE,
+      environment: "windows-chromium",
       locale: "en-US",
       timezoneId: "UTC",
       status: "complete",
@@ -110,6 +97,7 @@ const violations: RunResult = {
         url: "https://example.com/x?a=1&b=2",
       },
       device: MACBOOK,
+      environment: "windows-chromium",
       locale: "en-US",
       timezoneId: "UTC",
       status: "complete",
@@ -139,6 +127,7 @@ const violations: RunResult = {
         url: "https://example.com/x?a=1&b=2",
       },
       device: IPHONE,
+      environment: "windows-chromium",
       locale: "en-US",
       timezoneId: "UTC",
       status: "complete",
@@ -170,11 +159,7 @@ const violations: RunResult = {
 const incomplete: RunResult = {
   status: "incomplete",
   tool: { name: "vlint", version: "0.1.0" },
-  environment: {
-    platform: "linux",
-    arch: "x64",
-    browser: { name: "chromium", version: null },
-  },
+  execution: executionFixture,
   summary: {
     targets: { resolved: 1 },
     cases: { resolved: 2, complete: 1, partial: 0, failed: 1, notExecuted: 0 },
@@ -188,6 +173,7 @@ const incomplete: RunResult = {
     {
       target: { name: "only", url: "https://example.com/only" },
       device: MACBOOK,
+      environment: "windows-chromium",
       locale: "en-US",
       timezoneId: "UTC",
       status: "failed",
@@ -223,6 +209,7 @@ const incomplete: RunResult = {
     {
       target: { name: "only", url: "https://example.com/only" },
       device: IPHONE,
+      environment: "windows-chromium",
       locale: "en-US",
       timezoneId: "UTC",
       status: "complete",
@@ -302,10 +289,10 @@ describe("reporter golden output", () => {
     const rendered = renderJson(violations);
     expect(rendered.endsWith("\n")).toBe(true);
     expect(rendered.split("\n")).toHaveLength(2);
-    const parsed = JSON.parse(rendered) as RunResult;
-    expect(parsed.cases[0]?.target.url).toBe(violations.cases[0]?.target.url);
+    const parsed = JSON.parse(rendered) as { status: string; diagnostics: RunResult["cases"] };
+    expect(parsed.diagnostics[0]?.target.url).toBe(violations.cases[0]?.target.url);
     expect(
-      parsed.cases[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
+      parsed.diagnostics[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
     ).toBe("first\r\nsecond\u202e");
     expect(parsed.status).toBe("violations");
   });
@@ -322,15 +309,15 @@ describe("reporter golden output", () => {
 
   test("terminal renders target and device as separate escaped fields", () => {
     const rendered = renderTerminal(violations);
-    expect(rendered).toContain("case target=settings\\u{1b}]8;;https://attacker.invalid\\u{7} device=MacBook Air 13:");
-    expect(rendered).toContain("device=iPhone 17:");
-    expect(rendered).toContain("case target=second device=MacBook Air 13:");
+    expect(rendered).toContain("case target=settings\\u{1b}]8;;https://attacker.invalid\\u{7} environment=windows-chromium device=MacBook Air 13 url=");
+    expect(rendered).not.toContain("device=iPhone 17 url=");
+    expect(rendered).not.toContain("case target=second");
   });
 
   test("terminal preserves the URL and case failure in the incomplete matrix", () => {
     const rendered = renderTerminal(incomplete);
-    expect(rendered).toContain("case target=only device=MacBook Air 13: failed url=https://example.com/only actualUrl=- viewport=1470x956@2");
-    expect(rendered).toContain("case target=only device=iPhone 17: complete url=https://example.com/only actualUrl=- viewport=402x681@3");
+    expect(rendered).toContain("case target=only environment=windows-chromium device=MacBook Air 13 url=https://example.com/only actualUrl=-");
+    expect(rendered).not.toContain("device=iPhone 17 url=");
     expect(rendered).toContain("failure navigation/navigation-http-status target=only device=MacBook Air 13 rule=-");
     expect(hasRawControlOrBidi(rendered)).toBe(false);
   });

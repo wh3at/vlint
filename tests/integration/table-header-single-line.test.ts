@@ -143,7 +143,7 @@ describe("table-header-single-line semantic measurement", () => {
       <style>.generated::after { content: "★"; }</style>
       <div id="generated" class="generated" role="columnheader">Price</div>
       <div id="wrapped" role="columnheader" style="width:50px">Review score</div>`);
-    expect(outcome.failure).toBeNull();
+    expect(outcome.failure?.code).toBe("generated-content-unsupported");
     expect(outcome.facts.elementsInspected).toBe(1);
     expect(outcome.facts.candidateDiagnostics).toEqual([
       { kind: "generated-content-unmeasured", locator: "#generated" },

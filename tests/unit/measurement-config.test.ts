@@ -1,8 +1,10 @@
+import { withEnvironments } from "../fixtures/environments";
 import { afterEach, expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { parseConfig } from "../../src/config/schema";
+import { parseConfig as parseRawConfig } from "../../src/config/schema";
+const parseConfig = (value: unknown) => parseRawConfig(withEnvironments(value));
 import { loadConfig } from "../../src/config/load";
 import { resolveAdHocTarget, resolveTargets } from "../../src/config/merge";
 import { resolveCheckPlan } from "../../src/commands/check";
@@ -15,7 +17,7 @@ const directories: string[] = [];
 async function config(value: unknown): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "vlint-minimums-"));
   directories.push(directory);
-  await writeFile(join(directory, "vlint.config.json"), JSON.stringify(value));
+  await writeFile(join(directory, "vlint.config.json"), JSON.stringify(withEnvironments(value)));
   return directory;
 }
 
@@ -69,7 +71,7 @@ async function commandConfig(base: Record<string, unknown>, targets: unknown): P
   const executable = join(directory, "provider.sh");
   await writeFile(executable, `#!/bin/sh\necho '${JSON.stringify({ targets })}'\n`);
   await chmod(executable, 0o755);
-  await writeFile(join(directory, "vlint.config.json"), JSON.stringify({ ...base, provider: { type: "command", executable } }));
+  await writeFile(join(directory, "vlint.config.json"), JSON.stringify(withEnvironments({ ...base, provider: { type: "command", executable } })));
   return directory;
 }
 

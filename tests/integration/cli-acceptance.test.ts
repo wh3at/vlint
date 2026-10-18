@@ -1,3 +1,4 @@
+import { withEnvironments } from "../fixtures/environments";
 import { afterEach, describe, expect, test } from "bun:test";
 import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -7,7 +8,6 @@ import { boundarySuccess } from "../../src/contracts/failure";
 import { runCli, type BrowserInstallResult, type CliIo, type CliRuntime } from "../../src/cli";
 import { runCheckCommand } from "../../src/commands/check";
 import { runInitCommand } from "../../src/commands/init";
-import type { SetupResult } from "../../src/commands/setup";
 import { loadConfig } from "../../src/config/load";
 
 /**
@@ -37,7 +37,7 @@ async function temporaryDirectory(): Promise<string> {
 }
 
 async function writeConfig(directory: string, value: unknown): Promise<void> {
-  await writeFile(join(directory, "vlint.config.json"), typeof value === "string" ? value : JSON.stringify(value));
+  await writeFile(join(directory, "vlint.config.json"), typeof value === "string" ? value : JSON.stringify(withEnvironments(value)));
 }
 
 const MINIMAL_DEVICE = {
@@ -73,23 +73,11 @@ function runtimeFor(cwd: string, version = "0.1.0"): CliRuntime {
   return {
     version,
     check: (url, signal) => runCheckCommand(cwd, url, process.env, version, signal),
-    init: () => runInitCommand(cwd),
-    setup: async () => boundarySuccess<SetupResult>({
-      config: "already-present",
-      browser: {
-        kind: "already-present",
-        browser: {
-          name: "chromium-headless-shell",
-          revision: "test",
-          browserVersion: "test",
-          executablePath: "/test/chromium",
-        },
-      },
-    }),
+    init: (signal, environments) => runInitCommand(cwd, signal, environments),
     // No scenario in this file invokes `browser install` or `browser status`;
     // the fakes exist only to satisfy the CliRuntime contract deterministically.
     install: async () =>
-      boundarySuccess<BrowserInstallResult>({ revision: "test", action: "already-present" }),
+      boundarySuccess<BrowserInstallResult>({ action: "already-present" }),
     status: async () =>
       boundarySuccess({ output: "browser status: ready\n", ready: true }),
   };
@@ -164,7 +152,9 @@ describe("valid check boundary: exactly one stdout result, no stderr", () => {
     const result = jsonResult(output);
     expect(result.status).toBe("incomplete");
     expect(result.failures[0]).toMatchObject({ stage: "config", code: "config-not-found" });
-    expect(result.cases).toEqual([]);
+    expect(result.cases).toBeUndefined();
+    const { reportPath } = JSON.parse(output.stdout[0]!);
+    expect(JSON.parse(await readFile(reportPath, "utf8")).cases).toEqual([]);
   });
 
   test("no config and no url renders the terminal view", async () => {
@@ -172,7 +162,8 @@ describe("valid check boundary: exactly one stdout result, no stderr", () => {
     const { exit, output } = await runCheck(cwd, ["check"]);
     expect(exit).toBe(2);
     expect(output.stderr).toEqual([]);
-    expect(output.stdout).toHaveLength(1);
+    expect(output.stdout).toHaveLength(2);
+    expect(output.stdout[1]).toContain("reportPath:");
     const rendered = output.stdout[0]!;
     expect(rendered.endsWith("\n")).toBe(true);
     expect(rendered).toContain("vlint 0.1.0: incomplete");
@@ -241,7 +232,7 @@ describe("provider failure matrix maps to exit 2 with the correct code", () => {
 describe("init boundary: non-destructive standard config generation", () => {
   test("creates a stable config on stdout only with exit 0 (AE1)", async () => {
     const cwd = await temporaryDirectory();
-    const { exit, output } = await runCheck(cwd, ["init"]);
+    const { exit, output } = await runCheck(cwd, ["init", "--environment", "macos:chromium", "--environment", "iphone:webkit"]);
     expect(exit).toBe(0);
     expect(output.stdout).toEqual(["vlint init: created vlint.config.json\n"]);
     expect(output.stderr).toEqual([]);
@@ -264,7 +255,7 @@ describe("init boundary: non-destructive standard config generation", () => {
     const prior = "prior-bytes";
     await writeFile(configPath, prior);
 
-    const { exit, output } = await runCheck(cwd, ["init"]);
+    const { exit, output } = await runCheck(cwd, ["init", "--environment", "windows:chromium"]);
     expect(exit).toBe(2);
     expect(output.stdout).toEqual([]);
     expect(output.stderr).toHaveLength(1);

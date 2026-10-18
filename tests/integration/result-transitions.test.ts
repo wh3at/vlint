@@ -1,3 +1,4 @@
+import { desktopEnvironment, executionFixture } from "../fixtures/environments";
 import { describe, expect, test } from "bun:test";
 import type {
   EffectiveAuditCase,
@@ -61,6 +62,7 @@ function auditCase(item: EffectiveTarget): EffectiveAuditCase {
     name: item.name,
     url: item.url,
     deviceName: "desktop",
+    environment: desktopEnvironment,
     viewport: item.viewport,
     screen: item.viewport,
     deviceScaleFactor: item.deviceScaleFactor,
@@ -82,7 +84,7 @@ function plan(
   disabled: Readonly<Record<string, readonly string[]>> = {},
 ): ResolvedCheckPlan {
   const targets = targetNames.map((name) => target(name, rules, disabled[name] ?? []));
-  return { rules, targets, cases: targets.map(auditCase) };
+  return { environments: [desktopEnvironment], rules, targets, cases: targets.map(auditCase) };
 }
 
 const cleanOutcome: RuleEvaluationOutcome = {
@@ -126,7 +128,7 @@ function dependencies(options: DepOptions = {}): CheckDependencies<string> {
     async launch() {
       if (options.launchFailure !== undefined) return boundaryFailure(options.launchFailure);
       return boundarySuccess({
-        browserVersion: "149.0.7827.55",
+        execution: executionFixture,
         async openCase(item) {
           const failure = options.openFailure?.[item.name];
           if (failure !== undefined) return boundaryFailure(failure);
@@ -140,8 +142,8 @@ function dependencies(options: DepOptions = {}): CheckDependencies<string> {
         },
         async close() {
           return options.closeFailure === undefined
-            ? boundarySuccess(undefined)
-            : boundaryFailure(options.closeFailure);
+            ? []
+            : [options.closeFailure];
         },
       });
     },
@@ -268,7 +270,7 @@ describe("result-transition matrix reconciles and maps exit codes", () => {
     expect(allFailures(result)).toContainEqual(expect.objectContaining({ target: "broken", device: "desktop", rule: null }));
   });
 
-  test("pair failure after facts marks the case partial and stops later rules in that case", async () => {
+  test("pair failure retains facts and continues independent later rules", async () => {
     const rules = [rule("ok"), rule("fails"), rule("later")];
     const resolved = plan(["a", "b"], rules);
     const result = await run(resolved, {
@@ -276,10 +278,9 @@ describe("result-transition matrix reconciles and maps exit codes", () => {
         item.name === "fails" ? failureOutcome("rule-evaluation", "rule-script-failed") : cleanOutcome,
     });
     reconcile(result, resolved);
-    // collect-all: both cases run; the failing rule makes each case partial.
-    expect(result.cases.map((item) => item.status)).toEqual(["partial", "partial"]);
-    expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "not-executed"]);
-    expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "not-executed"]);
+    expect(result.cases.map((item) => item.status)).toEqual(["failed", "failed"]);
+    expect(result.cases[0]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "clean"]);
+    expect(result.cases[1]?.rules.map((item) => item.status)).toEqual(["clean", "failed", "clean"]);
     expect(allFailures(result)).toContainEqual(expect.objectContaining({ target: "a", device: "desktop", rule: "fails" }));
   });
 
@@ -392,7 +393,7 @@ describe("combination transitions", () => {
     expect(allFailures(result)).toContainEqual(expect.objectContaining({ target: "down", device: "desktop", rule: null }));
   });
 
-  test("disabled rule before a failing rule keeps disabled distinct from not-executed", async () => {
+  test("disabled rule stays disabled while independent rules continue after failure", async () => {
     const rules = [rule("skip"), rule("fails"), rule("tail")];
     const resolved = plan(["a"], rules, { a: ["skip"] });
     const result = await run(resolved, {
@@ -403,15 +404,15 @@ describe("combination transitions", () => {
     expect(result.cases[0]?.rules.map((item) => item.status)).toEqual([
       "disabled",
       "failed",
-      "not-executed",
+      "clean",
     ]);
-    expect(result.cases[0]?.status).toBe("partial");
+    expect(result.cases[0]?.status).toBe("failed");
     expect(result.summary.ruleEvaluations).toEqual({
-      clean: 0,
+      clean: 1,
       violations: 0,
       failed: 1,
       disabled: 1,
-      notExecuted: 1,
+      notExecuted: 0,
     });
   });
 
@@ -437,7 +438,8 @@ describe("combination transitions", () => {
     // collect-all: each failure type lands on its own case; the unfailed case still completes.
     reconcile(result, resolved);
     expect(result.status).toBe("incomplete");
-    expect(result.cases.map((item) => item.status)).toEqual(["failed", "partial", "failed", "complete"]);
+    expect(result.cases.map((item) => item.status)).toEqual(["failed", "failed", "failed", "complete"]);
+    expect(result.cases[1]?.rules[1]?.status).toBe("clean");
     expect(allFailures(result)).toContainEqual(expect.objectContaining({ target: "nav", code: "navigation-network" }));
     expect(allFailures(result)).toContainEqual(expect.objectContaining({ target: "rulef", rule: "fails" }));
     expect(allFailures(result)).toContainEqual(expect.objectContaining({ target: "cleanf", code: "browser-cleanup-failed" }));
@@ -489,7 +491,7 @@ function concurrencyHarness(options: HarnessOptions = {}) {
     async launch() {
       if (options.launchFailure !== undefined) return boundaryFailure(options.launchFailure);
       return boundarySuccess({
-        browserVersion: "149.0.7827.55",
+        execution: executionFixture,
         async openCase(item, signal): Promise<BoundaryResult<{ page: string; close(): Promise<BoundaryResult<void>> }>> {
           if (signal?.aborted) {
             return boundaryFailure({
@@ -520,7 +522,7 @@ function concurrencyHarness(options: HarnessOptions = {}) {
           });
         },
         async close() {
-          return options.closeFailure === undefined ? boundarySuccess(undefined) : boundaryFailure(options.closeFailure);
+          return options.closeFailure === undefined ? [] : [options.closeFailure];
         },
       });
     },

@@ -20,10 +20,9 @@ describe("Commander CLI grammar", () => {
     [["check"], { kind: "check", url: null, format: "terminal" }],
     [["check", "--format=json", "--url", "https://example.com"], { kind: "check", url: "https://example.com", format: "json" }],
     [["check", "--format", "terminal", "--format", "json"], { kind: "check", url: null, format: "json" }],
-    [["browser", "install"], { kind: "browser-install", force: false, withDeps: false }],
-    [["browser", "install", "--force", "--with-deps"], { kind: "browser-install", force: true, withDeps: true }],
-    [["init"], { kind: "init" }],
-    [["setup"], { kind: "setup" }],
+    [["browser", "install"], { kind: "browser-install", force: false }],
+    [["browser", "install", "--force"], { kind: "browser-install", force: true }],
+    [["init"], { kind: "init", environments: [] }],
   ] as const)("accepts Commander-standard invocation %#", (args, expected) => {
     expect(invocation(args)).toEqual(expected);
   });
@@ -46,11 +45,10 @@ describe("Commander CLI grammar", () => {
   test.each([
     [["check", "--help"], "Usage: vlint check", "--format"],
     [["browser", "--help"], "Usage: vlint browser", "install"],
-    [["browser", "install", "-h"], "Usage: vlint browser install", "--with-deps"],
+    [["browser", "install", "-h"], "Usage: vlint browser install", "all three browsers"],
     [["init", "--help"], "Usage: vlint init", "Create vlint.config.json"],
-    [["setup", "--help"], "Usage: vlint setup", "install the browser"],
     [["help", "check"], "Usage: vlint check", "--format"],
-    [["browser", "help", "install"], "Usage: vlint browser install", "--with-deps"],
+    [["browser", "help", "install"], "Usage: vlint browser install", "all three browsers"],
   ] as const)("renders scoped help for %#", (args, usage, detail) => {
     const parsed = terminal(args);
     expect(parsed.exitCode).toBe(0);

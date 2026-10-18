@@ -1,3 +1,4 @@
+import { executionFixture } from "../fixtures/environments";
 import { describe, expect, test } from "bun:test";
 import type { RunResult } from "../../src/contracts/result";
 import { isLocalViolation, isTabLabelSingleLineViolation } from "../../src/contracts/evaluation";
@@ -7,11 +8,7 @@ import { escapeTerminal, renderTerminal } from "../../src/output/terminal";
 const result: RunResult = {
   status: "violations",
   tool: { name: "vlint", version: "0.1.0" },
-  environment: {
-    platform: "linux",
-    arch: "x64",
-    browser: { name: "chromium", version: "149.0.7827.55" },
-  },
+  execution: executionFixture,
   summary: {
     targets: { resolved: 1 },
     cases: { resolved: 1, complete: 1, partial: 0, failed: 0, notExecuted: 0 },
@@ -29,13 +26,8 @@ const result: RunResult = {
       },
       device: {
         name: "MacBook Air 13",
-        viewport: { width: 1470, height: 956 },
-        screen: { width: 1470, height: 956 },
-        deviceScaleFactor: 2,
-        isMobile: false,
-        hasTouch: false,
-        userAgent: null,
       },
+      environment: "windows-chromium",
       locale: "en-US",
       timezoneId: "UTC",
       status: "complete",
@@ -64,10 +56,10 @@ describe("output", () => {
     const second = renderJson(result);
     expect(first).toBe(second);
     expect(first.endsWith("\n")).toBe(true);
-    const parsed = JSON.parse(first) as RunResult;
-    expect(parsed.cases[0]?.target.url).toBe(result.cases[0]?.target.url);
+    const parsed = JSON.parse(first) as { diagnostics: RunResult["cases"] };
+    expect(parsed.diagnostics[0]?.target.url).toBe(result.cases[0]?.target.url);
     expect(
-      parsed.cases[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
+      parsed.diagnostics[0]?.rules[0]?.violations.filter(isTabLabelSingleLineViolation)[0]?.text,
     ).toBe("first\r\nsecond\u202e");
   });
 
@@ -195,8 +187,8 @@ describe("output", () => {
     };
 
     const terminal = renderTerminal(localResult);
-    const json = JSON.parse(renderJson(localResult)) as RunResult;
-    const violation = json.cases[0]?.rules[0]?.violations[0];
+    const json = JSON.parse(renderJson(localResult)) as { diagnostics: RunResult["cases"] };
+    const violation = json.diagnostics[0]?.rules[0]?.violations[0];
     if (!violation || !isLocalViolation(violation)) throw new Error("expected local violation");
 
     expect(terminal).toContain("message=duplicate horizontal spacing in content region");
@@ -324,8 +316,8 @@ describe("output", () => {
     expect(renderTerminal(tableResult)).toContain(
       "violation lines=2 tops=10.125,30.5 tolerance=1px source=native locator=#review\\nscore box=1,2,80,40 text=Review\\nscore",
     );
-    const parsed = JSON.parse(renderJson(tableResult)) as RunResult;
-    expect(parsed.cases[0]?.rules[0]?.candidateDiagnostics).toEqual([
+    const parsed = JSON.parse(renderJson(tableResult)) as { diagnostics: RunResult["cases"] };
+    expect(parsed.diagnostics[0]?.rules[0]?.candidateDiagnostics).toEqual([
       { kind: "excluded", locator: "#intentional", excludeSelector: ".allow-wrap" },
     ]);
   });

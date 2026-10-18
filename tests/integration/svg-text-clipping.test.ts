@@ -1,3 +1,4 @@
+import { withEnvironments } from "../fixtures/environments";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
 import { evaluateSvgTextClipping } from "../../src/rules/svg-text-clipping";
@@ -44,12 +45,13 @@ test("measures ink clipped by each SVG viewport edge including fully hidden text
 });
 
 test("maps viewBox and scaled text to multiple HTML padding-box clips", async () => {
-  await page.setContent(`<style>body{margin:0}svg{display:block;font:20px monospace;overflow:visible}</style>
+  await page.setContent(`<style>@font-face{font-family:FixtureMono;src:url(${server.url}/font.ttf)}body{margin:0}svg{display:block;font:20px FixtureMono;overflow:visible}</style>
     <div id="outer" style="width:130px;height:100px;overflow:hidden;border:5px solid;padding:10px">
       <div id="inner" style="width:100px;height:70px;overflow:clip;padding:5px;border:3px solid;transform:scale(1.5);transform-origin:0 0">
         <svg width="100" height="60" viewBox="0 0 50 30"><text id="scaled" x="45" y="15">MMMM</text></svg>
       </div>
     </div>`);
+  await page.evaluate(async () => { await document.fonts.ready; });
   const result = await evaluateSvgTextClipping(page, rule);
   expect(result.failure).toBeNull();
   expect(result.facts.elementsInspected).toBe(1);
@@ -136,7 +138,7 @@ test("default CLI evaluation reports clipping and target overrides preserve fail
   const device = { name: "desktop", viewport: { width: 800, height: 600 }, screen: { width: 800, height: 600 },
     deviceScaleFactor: 1, isMobile: false, hasTouch: false };
   const url = `${server.url}/svg-text-clipping.html`;
-  const save = async (extra: object) => Bun.write(join(directory, "vlint.config.json"), JSON.stringify({ devices: [device], ...extra }));
+  const save = async (extra: object) => Bun.write(join(directory, "vlint.config.json"), JSON.stringify(withEnvironments({ devices: [device], ...extra })));
   try {
     await save({});
     const result = await runCheckCommand(directory, url, {}, "test");

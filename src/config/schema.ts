@@ -1,3 +1,4 @@
+import { SUPPORTED_ENVIRONMENTS, type AuditEnvironment } from "../contracts/config";
 import type {
   CommandProviderConfig,
   CommandProviderOutput,
@@ -300,7 +301,7 @@ function deviceAt(value: unknown, path: string, rules: ReadonlyMap<string, RuleM
   const object = objectAt(value, path);
   exactKeys(
     object,
-    ["name", "viewport", "screen", "deviceScaleFactor", "isMobile", "hasTouch", "userAgent", "ruleMinimums"],
+    ["name", "viewport", "screen", "deviceScaleFactor", "isMobile", "hasTouch", "ruleMinimums"],
     path,
   );
   const result: DeviceProfile = {
@@ -312,10 +313,7 @@ function deviceAt(value: unknown, path: string, rules: ReadonlyMap<string, RuleM
     hasTouch: booleanAt(object.hasTouch, `${path}.hasTouch`),
   };
   const ruleMinimums = object.ruleMinimums === undefined ? {} : { ruleMinimums: minimumsAt(object.ruleMinimums, `${path}.ruleMinimums`, rules) };
-  if (object.userAgent === undefined) return { ...result, ...ruleMinimums };
-  const userAgent = stringAt(object.userAgent, `${path}.userAgent`);
-  if (userAgent.length === 0) issue(`${path}.userAgent`, "must not be empty");
-  return { ...result, ...ruleMinimums, userAgent };
+  return { ...result, ...ruleMinimums };
 }
 
 function devicesAt(value: unknown, path: string, rules: ReadonlyMap<string, RuleMetadata>): readonly DeviceProfile[] {
@@ -505,6 +503,32 @@ function failureFor(source: Source, message: string): Failure {
   };
 }
 
+function environmentsAt(value: unknown, devices: readonly DeviceProfile[]): readonly AuditEnvironment[] {
+  const path = "config.environments";
+  if (!Array.isArray(value) || value.length === 0) issue(path, "expected non-empty array");
+  const names = new Set<string>();
+  return value.map((item, index) => {
+    const at = `${path}[${index}]`;
+    const object = objectAt(item, at);
+    exactKeys(object, ["name", "platform", "browser", "devices"], at);
+    const name = nameAt(object.name, `${at}.name`);
+    if (names.has(name)) issue(at, `duplicate environment name: ${name}`);
+    names.add(name);
+    const platform = stringAt(object.platform, `${at}.platform`);
+    const browser = stringAt(object.browser, `${at}.browser`);
+    if (!Object.hasOwn(SUPPORTED_ENVIRONMENTS, `${platform}:${browser}`)) issue(at, "unsupported platform/browser combination");
+    const references = stringArrayAt(object.devices, `${at}.devices`);
+    if (references.length === 0) issue(`${at}.devices`, "expected non-empty array");
+    const seenReferences = new Set<string>();
+    for (const reference of references) {
+      if (!devices.some((device) => device.name === reference)) issue(`${at}.devices`, `unknown device: ${reference}`);
+      if (seenReferences.has(reference)) issue(`${at}.devices`, `duplicate device reference: ${reference}`);
+      seenReferences.add(reference);
+    }
+    return { name, platform, browser, devices: references } as AuditEnvironment;
+  });
+}
+
 function parseConfigBody(object: Record<string, unknown>): ParsedConfig {
   const rules = object.rules === undefined ? undefined : rulesAt(object.rules, "config.rules");
   const completeRules = rulesWithBuiltins(rules);
@@ -513,10 +537,11 @@ function parseConfigBody(object: Record<string, unknown>): ParsedConfig {
   const devices = devicesAt(object.devices, "config.devices", rulesByName);
   const config: {
     devices: readonly DeviceProfile[];
+    environments: readonly AuditEnvironment[];
     provider?: ProviderConfig;
     defaults?: TargetDefaults;
     rules?: readonly RuleInstance[];
-  } = { devices };
+  } = { devices, environments: environmentsAt(object.environments, devices) };
   if (object.provider !== undefined) config.provider = providerAt(object.provider, "config.provider", rulesByName);
   if (object.defaults !== undefined) config.defaults = defaultsAt(object.defaults, "config.defaults");
   if (rules !== undefined) config.rules = rules;
@@ -526,7 +551,7 @@ function parseConfigBody(object: Record<string, unknown>): ParsedConfig {
 export function parseConfig(value: unknown): BoundaryResult<ParsedConfig> {
   try {
     const object = objectAt(value, "config");
-    exactKeys(object, ["devices", "provider", "defaults", "rules"], "config");
+    exactKeys(object, ["devices", "environments", "provider", "defaults", "rules"], "config");
     return boundarySuccess(parseConfigBody(object));
   } catch (error) {
     const message = error instanceof SchemaIssue ? error.message : "config schema validation failed";

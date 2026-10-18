@@ -1,3 +1,4 @@
+import { withEnvironments } from "../fixtures/environments";
 import { existsSync } from "node:fs";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -38,11 +39,7 @@ const TEST_DEVICE = {
   hasTouch: false,
 } as const;
 
-/** Exact iPhone 17 user agent from Playwright 1.61.1 registry. */
-const IPHONE_UA =
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1";
 
-/** Standard MacBook Air 13" (M5) profile — matches vlint init output. */
 const MACBOOK_DEVICE = {
   name: "macbook-air-13-m5",
   viewport: { width: 1470, height: 956 },
@@ -52,7 +49,6 @@ const MACBOOK_DEVICE = {
   hasTouch: false,
 } as const;
 
-/** Standard iPhone 17 profile — matches vlint init output. */
 const IPHONE_DEVICE = {
   name: "iphone-17",
   viewport: { width: 402, height: 681 },
@@ -60,7 +56,6 @@ const IPHONE_DEVICE = {
   deviceScaleFactor: 3,
   isMobile: true,
   hasTouch: true,
-  userAgent: IPHONE_UA,
 } as const;
 
 const STANDARD_DEVICES = [MACBOOK_DEVICE, IPHONE_DEVICE] as const;
@@ -83,6 +78,16 @@ async function execBinary(args: readonly string[], cwd: string): Promise<Process
   return { exitCode, stdout, stderr };
 }
 
+async function readReport(stdout: string): Promise<RunResult> {
+  const summary = JSON.parse(stdout);
+  expect(summary.cases).toBeUndefined();
+  expect(summary.execution).toBeUndefined();
+  const report = JSON.parse(await readFile(summary.reportPath, "utf8")) as RunResult;
+  expect(report.status).toBe(summary.status);
+  expect(report.summary).toEqual(summary.summary);
+  return report;
+}
+
 async function tempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "vlint-accept-"));
   temporaryDirectories.push(dir);
@@ -92,13 +97,17 @@ async function tempDir(): Promise<string> {
 async function writeConfig(directory: string, value: unknown): Promise<void> {
   const content = typeof value === "string"
     ? value
-    : JSON.stringify({ devices: [TEST_DEVICE], ...(value as Record<string, unknown>) });
+    : JSON.stringify(withEnvironments({ devices: [TEST_DEVICE], ...(value as Record<string, unknown>) }));
   await writeFile(join(directory, "vlint.config.json"), content);
 }
 
 async function readConfigFile(directory: string): Promise<Record<string, unknown>> {
   const content = await readFile(join(directory, "vlint.config.json"), "utf8");
   return JSON.parse(content) as Record<string, unknown>;
+}
+
+function deviceFor(result: RunResult, index: number) {
+  return result.execution.devices.find((device) => device.name === result.cases[index]?.device.name)!;
 }
 
 function firstFailure(result: RunResult): RunResult["failures"][number] | undefined {
@@ -156,12 +165,12 @@ describe("compiled vlint binary acceptance", () => {
       expect(result.stdout.endsWith("\n")).toBe(true);
       expect(result.stdout.split("\n")).toHaveLength(2);
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.status).toBe("clean");
       expect(parsed.tool).toEqual({ name: "vlint", version: vlintPackage.version });
-      expect(parsed.environment).toMatchObject({ platform: "linux", arch: "x64" });
-      expect(typeof parsed.environment.browser.version).toBe("string");
-      expect(parsed.environment.browser.version!.length).toBeGreaterThan(0);
+      expect(parsed.execution.host).toMatchObject({ platform: "linux", architecture: "x64" });
+      expect(typeof parsed.execution.engines[0]?.obtainedVersion).toBe("string");
+      expect(parsed.execution.engines[0]!.obtainedVersion!.length).toBeGreaterThan(0);
       expect(parsed.summary.cases).toMatchObject({ resolved: 1, complete: 1, failed: 0, notExecuted: 0 });
       expect(parsed.summary.violations).toBe(0);
       expect(parsed.summary.elementsInspected).toBe(2);
@@ -184,7 +193,7 @@ describe("compiled vlint binary acceptance", () => {
       expect(result.exitCode, result.stderr).toBe(1);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.status).toBe("violations");
       expect(parsed.summary.violations).toBe(1);
       expect(parsed.summary.elementsInspected).toBe(1);
@@ -192,8 +201,8 @@ describe("compiled vlint binary acceptance", () => {
       const auditCase = parsed.cases[0]!;
       expect(auditCase.target.name).toBe("settings");
       expect(auditCase.target.url).toBe(targetUrl);
-      expect(auditCase.device.viewport).toEqual({ width: 1280, height: 720 });
-      expect(auditCase.device.deviceScaleFactor).toBe(1);
+      expect(deviceFor(parsed, 0).viewport).toEqual({ width: 1280, height: 720 });
+      expect(deviceFor(parsed, 0).deviceScaleFactor).toBe(1);
       expect(auditCase.status).toBe("complete");
 
       const rule = auditCase.rules[0]!;
@@ -230,7 +239,7 @@ describe("compiled vlint binary acceptance", () => {
       expect(result.exitCode, result.stderr).toBe(2);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.status).toBe("incomplete");
 
       // Collect-all: prior violations survive alongside the failing target.
@@ -287,7 +296,7 @@ describe("compiled vlint binary acceptance", () => {
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.status).toBe("clean");
       expect(parsed.summary.elementsInspected).toBe(2);
       expect(parsed.cases[0]!.status).toBe("complete");
@@ -307,7 +316,7 @@ describe("compiled vlint binary acceptance", () => {
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(firstFailure(parsed)).toMatchObject({ stage: "authentication", code: "state-invalid", target: "secure" });
       expect(parsed.cases[0]!.status).toBe("failed");
     }, CHECK_TIMEOUT);
@@ -321,7 +330,7 @@ describe("compiled vlint binary acceptance", () => {
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(firstFailure(parsed)).toMatchObject({ stage: "navigation", code: "navigation-http-status", target: "http500" });
     }, CHECK_TIMEOUT);
 
@@ -332,7 +341,7 @@ describe("compiled vlint binary acceptance", () => {
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(firstFailure(parsed)).toMatchObject({ stage: "web-font", code: "font-load-failed", target: "font" });
     }, CHECK_TIMEOUT);
 
@@ -350,7 +359,7 @@ describe("compiled vlint binary acceptance", () => {
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(firstFailure(parsed)).toMatchObject({ stage: "ready-condition", code: "ready-invalid-selector", target: "ready" });
     }, CHECK_TIMEOUT);
 
@@ -369,14 +378,14 @@ describe("compiled vlint binary acceptance", () => {
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.status).toBe("clean");
       expect(firstFailure(parsed)).toBeUndefined();
       // Ad hoc target name and exact URL.
       expect(parsed.cases[0]!.target.name).toBe("adhoc");
       expect(parsed.cases[0]!.target.url).toBe(adhocUrl);
       // Config device applied.
-      expect(parsed.cases[0]!.device.viewport).toEqual({ width: 800, height: 600 });
+      expect(deviceFor(parsed, 0).viewport).toEqual({ width: 800, height: 600 });
       // Global rule from config applied.
       expect(parsed.cases[0]!.rules[0]!.name).toBe("custom-tabs");
       expect(parsed.cases[0]!.rules[0]!.status).toBe("clean");
@@ -402,8 +411,8 @@ describe("compiled vlint binary acceptance", () => {
       const cmdResult = await execBinary(["check", "--format", "json"], cmdCwd);
 
       expect(cmdResult.exitCode).toBe(staticResult.exitCode);
-      const cmdParsed = JSON.parse(cmdResult.stdout) as RunResult;
-      const staticParsed = JSON.parse(staticResult.stdout) as RunResult;
+      const cmdParsed = await readReport(cmdResult.stdout);
+      const staticParsed = await readReport(staticResult.stdout);
       expect(cmdParsed.status).toBe(staticParsed.status);
       expect(cmdParsed.summary.violations).toBe(staticParsed.summary.violations);
       expect(cmdParsed.summary.elementsInspected).toBe(staticParsed.summary.elementsInspected);
@@ -420,7 +429,7 @@ describe("compiled vlint binary acceptance", () => {
       await writeConfig(cwd, { provider: { type: "command", executable: CAT, args: [targetsFile] } });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(0);
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.status).toBe("clean");
       expect(parsed.cases[0]).toMatchObject({ target: { name: "hydration", url }, status: "complete" });
       expect(parsed.cases[0]!.rules[0]!.status).toBe("clean");
@@ -434,7 +443,7 @@ describe("compiled vlint binary acceptance", () => {
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(firstFailure(parsed)).toMatchObject({ stage: "provider", code: "provider-exit-nonzero" });
     }, CHECK_TIMEOUT);
 
@@ -447,7 +456,7 @@ describe("compiled vlint binary acceptance", () => {
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(firstFailure(parsed)).toMatchObject({ stage: "provider", code: "provider-output-invalid" });
     }, CHECK_TIMEOUT);
 
@@ -464,16 +473,14 @@ describe("compiled vlint binary acceptance", () => {
       expect(termResult.exitCode, termResult.stderr).toBe(0);
       expect(termResult.stderr).toBe("");
 
-      expect(termResult.stdout).toContain(secretUrl);
-      expect(termResult.stdout).toContain(`actualUrl=${secretUrl}`);
-      expect(termResult.stdout).toContain("\\u{1}");
-      expect(termResult.stdout).toContain("\\u{202e}");
+      expect(termResult.stdout).not.toContain(secretUrl);
+      expect(termResult.stdout).toContain("reportPath:");
       expect(termResult.stdout).not.toContain("\u0001");
       expect(termResult.stdout).not.toContain("\u202e");
 
       const jsonResult = await execBinary(["check", "--format", "json"], cwd);
       expect(jsonResult.exitCode, jsonResult.stderr).toBe(0);
-      const parsed = JSON.parse(jsonResult.stdout) as RunResult;
+      const parsed = await readReport(jsonResult.stdout);
       expect(parsed.cases[0]!.target.url).toBe(secretUrl);
       expect(parsed.cases[0]!.actualUrl).toBe(secretUrl);
       expect(parsed.cases[0]!.target.name).toBe(controlName);
@@ -481,7 +488,7 @@ describe("compiled vlint binary acceptance", () => {
 
     // --------------------------------------- deterministic repeated JSON (R51, KTD11)
 
-    test("repeated identical check produces byte-identical JSON", async () => {
+    test("repeated identical checks preserve complete evidence in distinct reports", async () => {
       const cwd = await tempDir();
       await writeConfig(cwd, {
         provider: { type: "static", targets: [{ name: "det", url: `${acceptance.url}/settings` }] },
@@ -489,7 +496,9 @@ describe("compiled vlint binary acceptance", () => {
       const first = await execBinary(["check", "--format", "json"], cwd);
       const second = await execBinary(["check", "--format", "json"], cwd);
       expect(first.exitCode).toBe(1);
-      expect(first.stdout).toBe(second.stdout);
+      expect(second.exitCode).toBe(1);
+      expect(JSON.parse(first.stdout).reportPath).not.toBe(JSON.parse(second.stdout).reportPath);
+      expect(await readReport(first.stdout)).toEqual(await readReport(second.stdout));
     }, CHECK_TIMEOUT);
 
     // ---------------------- concurrent check processes with no vlint lock (R47)
@@ -511,8 +520,8 @@ describe("compiled vlint binary acceptance", () => {
       expect(b.exitCode, b.stderr).toBe(0);
       expect(a.stderr).toBe("");
       expect(b.stderr).toBe("");
-      const pa = JSON.parse(a.stdout) as RunResult;
-      const pb = JSON.parse(b.stdout) as RunResult;
+      const pa = await readReport(a.stdout);
+      const pb = await readReport(b.stdout);
       expect(pa.status).toBe("clean");
       expect(pb.status).toBe("clean");
       expect(pa.cases[0]!.target.name).toBe("conc-a");
@@ -531,7 +540,7 @@ describe("compiled vlint binary acceptance", () => {
       acceptance.setSettingsWrapped(true);
       const before = await execBinary(["check", "--format", "json"], cwd);
       expect(before.exitCode, before.stderr).toBe(1);
-      const beforeParsed = JSON.parse(before.stdout) as RunResult;
+      const beforeParsed = await readReport(before.stdout);
       expect(beforeParsed.status).toBe("violations");
       expect(beforeParsed.summary.violations).toBe(1);
 
@@ -539,40 +548,32 @@ describe("compiled vlint binary acceptance", () => {
       acceptance.setSettingsWrapped(false);
       const after = await execBinary(["check", "--format", "json"], cwd);
       expect(after.exitCode, after.stderr).toBe(0);
-      const afterParsed = JSON.parse(after.stdout) as RunResult;
+      const afterParsed = await readReport(after.stdout);
       expect(afterParsed.status).toBe("clean");
       expect(afterParsed.summary.violations).toBe(0);
     }, CHECK_TIMEOUT);
 
-    // ============================================================= Multi-device
-    // AE1-AE8 and mobile-only regression: compiled binary proof for the
-    // standard multi-device contract. These tests exercise the real init
-    // command, the standard two-device config, cross-product ordering,
-    // collect-all failure isolation, and the desktop-clean/mobile-violation
-    // regression that motivated the feature.
 
     // -------------------------------------------------- AE1: new initialization
 
-    test("AE1 init generates exact two-device config with no provider or url", async () => {
+    test("AE1 explicit init generates selected desktop and phone profiles without a provider", async () => {
       const cwd = await tempDir();
-      const result = await execBinary(["init"], cwd);
+      const result = await execBinary(["init", "--environment", "windows:chromium", "--environment", "iphone:webkit"], cwd);
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stdout).toBe("vlint init: created vlint.config.json\n");
       expect(result.stderr).toBe("");
 
       const config = await readConfigFile(cwd);
-      // Device-only: no provider or url key at all.
       expect(config).not.toHaveProperty("provider");
 
       const devices = config.devices as readonly Record<string, unknown>[];
       expect(devices).toHaveLength(2);
 
-      // MacBook Air 13" (M5): exact profile, no userAgent key.
       expect(devices[0]).toMatchObject({
-        name: "macbook-air-13-m5",
-        viewport: { width: 1470, height: 956 },
-        screen: { width: 1470, height: 956 },
-        deviceScaleFactor: 2,
+        name: "windows-chromium",
+        viewport: { width: 1280, height: 720 },
+        screen: { width: 1920, height: 1080 },
+        deviceScaleFactor: 1,
         isMobile: false,
         hasTouch: false,
       });
@@ -580,14 +581,14 @@ describe("compiled vlint binary acceptance", () => {
 
       // iPhone 17: exact profile from Playwright 1.61.1 registry.
       expect(devices[1]).toMatchObject({
-        name: "iphone-17",
+        name: "iphone-webkit",
         viewport: { width: 402, height: 681 },
         screen: { width: 402, height: 874 },
         deviceScaleFactor: 3,
         isMobile: true,
         hasTouch: true,
-        userAgent: IPHONE_UA,
       });
+      expect(devices[1]).not.toHaveProperty("userAgent");
 
       // Standard rules pinned into the config.
       const rules = config.rules as readonly Record<string, unknown>[];
@@ -610,7 +611,7 @@ describe("compiled vlint binary acceptance", () => {
       });
       await writeFile(join(cwd, "vlint.config.json"), original);
 
-      const result = await execBinary(["init"], cwd);
+      const result = await execBinary(["init", "--environment", "windows:chromium"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
       expect(result.stderr).toContain("config-already-exists");
       expect(result.stdout).toBe("");
@@ -622,31 +623,30 @@ describe("compiled vlint binary acceptance", () => {
 
     // --------------------- AE3: init → check --url audits both devices (exit 0)
 
-    test("AE3 init then check --url audits the same URL on both standard devices", async () => {
+    test("AE3 selected init then check --url audits the same URL in both environments", async () => {
       const cwd = await tempDir();
-      await execBinary(["init"], cwd);
+      await execBinary(["init", "--environment", "windows:chromium", "--environment", "iphone:webkit"], cwd);
 
       const targetUrl = `${acceptance.url}/clean`;
       const result = await execBinary(["check", "--url", targetUrl, "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stderr).toBe("");
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.status).toBe("clean");
       expect(parsed.summary.cases).toMatchObject({ resolved: 2, complete: 2, failed: 0, notExecuted: 0 });
       expect(parsed.summary.targets.resolved).toBe(1);
 
-      // Both cases target the same ad hoc URL, ordered MacBook then iPhone.
       expect(parsed.cases).toHaveLength(2);
       expect(parsed.cases[0]!.target).toEqual({ name: "adhoc", url: targetUrl });
-      expect(parsed.cases[0]!.device.name).toBe("macbook-air-13-m5");
-      expect(parsed.cases[0]!.device.viewport).toEqual({ width: 1470, height: 956 });
-      expect(parsed.cases[0]!.device.deviceScaleFactor).toBe(2);
+      expect(parsed.cases[0]!.device.name).toBe("windows-chromium");
+      expect(deviceFor(parsed, 0).viewport).toEqual({ width: 1280, height: 720 });
+      expect(deviceFor(parsed, 0).deviceScaleFactor).toBe(1);
       expect(parsed.cases[1]!.target).toEqual({ name: "adhoc", url: targetUrl });
-      expect(parsed.cases[1]!.device.name).toBe("iphone-17");
-      expect(parsed.cases[1]!.device.viewport).toEqual({ width: 402, height: 681 });
-      expect(parsed.cases[1]!.device.isMobile).toBe(true);
-      expect(parsed.cases[1]!.device.userAgent).toBe(IPHONE_UA);
+      expect(parsed.cases[1]!.device.name).toBe("iphone-webkit");
+      expect(deviceFor(parsed, 1).viewport).toEqual({ width: 402, height: 681 });
+      expect(deviceFor(parsed, 1).isMobile).toBe(true);
+      expect(parsed.execution.environments[0]!.userAgent).toContain("Windows");
       expect(firstFailure(parsed)).toBeUndefined();
     }, CHECK_TIMEOUT);
 
@@ -654,12 +654,12 @@ describe("compiled vlint binary acceptance", () => {
 
     test("AE4 device-only config without --url fails targets-empty before browser launch", async () => {
       const cwd = await tempDir();
-      await execBinary(["init"], cwd);
+      await execBinary(["init", "--environment", "windows:chromium"], cwd);
 
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.status).toBe("incomplete");
       expect(parsed.summary.cases).toMatchObject({ resolved: 0, complete: 0, failed: 0, notExecuted: 0 });
       expect(firstFailure(parsed)).toMatchObject({ stage: "config", code: "targets-empty" });
@@ -682,7 +682,7 @@ describe("compiled vlint binary acceptance", () => {
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(0);
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.summary.targets.resolved).toBe(2);
       expect(parsed.summary.cases).toMatchObject({ resolved: 4, complete: 4, failed: 0, notExecuted: 0 });
       expect(parsed.cases).toHaveLength(4);
@@ -700,10 +700,10 @@ describe("compiled vlint binary acceptance", () => {
       }
 
       // Device-specific viewport confirmed for each case.
-      expect(parsed.cases[0]!.device.viewport).toEqual({ width: 1470, height: 956 });
-      expect(parsed.cases[1]!.device.viewport).toEqual({ width: 402, height: 681 });
-      expect(parsed.cases[2]!.device.viewport).toEqual({ width: 1470, height: 956 });
-      expect(parsed.cases[3]!.device.viewport).toEqual({ width: 402, height: 681 });
+      expect(deviceFor(parsed, 0).viewport).toEqual({ width: 1470, height: 956 });
+      expect(deviceFor(parsed, 1).viewport).toEqual({ width: 402, height: 681 });
+      expect(deviceFor(parsed, 2).viewport).toEqual({ width: 1470, height: 956 });
+      expect(deviceFor(parsed, 3).viewport).toEqual({ width: 402, height: 681 });
     }, CHECK_TIMEOUT);
 
     // -------- AE6: one navigation failure, remaining multi-device cases complete
@@ -724,7 +724,7 @@ describe("compiled vlint binary acceptance", () => {
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.status).toBe("incomplete");
       expect(parsed.summary.cases).toMatchObject({ resolved: 6, complete: 4, failed: 2, notExecuted: 0 });
 
@@ -773,12 +773,12 @@ describe("compiled vlint binary acceptance", () => {
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(0);
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.summary.targets.resolved).toBe(1);
       expect(parsed.summary.cases.resolved).toBe(1);
       expect(parsed.cases).toHaveLength(1);
       expect(parsed.cases[0]!.device.name).toBe("iphone-17");
-      expect(parsed.cases[0]!.device.viewport).toEqual({ width: 402, height: 681 });
+      expect(deviceFor(parsed, 0).viewport).toEqual({ width: 402, height: 681 });
     }, CHECK_TIMEOUT);
 
     // ----------------------- AE8: no config file → check rejected pre-browser
@@ -789,13 +789,13 @@ describe("compiled vlint binary acceptance", () => {
       // With --url: still requires a config (R8, no implicit fallback).
       const withUrl = await execBinary(["check", "--url", `${acceptance.url}/clean`, "--format", "json"], cwd);
       expect(withUrl.exitCode, withUrl.stderr).toBe(2);
-      const withUrlParsed = JSON.parse(withUrl.stdout) as RunResult;
+      const withUrlParsed = await readReport(withUrl.stdout);
       expect(firstFailure(withUrlParsed)).toMatchObject({ stage: "config", code: "config-not-found" });
 
       // Without --url: same config-not-found (no browser launched in either path).
       const noUrl = await execBinary(["check", "--format", "json"], cwd);
       expect(noUrl.exitCode, noUrl.stderr).toBe(2);
-      const noUrlParsed = JSON.parse(noUrl.stdout) as RunResult;
+      const noUrlParsed = await readReport(noUrl.stdout);
       expect(firstFailure(noUrlParsed)).toMatchObject({ stage: "config", code: "config-not-found" });
     });
 
@@ -813,14 +813,14 @@ describe("compiled vlint binary acceptance", () => {
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(1);
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.status).toBe("violations");
       expect(parsed.cases).toHaveLength(2);
 
       // MacBook case: the wide label fits on one line → clean.
       const macbook = parsed.cases[0]!;
       expect(macbook.device.name).toBe("macbook-air-13-m5");
-      expect(macbook.device.viewport).toEqual({ width: 1470, height: 956 });
+      expect(deviceFor(parsed, 0).viewport).toEqual({ width: 1470, height: 956 });
       expect(macbook.status).toBe("complete");
       expect(macbook.rules[0]!.status).toBe("clean");
       expect(macbook.rules[0]!.violations).toHaveLength(0);
@@ -828,7 +828,7 @@ describe("compiled vlint binary acceptance", () => {
       // iPhone case: same label wraps at 402px → violation detected.
       const iphone = parsed.cases[1]!;
       expect(iphone.device.name).toBe("iphone-17");
-      expect(iphone.device.viewport).toEqual({ width: 402, height: 681 });
+      expect(deviceFor(parsed, 1).viewport).toEqual({ width: 402, height: 681 });
       expect(iphone.status).toBe("complete");
       expect(iphone.rules[0]!.status).toBe("violations");
       expect(iphone.rules[0]!.violations.length).toBeGreaterThanOrEqual(1);
@@ -852,7 +852,7 @@ describe("compiled vlint binary acceptance", () => {
       });
       const jsonResult = await execBinary(["check", "--format", "json"], cwd);
       expect(jsonResult.exitCode, jsonResult.stderr).toBe(1);
-      const parsed = JSON.parse(jsonResult.stdout) as RunResult;
+      const parsed = await readReport(jsonResult.stdout);
       const desktop = parsed.cases[0]?.rules.find((rule) => rule.type === "table-header-single-line");
       const iphone = parsed.cases[1]?.rules.find((rule) => rule.type === "table-header-single-line");
       expect(desktop).toMatchObject({ status: "clean", elementsInspected: 2, violations: [] });
@@ -890,7 +890,7 @@ describe("compiled vlint binary acceptance", () => {
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(1);
 
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       const desktopRule = parsed.cases[0]?.rules.find((rule) => rule.type === "page-horizontal-overflow");
       const mobileRule = parsed.cases[1]?.rules.find((rule) => rule.type === "page-horizontal-overflow");
       expect(desktopRule).toMatchObject({ status: "clean", elementsInspected: 0, violations: [] });
@@ -973,7 +973,7 @@ describe("compiled vlint binary acceptance", () => {
       expect(jsonResult.exitCode, jsonResult.stderr).toBe(1);
       expect(jsonResult.stderr).toBe("");
 
-      const parsed = JSON.parse(jsonResult.stdout) as RunResult;
+      const parsed = await readReport(jsonResult.stdout);
       const localRule = parsed.cases[0]?.rules.find((rule) => rule.type === "local");
       const violation = localRule?.violations[0];
       if (!violation || !isLocalViolation(violation)) throw new Error("expected local violation");
@@ -1013,7 +1013,7 @@ describe("compiled vlint binary acceptance", () => {
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(1);
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.summary.violations).toBeGreaterThanOrEqual(2);
       for (const auditCase of parsed.cases) {
         const ruleNames = auditCase.rules.map((rule) => rule.name);
@@ -1043,7 +1043,7 @@ describe("compiled vlint binary acceptance", () => {
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode, result.stderr).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.status).toBe("incomplete");
       expect(parsed.summary.violations).toBeGreaterThanOrEqual(1);
       const localRule = parsed.cases[0]?.rules.find((rule) => rule.name === "throwing-local");
@@ -1056,13 +1056,13 @@ describe("compiled vlint binary acceptance", () => {
       await writeConfig(cwd, { provider: { type: "static", targets: [{ name: "redirect", url }] } });
       const denied = await execBinary(["check", "--url", url, "--format", "json"], cwd);
       expect(denied.exitCode).toBe(2);
-      const failed = JSON.parse(denied.stdout) as RunResult;
+      const failed = await readReport(denied.stdout);
       expect(failed.cases[0]?.failures[0]).toMatchObject({ code: "url-mismatch", actualUrl: `${acceptance.url}/clean`, target: "adhoc", device: "desktop" });
       expect(failed.cases[0]?.actualUrl).toBe(`${acceptance.url}/clean`);
       await writeConfig(cwd, { provider: { type: "static", targets: [{ name: "redirect", url, allowedUrls: [`${acceptance.url}/clean`] }] } });
       const allowed = await execBinary(["check", "--format", "json"], cwd);
       expect(allowed.exitCode).toBe(0);
-      const passed = JSON.parse(allowed.stdout) as RunResult;
+      const passed = await readReport(allowed.stdout);
       expect(passed.cases[0]?.target.url).toBe(url);
       expect(passed.cases[0]?.actualUrl).toBe(`${acceptance.url}/clean`);
       const providerOutput = join(cwd, "targets.json");
@@ -1070,7 +1070,7 @@ describe("compiled vlint binary acceptance", () => {
       await writeConfig(cwd, { provider: { type: "command", executable: CAT, args: [providerOutput] } });
       const command = await execBinary(["check", "--format", "json"], cwd);
       expect(command.exitCode).toBe(0);
-      expect((JSON.parse(command.stdout) as RunResult).cases[0]?.actualUrl).toBe(`${acceptance.url}/clean`);
+      expect((await readReport(command.stdout)).cases[0]?.actualUrl).toBe(`${acceptance.url}/clean`);
     }, CHECK_TIMEOUT);
 
     test("device-specific minimum reports only the short device as incomplete", async () => {
@@ -1082,7 +1082,7 @@ describe("compiled vlint binary acceptance", () => {
       });
       const result = await execBinary(["check", "--format", "json"], cwd);
       expect(result.exitCode).toBe(2);
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.cases[0]?.rules.find((rule) => rule.name === "tabs")?.status).toBe("clean");
       expect(parsed.cases[1]?.rules.find((rule) => rule.name === "tabs")?.failure).toMatchObject({ code: "minimum-inspected-unmet", target: "tabs", device: "iphone-17", rule: "tabs" });
     }, CHECK_TIMEOUT);
@@ -1099,7 +1099,7 @@ describe("compiled vlint binary acceptance", () => {
       const result = await execBinary(["check", "--format", "json"], cwd);
       const persistent = mode.endsWith("persistent");
       expect(result.exitCode, result.stderr).toBe(persistent ? 2 : 0);
-      const parsed = JSON.parse(result.stdout) as RunResult;
+      const parsed = await readReport(result.stdout);
       expect(parsed.status).toBe(persistent ? "incomplete" : "clean");
       expect(parsed.cases[0]?.actualUrl).toBe(url);
       const measured = parsed.cases[0]?.rules.find((rule) => rule.name === "transient-state");
@@ -1118,7 +1118,7 @@ describe("compiled vlint binary acceptance", () => {
       const url = `${fixture.url}/svg-text-clipping.html`;
       const json = await execBinary(["check", "--url", url, "--format", "json"], cwd);
       expect(json.exitCode, json.stderr).toBe(1);
-      const parsed = JSON.parse(json.stdout) as RunResult;
+      const parsed = await readReport(json.stdout);
       expect(parsed.status).toBe("violations");
       const svg = parsed.cases[0]?.rules.find((rule) => rule.type === "svg-text-clipping");
       expect(svg).toMatchObject({ status: "violations", elementsInspected: 2, failure: null });
@@ -1132,7 +1132,7 @@ describe("compiled vlint binary acceptance", () => {
       await writeConfig(cwd, { rules: [{ name: "svg", type: "svg-text-clipping", excludeSelectors: ["svg"], minimumInspected: 1 }] });
       const incomplete = await execBinary(["check", "--url", url, "--format", "json"], cwd);
       expect(incomplete.exitCode, incomplete.stderr).toBe(2);
-      expect((JSON.parse(incomplete.stdout) as RunResult).status).toBe("incomplete");
+      expect((await readReport(incomplete.stdout)).status).toBe("incomplete");
     }, CHECK_TIMEOUT);
 
   },

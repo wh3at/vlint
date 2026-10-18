@@ -5,15 +5,14 @@ finite set of declared UI targets, **without** sending images to an LLM. An AI a
 runs one command, reads structured diagnostics to locate the offending target and
 element, fixes the layout, and re-runs until clean.
 
-> **Supported platform: Ubuntu 24.04 x64 only.** vlint does not bundle a browser
-> executable.
+> **Distribution artifact: Linux x64.** Playwright prepares the managed browser
+> executables and determines actual host prerequisites and launch availability.
 
 ---
 
 ## Table of contents
 
 - [Install](#install)
-- [OS prerequisites](#os-prerequisites)
 - [Browser setup](#browser-setup)
 - [Command help](#command-help)
 - [Running checks](#running-checks)
@@ -32,29 +31,11 @@ element, fixes the layout, and re-runs until clean.
 
 ## Install
 
-Pick one path to install the latest published release. None requires Node.js, Bun,
-npm, or another runtime. To pin a version (recommended for CI), replace the first
-two `TAG` lines in your chosen snippet with `TAG=vX.Y.Z` from
-[Releases](https://github.com/wh3at/vlint/releases).
+Use the same installer for first installation and updates. No Node.js, Bun or
+npm runtime is required. Pin `TAG=vX.Y.Z` for CI instead of resolving latest.
+The Linux x64 artifact is the only distributed platform.
 
-### Ubuntu package (`.deb`)
-
-Installs vlint and declares all required Chromium shared libraries:
-
-```sh
-TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/wh3at/vlint/releases/latest)"
-TAG="${TAG##*/}"
-VERSION="${TAG#v}"
-base="https://github.com/wh3at/vlint/releases/download/$TAG"
-curl -fsSLO "$base/vlint_${VERSION}_amd64.deb"
-curl -fsSLO "$base/SHA256SUMS"
-awk -v name="vlint_${VERSION}_amd64.deb" '$2 == name { print }' SHA256SUMS | sha256sum -c -
-sudo apt install "./vlint_${VERSION}_amd64.deb"
-vlint setup
-vlint check --url http://localhost:3000/
-```
-
-### User-local installer (no sudo)
+### Common installer
 
 ```sh
 TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/wh3at/vlint/releases/latest)"
@@ -63,59 +44,64 @@ base="https://github.com/wh3at/vlint/releases/download/$TAG"
 curl -fsSLO "$base/install-$TAG.sh"
 sh "install-$TAG.sh"
 export PATH="${VLINT_INSTALL_DIR:-$HOME/.local/bin}:$PATH"
-vlint browser install --with-deps   # only Playwright's apt subprocess elevates
 vlint init
 vlint check --url http://localhost:3000/
 ```
 
-If the destination is not on `PATH`, the installer prints the directory to add.
+The installer verifies the archive checksum, stages the candidate executable,
+and uses Playwright to prepare OS dependencies and all three managed engines.
+It launch-checks each engine with an empty page before atomically replacing
+the installed executable. If preparation, launch or interruption fails, the
+previous executable remains installed and the failure is reported. Browser
+garbage collection is disabled during preparation to preserve older assets.
+Playwright may request privileges; OS package changes are not rolled back.
 
-### Manual fallback
-
-```sh
-TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/wh3at/vlint/releases/latest)"
-TAG="${TAG##*/}"
-base="https://github.com/wh3at/vlint/releases/download/$TAG"
-archive="vlint-$TAG-linux-x64.tar.gz"
-curl -fsSLO "$base/$archive"
-curl -fsSLO "$base/SHA256SUMS"
-awk -v name="$archive" '$2 == name { print }' SHA256SUMS | sha256sum -c -
-tar -xzf "$archive"
-install -m 0755 vlint "$HOME/.local/bin/vlint"
-```
-
-The archive contains only `vlint` (mode `0755`) and this `README.md`. `SHA256SUMS`
-is an integrity check, not a signature.
-
-## OS prerequisites
-
-- The `.deb` resolves Ubuntu packages through APT.
-- `vlint browser install --with-deps` installs them before the browser payload.
-- For locked-down hosts, install manually:
-
-```sh
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends \
-  ca-certificates fonts-liberation libasound2t64 libatk-bridge2.0-0t64 \
-  libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 libdbus-1-3 libdrm2 \
-  libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
-  libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2
-```
+The default destination is `$HOME/.local/bin`; override `VLINT_INSTALL_DIR` if
+needed. If it is not on `PATH`, the installer prints the directory to add.
+After installation, use `vlint init --help` to select project environments.
+Use `vlint browser install --force` for repair; `.deb` and `setup` are retired.
+The archive contains `vlint` (mode `0755`) and `README.md`. `SHA256SUMS` is an
+integrity check, not a signature.
 
 ## Browser setup
 
-Browser acquisition is always a separate, explicit operation; `vlint check` never
-downloads or installs a browser.
+`vlint browser install` prepares the Chromium headless shell, Firefox, and WebKit
+required by this vlint build. Playwright owns browser downloads, host dependency
+preparation and validation, and any required privilege prompt. There is no
+separate dependency flag, engine selection, or independent version selection.
+A host is not rejected by vlint merely because its distribution is not Ubuntu;
+Playwright's actual preparation and launch results determine availability.
 
 ```sh
-vlint browser status                # readiness without downloading (--format json for CI)
-vlint browser install               # pinned Chromium headless shell
-vlint browser install --force       # repair/reinstall
-vlint browser install --with-deps   # Ubuntu libraries, then browser payload
+vlint browser install
+vlint browser install --force
+vlint browser status --format json
 ```
 
-`vlint setup` is the first-run convenience: it creates `vlint.config.json` only when
-absent and installs the browser payload, preserving an existing valid config.
+`--force` repairs all three managed engines. `browser status` requires no project
+configuration, downloads nothing, and does not install or repair dependencies.
+It launches each engine, creates and closes an empty page, and closes the browser.
+It exits 0 only when all three engines pass, otherwise 2; one unavailable engine
+does not prevent status from probing the others. `check` never installs browsers.
+
+Status JSON separates expected and obtained versions, version source, revision,
+Playwright-selected artifact and executable, execution host, dependency validation,
+launch, empty-page, and close results. Unavailable values remain null rather than
+being guessed. WebKit's `browser.version()` is identified as Playwright metadata,
+not independent binary verification; that provenance alone does not make it fail.
+
+The compiled three-engine preparation and offline status acceptance can be run
+in the existing Ubuntu 24.04 Docker fixture approach:
+
+```sh
+bun run build:linux-x64
+VLINT_BROWSER_CONTAINER_ACCEPTANCE=1 bun test tests/acceptance/browser-management-container.test.ts
+```
+
+This is an isolated validation environment, not a supported container distribution.
+The test uses a private browser cache with garbage collection disabled and removes
+only its own container. It exercises initial and repeated preparation, forced repair,
+offline launch readiness, and an executable-present launch failure.
 
 ## Command help
 
@@ -126,23 +112,21 @@ vlint browser --help
 vlint browser install --help
 vlint browser status --help
 vlint init --help
-vlint setup --help
 ```
 
 Run `vlint` with no arguments for the top-level overview.
 
 ## Running checks
 
-Every check requires a project-local `vlint.config.json`; run `vlint init` or
-`vlint setup` first.
+Every check requires a project-local `vlint.config.json`; run `vlint init` first.
 
 ```sh
-vlint check --url http://localhost:3000/  # every configured device, one URL
-vlint check                               # every provider target × every device
+vlint check --url http://localhost:3000/
+vlint check
 vlint check --format json
 ```
 
-- `--url` uses the configured devices but does not resolve a target provider.
+- `--url` uses the declared environment/device combinations but does not resolve a target provider.
 - Without `--url`, the config must contain a `static` or `command` provider.
 - One case failing does not stop the rest; the run is reported as `incomplete` (see [Exit codes](#exit-codes)).
 - The caller starts the target app and prepares fixtures and authentication state; vlint does not start dev servers, generate fixtures, or perform logins.
@@ -150,12 +134,27 @@ vlint check --format json
 ## Configuration
 
 `vlint.config.json` (valid JSON, read from the current working directory) is the only
-configuration source. Run `vlint init` to generate the standard MacBook Air 13-inch
-and iPhone 17 profiles.
+configuration source. In a terminal, `vlint init` asks for a platform, then its
+browser; repeat and enter `done` to finish. Automation must select explicitly:
+
+```sh
+vlint init --environment windows:chromium --environment iphone:webkit
+vlint init --help
+```
+
+Valid choices are `windows:chromium`, `windows:firefox`, `macos:chromium`,
+`macos:webkit`, `iphone:webkit`, and `android:chromium`. Repeated flags select
+only those environments and bypass prompts even in a terminal. Without a terminal
+and selections, init fails with guidance rather than choosing defaults.
+Generated devices contain editable concrete viewport, screen, DPR, mobile and
+touch values from public Playwright desktop/mobile presets; User-Agent is not
+stored. Each generated environment references its device. Existing files,
+directories and symlinks at the config path are never overwritten or migrated.
 
 ```jsonc
 {
-  "devices": [/* from `vlint init` */],
+  "devices": [{ "name": "desktop", "viewport": { "width": 1280, "height": 720 }, "screen": { "width": 1280, "height": 720 }, "deviceScaleFactor": 1, "isMobile": false, "hasTouch": false }],
+  "environments": [{ "name": "windows-chrome", "platform": "windows", "browser": "chromium", "devices": ["desktop"] }],
   "defaults": { "locale": "en-US", "timezoneId": "UTC", "timeoutMs": 30000 },
   "rules": [
     { "name": "tab-label-single-line", "type": "tab-label-single-line" },
@@ -173,10 +172,44 @@ and iPhone 17 profiles.
 
 | Field | Description |
 | --- | --- |
-| `devices` | Ordered device profiles with unique names; authority for viewport, screen, DPR, mobile, touch, optional `userAgent`. |
+| `devices` | Device profiles with unique names; authority for viewport, screen, DPR, mobile and touch. Device `userAgent` is forbidden. |
+| `environments` | Required non-empty ordered list of unique `name`, `platform`, `browser`, and non-empty `devices` references. |
 | `defaults` | `locale`, `timezoneId`, `timeoutMs`, `readyCondition`, `browserState`. |
 | `rules` | Built-in and local rule instances. |
 | `provider` | Optional `static` or `command` provider; required only without `--url`. |
+
+### Declared environments
+
+Supported combinations are `windows:chromium`, `windows:firefox`, `macos:chromium`,
+`macos:webkit`, `iphone:webkit`, and `android:chromium`. Browser names refer to
+Playwright-managed engines, not installed branded browsers. The execution host
+need not match the declared platform. Unknown device references, unsupported
+combinations and duplicate environment names are configuration errors. Old
+configurations without environments are rejected; there is no implicit Chromium mode.
+
+Cases are planned in target order, environment order, then device-reference order.
+Environments may share devices; unreferenced devices are not checked. Targets and
+rules are common to every environment; there are no environment-specific overrides.
+Minimums are checked independently per case, never pooled across environments.
+
+UA comes from Playwright's public `Desktop Chrome`, `Desktop Firefox`, `Desktop Safari`,
+`iPhone 17`, or `Pixel 10` preset. macOS Chromium uses a macOS UA constructed with
+the managed Chromium version. Missing required presets fail rather than substitute.
+Explicit device screen options are passed unchanged through Playwright's public
+context API; preset screen values never overwrite them. This is emulation, not
+a guarantee of physical OS/device signals. See [measured engine limits](docs/operations/environment-execution-validation.md).
+
+Only selected engines launch. A missing or unusable engine fails its own cases
+while other engines continue. `check` never downloads, installs, repairs or falls
+back to another engine/version.
+
+The complete result's `execution` metadata separates the actual `host`, selected
+`engines` (expected/obtained version, version source, revision, artifact, executable
+and launch diagnostic), environment UA, and referenced device configurations.
+Cases refer to environment names and device names rather than copying those
+shared values. Device metadata records options supplied to Playwright, not an
+independent observation of browser signals. WebKit's version source is explicitly
+`playwright-metadata`, not independent binary verification.
 
 - **`tab-label-single-line`** — each rendered tab label must fit on one line. Fields: `additionalCandidateSelectors`, `excludeSelectors`, `labelSelector`.
 - **`page-horizontal-overflow`** — detects unintended root-page horizontal scroll attributed to light-DOM elements. Field: `tolerancePx` (`0`–`100`, default `1`).
@@ -332,6 +365,7 @@ many DOM elements. Disabled rules do not count as inspected.
     { "name": "desktop", "viewport": { "width": 1280, "height": 720 }, "screen": { "width": 1280, "height": 720 }, "deviceScaleFactor": 1, "isMobile": false, "hasTouch": false, "ruleMinimums": { "tabs": 2 } },
     { "name": "phone", "viewport": { "width": 390, "height": 720 }, "screen": { "width": 390, "height": 720 }, "deviceScaleFactor": 1, "isMobile": true, "hasTouch": true }
   ],
+  "environments": [{ "name": "windows-chrome", "platform": "windows", "browser": "chromium", "devices": ["desktop", "phone"] }],
   "rules": [{ "name": "tabs", "type": "tab-label-single-line", "minimumInspected": 1 }],
   "provider": { "type": "static", "targets": [{
     "name": "settings", "url": "http://localhost:3000/settings",
@@ -474,12 +508,18 @@ solves CAPTCHAs.
 
 ## Output: terminal vs JSON
 
-`--format terminal` (default) prints a human-readable summary with control
-characters escaped. Both terminal and JSON print configured `target.url` and
-the per-case `actualUrl` unredacted, including query values and fragments.
-Before browser arrival, `actualUrl` is null (shown as `-` in terminal).
-A detected transition also records the offending URL on the failure.
-Do not put secrets in URLs: both formats and CI logs retain them.
+`--format terminal` (default) and `--format json` show the same concise coverage:
+overall status, case partitions, environment-by-rule execution and inspected-element
+counts, and actionable failures/violations. Disabled and unexecuted evaluations are
+counted separately. Inspected elements are summed rule observations, not unique DOM
+nodes. Successful case detail is omitted from normal output.
+
+Both formats identify the complete same-run JSON file with `reportPath`. That file
+retains all cases, rule facts and common execution metadata; reading it does not
+rerun the inspection. Terminal escapes control characters. Diagnostic URLs and all
+report URLs retain raw query values and fragments. Before browser arrival,
+`actualUrl` is null. Do not put secrets in URLs or publish reports indiscriminately.
+See [complete reports and CI retention](docs/operations/reports.md).
 
 ---
 
@@ -497,46 +537,32 @@ A completed check with violations writes its normal result to stdout and exits `
 
 ## Machine consumption (JSON)
 
-`vlint check --format json` emits one object per run; pin the vlint version you parse
-against. Violations live under each case, keyed by rule:
+`vlint check --format json` emits one newline-terminated summary object per run;
+pin the vlint version you parse against. Its fields are:
 
-```jsonc
-{
-  "status": "clean | violations | incomplete",
-  "cases": [
-    {
-      "target": { "name": "settings", "url": "http://localhost:3000/settings" },
-      "actualUrl": "http://localhost:3000/settings",
-      "device": { "name": "macbook-air-13-m5", "viewport": { /* … */ } },
-      "status": "complete",
-      "rules": [
-        {
-          "name": "duplicate-spacing",
-          "type": "local",
-          "status": "violations",
-          "violations": [
-            {
-              "type": "local",
-              "message": "duplicate horizontal spacing in content region",
-              "locator": "#content",
-              "geometry": { "x": 16, "y": 16, "width": 200, "height": 40 },
-              "details": { "shellPaddingPx": 32, "contentPaddingPx": 32 }
-            }
-          ]
-        }
-      ]
-    }
-  ]
-}
-```
+- `status`, `tool`, and `summary`: verdict, tool version, case/rule/count partitions.
+- `environmentRules`: each environment/rule's execution, inspection, clean,
+  violating, failed, disabled and unexecuted counts.
+- `diagnostics`: affected target, environment and device identities, specified and
+  observed URLs, failures and violating/failed rules.
+- `executionDiagnostics`: affected engine/environment configuration when relevant.
+- `ruleFinalizations` and `failures`: failing finalizations and run-wide failures.
+- `reportPath`: the private full report filename, or null when persistence failed.
 
-`cases` are ordered by target then device. Local violations use the `local` envelope
-of `message`, `locator`, `geometry`, and `details`. Table-header violations include
-`candidateSource`, `text`, `lineCount`, `lineTops`, `lineTopTolerancePx`, `geometry`,
-and `locator`; optional `candidateDiagnostics` on that rule result records excluded
-or generated-content-unmeasured candidates without representing them as violations.
-Table-cell text overlap violations add `adjacentLocator` and `overlapPx` (CSS pixels)
-to the source cell's `locator` and `geometry`; terminal output shows the same fields.
+Normal stdout does not contain the full `cases` or `execution`. Read `reportPath`
+for those fields. Full report cases are ordered by target, declared environment,
+then that environment's device-reference order. Case devices contain their names;
+common emulation settings live in `execution.devices`, UAs in
+`execution.environments`, and actual host/engine version information in
+`execution.host` / `execution.engines`. A failed rule retains its independent later
+rule results; URL/ready/font boundary failure stops that case's remaining rules.
+
+Local violations carry `message`, `locator`, `geometry`, and `details`. Table-header
+violations include `candidateSource`, `text`, `lineCount`, `lineTops`,
+`lineTopTolerancePx`, `geometry`, and `locator`. Rule `candidateDiagnostics` retain
+exclusions without turning them into violations. Table-cell overlap violations add
+`adjacentLocator` and `overlapPx`; SVG violations identify their clip and directions.
+The complete report retains successful facts and candidate diagnostics as well.
 
 ---
 
@@ -550,8 +576,13 @@ vlint check --format json          # in the step that runs your checks
 ```
 
 Preflight without downloading: `vlint browser status --format json` (exits `0` when
-ready). Gate on the exit code (see [Exit codes](#exit-codes)); an AI agent reads the
-JSON, fixes the layout from the rule type, geometry, and locator, and re-runs.
+ready). Neither status nor check installs, downloads or repairs missing engines.
+Use explicit `browser install` (or `browser install --force` for repair). Gate on
+the check exit code, inspect the same-run report, fix the layout, then re-run to
+verify the fix. Copy temporary reports for durable CI retention as described
+[here](docs/operations/reports.md). The integrated artifact validation record is
+[here](docs/operations/integrated-artifact-66-validation.md); it distinguishes
+completed Linux x64 acceptance from engine emulation and host-support limits.
 
 ---
 
@@ -588,6 +619,10 @@ scrollports, pixel/percentage units, and supported/unsupported clip combinations
 `bun run release:validate` (Docker) exercises the archive in a clean Ubuntu 24.04 x64
 guest; `bun run test:feasibility` runs the compiled-Playwright feasibility probe.
 
+The required three-engine and privilege CI gates also have local entrypoints:
+`bun run test:acceptance:three-engine` and `bun run test:acceptance:privilege`.
+Both consume the compiled binary and own their disposable Docker environments.
+
 Releases use a reviewed Release Please PR for the version and changelog. PRs must have
 Conventional Commit titles; squash merges preserve those titles on `main`. See
 [Release operations](docs/operations/release.md) for classification, approval,
@@ -605,7 +640,7 @@ publication, and recovery.
 
 ## Limitations
 
-- **Ubuntu 24.04 x64 only.**
+- **Linux x64 distribution only.** Playwright determines actual host prerequisites and availability.
 - Inspects exactly the declared target set — no route discovery or full-site coverage.
 - No screenshot comparison, image understanding, pixel-diff, or click/input/scroll interaction.
 - Each rule checks the fixed target URL, font loading completion, and any declared `readyCondition` only at the start and end of its evaluation. A failed boundary check returns `incomplete` and discards that rule's facts. Changes during evaluation are not monitored: temporary URL changes, document reloads, hide/show, ready-element replacement, and font loading are allowed if the final boundary satisfies all conditions. Without `readyCondition`, no application-specific readiness is checked. Initial page acquisition still validates redirects and waits for loading, fonts, and the declared ready condition.

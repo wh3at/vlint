@@ -33,7 +33,6 @@ const MOBILE_DEVICE = {
   deviceScaleFactor: 3,
   isMobile: true,
   hasTouch: true,
-  userAgent: "Mozilla/5.0 (TestPhone)",
 };
 
 async function writeSentinelProvider(directory: string, targetsJson: string): Promise<string> {
@@ -71,6 +70,7 @@ describe("check resolution", () => {
       join(directory, "vlint.config.json"),
       JSON.stringify({
         devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
+        environments: [{ name: "windows", platform: "windows", browser: "chromium", devices: ["desk", "phone"] }],
         provider: { type: "command", executable: script, args: [sentinel] },
       }),
     );
@@ -94,6 +94,7 @@ describe("check resolution", () => {
       join(directory, "vlint.config.json"),
       JSON.stringify({
         devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
+        environments: [{ name: "windows", platform: "windows", browser: "chromium", devices: ["desk", "phone"] }],
         provider: { type: "command", executable: script, args: [sentinel] },
       }),
     );
@@ -113,7 +114,7 @@ describe("check resolution", () => {
     const directory = await temporaryDirectory();
     await writeFile(
       join(directory, "vlint.config.json"),
-      JSON.stringify({devices: [DESKTOP_DEVICE] }),
+      JSON.stringify({ devices: [DESKTOP_DEVICE], environments: [{ name: "windows", platform: "windows", browser: "chromium", devices: ["desk"] }] }),
     );
     const result = await resolveCheckPlan(directory, null, {});
     expect(result.ok).toBe(false);
@@ -128,6 +129,7 @@ describe("check resolution", () => {
       join(directory, "vlint.config.json"),
       JSON.stringify({
         devices: [DESKTOP_DEVICE, MOBILE_DEVICE],
+        environments: [{ name: "windows", platform: "windows", browser: "chromium", devices: ["desk", "phone"] }],
         provider: {
           type: "static",
           targets: [

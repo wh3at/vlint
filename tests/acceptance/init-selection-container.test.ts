@@ -1,0 +1,39 @@
+import { expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { resolve, join } from "node:path";
+import { exec as dockerExec } from "./docker-exec";
+
+const container = process.env.VLINT_INIT_CONTAINER;
+(container ? test : test.skip)("compiled init generates all six valid editable environments consumed by three real engines", async () => {
+  const directory = await mkdtemp(resolve("tests/fixtures/init-58-"));
+  const cwd = `/lane/tests/fixtures/${directory.split("/").at(-1)}`;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { return new Response("<!doctype html><html><body>init fixture</body></html>", { headers: { "content-type": "text/html" } }); } });
+  function command(args: string[]) {
+    return dockerExec(["-e", "PLAYWRIGHT_DOWNLOAD_HOST=http://127.0.0.1:1", "-w", cwd, container!, "/lane/dist/vlint-linux-x64", ...args]);
+  }
+  try {
+    const selected = ["windows:chromium", "windows:firefox", "macos:chromium", "macos:webkit", "iphone:webkit", "android:chromium"];
+    const init = await command(["init", ...selected.flatMap((choice) => ["--environment", choice])]);
+    expect(init).toEqual({ code: 0, stderr: "", stdout: "vlint init: created vlint.config.json\n" });
+    const config = await Bun.file(join(directory, "vlint.config.json")).json();
+    expect(config.devices).toHaveLength(6);
+    expect(config.devices[0]).toMatchObject({ viewport: { width: 1280, height: 720 }, screen: { width: 1920, height: 1080 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false });
+    expect(config.devices[5]).toMatchObject({ viewport: { width: 360, height: 732 }, screen: { width: 360, height: 808 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true });
+    for (let repeat = 0; repeat < 2; repeat += 1) {
+      const check = await command(["check", "--url", `http://127.0.0.1:${server.port}/`, "--format", "json"]);
+      if (check.code !== 0) throw new Error(JSON.stringify(check));
+      const summary = JSON.parse(check.stdout);
+      expect(summary.cases).toBeUndefined();
+      expect(summary.execution).toBeUndefined();
+      const stored = await dockerExec([container!, "cat", summary.reportPath]);
+      expect(stored.code, stored.stderr).toBe(0);
+      const result = JSON.parse(stored.stdout);
+      expect(result.status).toBe("clean");
+      expect(result.summary).toEqual(summary.summary);
+      expect(result.cases.map((item: any) => item.environment)).toEqual(selected.map((choice) => choice.replace(":", "-")));
+      expect(result.cases.every((item: any) => item.rules.length === 5 && item.rules.every((rule: any) => rule.status === "clean"))).toBe(true);
+      expect(result.execution.engines.map((item: any) => item.engine).sort()).toEqual(["chromium", "firefox", "webkit"]);
+      expect(result.execution.engines.every((item: any) => item.obtainedVersion !== null)).toBe(true);
+    }
+  } finally { server.stop(true); await rm(directory, { recursive: true, force: true }); }
+}, 120_000);

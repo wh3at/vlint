@@ -1,5 +1,6 @@
 export type FailureStage =
   | "config"
+  | "report"
   | "provider"
   | "browser-setup"
   | "authentication"
@@ -11,6 +12,7 @@ export type FailureStage =
 
 export type FailureCode =
   | "config-not-found"
+  | "report-write-failed"
   | "config-read-failed"
   | "config-too-large"
   | "config-invalid-json"
@@ -18,6 +20,8 @@ export type FailureCode =
   | "config-already-exists"
   | "config-write-failed"
   | "init-device-unavailable"
+  | "init-environment-required"
+  | "init-environment-invalid"
   | "targets-empty"
   | "provider-spawn-failed"
   | "provider-exit-nonzero"
@@ -83,27 +87,6 @@ export type FailureCode =
   | "local-fact-invalid"
   | "signal-interrupt";
 
-export interface BrowserSetupDiagnostic {
-  readonly requirements: {
-    readonly name: string;
-    readonly revision: string;
-    readonly browserVersion: string;
-    readonly executablePath: string;
-    readonly cacheRoot: string;
-  };
-  readonly status: string;
-  readonly environment: {
-    readonly xdgCacheHome: string | undefined;
-    readonly playwrightBrowsersPath: string | undefined;
-  };
-  readonly detectedRevisions: readonly {
-    readonly revision: string;
-    readonly path: string;
-  }[];
-  readonly executablePresent: boolean;
-  readonly executableAccessible: boolean;
-}
-
 export interface Failure {
   readonly stage: FailureStage;
   readonly code: FailureCode;
@@ -112,7 +95,6 @@ export interface Failure {
   readonly device: string | null;
   readonly rule: string | null;
   readonly actualUrl?: string;
-  readonly browserDiagnostic?: BrowserSetupDiagnostic;
 }
 
 export type BoundaryResult<T> =

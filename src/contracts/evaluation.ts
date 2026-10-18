@@ -1,3 +1,4 @@
+import type { AuditEnvironment } from "./config";
 import type { JsonSettings, JsonValue } from "./plugins";
 import type { Failure } from "./failure";
 
@@ -147,6 +148,7 @@ export type LocalRuleCaseObservationStatus =
 
 export interface LocalRuleCaseObservation {
   readonly target: { readonly name: string; readonly url: string };
+  readonly environment: Pick<AuditEnvironment, "name" | "platform" | "browser">;
   readonly device: { readonly name: string };
   readonly caseStatus: "complete" | "partial" | "failed" | "not-executed";
   readonly status: LocalRuleCaseObservationStatus;

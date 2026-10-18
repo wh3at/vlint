@@ -67,6 +67,11 @@ export function buildLocalRuleObservations(
     }
     caseObservations.push({
       target: { name: caseResult.target.name, url: caseResult.target.url },
+      environment: {
+        name: auditCase.environment.name,
+        platform: auditCase.environment.platform,
+        browser: auditCase.environment.browser,
+      },
       device: { name: caseResult.device.name },
       caseStatus: caseResult.status,
       status: mapRuleStatus(ruleResult.status),
