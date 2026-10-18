@@ -69,6 +69,8 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - run: bun install --frozen-lockfile
       - run: bun run check:architecture
+      - name: Verify container image digest pins
+        run: bun run check:container-images
 
   unit:
     runs-on: ubuntu-24.04
