@@ -15,7 +15,13 @@ export async function runBrowserStatus(options: BrowserStatusOptions): Promise<B
   if (options.signal?.aborted) {
     return boundaryFailure({ stage: "interrupt", code: "signal-interrupt", message: "operation cancelled", target: null, device: null, rule: null });
   }
-  const status = await inspectManagedBrowsers(options.signal);
+  let status: Awaited<ReturnType<typeof inspectManagedBrowsers>>;
+  try {
+    status = await inspectManagedBrowsers(options.signal);
+  } catch (error) {
+    if (!options.signal?.aborted) throw error;
+    return boundaryFailure({ stage: "interrupt", code: "signal-interrupt", message: "operation cancelled", target: null, device: null, rule: null });
+  }
   const output = options.format === "json" ? JSON.stringify(status) + "\n" : [
     `browser status: ${status.ready ? "ready" : "unavailable"}`,
     ...status.engines.flatMap((engine) => [

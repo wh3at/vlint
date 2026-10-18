@@ -62,9 +62,35 @@ export async function prepareManagedBrowsers(force: boolean): Promise<void> {
   await registry.validateHostRequirementsForExecutablesIfNeeded(executables, "javascript");
 }
 
+function withCancellation<T>(operation: Promise<T>, signal?: AbortSignal, onLateResult?: (value: T) => Promise<void>): Promise<T> {
+  if (signal === undefined) return operation;
+  return new Promise<T>((resolve, reject) => {
+    let cancelled = false;
+    const abort = () => {
+      cancelled = true;
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    operation.then((value) => {
+      signal.removeEventListener("abort", abort);
+      if (cancelled) {
+        void onLateResult?.(value).catch(() => {});
+      } else {
+        resolve(value);
+      }
+    }, (error: unknown) => {
+      signal.removeEventListener("abort", abort);
+      reject(error);
+    });
+  });
+}
+
 export async function inspectManagedBrowsers(signal?: AbortSignal): Promise<{ ready: boolean; host: { platform: string; architecture: string; release: string }; engines: EngineReadiness[] }> {
   const results: EngineReadiness[] = [];
   for (const engine of Object.keys(engines) as BrowserEngine[]) {
+    signal?.throwIfAborted();
     const executable = managedExecutable(engine);
     const path = executable.executablePath();
     let browser: Browser | undefined;
@@ -77,28 +103,30 @@ export async function inspectManagedBrowsers(signal?: AbortSignal): Promise<{ re
     try {
       signal?.throwIfAborted();
       dependencyValidation = "failed";
-      await registry.validateHostRequirementsForExecutablesIfNeeded([executable], "javascript");
+      await withCancellation(registry.validateHostRequirementsForExecutablesIfNeeded([executable], "javascript"), signal);
       dependencyValidation = "passed";
       launch = "failed";
-      browser = await engines[engine].launch({ headless: true, timeout: 30_000 });
+      browser = await withCancellation(engines[engine].launch({ headless: true, timeout: 30_000 }), signal, (lateBrowser) => lateBrowser.close());
       launch = "passed";
       obtainedVersion = browser.version();
       if (executable.browserVersion !== undefined && obtainedVersion !== executable.browserVersion) {
         throw new Error(`managed browser version does not match expected version: expected ${executable.browserVersion}, obtained ${obtainedVersion}`);
       }
       emptyPage = "failed";
-      const page = await browser.newPage();
-      await page.close();
+      const page = await withCancellation(browser.newPage(), signal);
+      await withCancellation(page.close(), signal);
       emptyPage = "passed";
     } catch (error) {
+      signal?.throwIfAborted();
       diagnostic = escapeTerminal(error instanceof Error ? error.message : String(error));
     } finally {
       if (browser !== undefined) {
         close = "failed";
         try {
-          await browser.close();
+          await withCancellation(browser.close(), signal);
           close = "passed";
         } catch (error) {
+          signal?.throwIfAborted();
           diagnostic = escapeTerminal(error instanceof Error ? error.message : String(error));
         }
       }
