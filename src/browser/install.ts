@@ -150,18 +150,25 @@ async function runInstallAction(options: InstallOptions): Promise<InstallActionO
 
 export async function installBrowser(options: InstallOptions): Promise<BoundaryResult<InstallOutcome>> {
   if (signalAborted(options.signal)) return boundaryFailure(interruptFailure());
-  const before = await inspectManagedBrowsers(options.signal);
-  if (signalAborted(options.signal)) return boundaryFailure(interruptFailure());
-  const outcome = await runInstallAction(options);
-  if (outcome.aborted) return boundaryFailure(interruptFailure());
-  if (!outcome.success) {
-    return boundaryFailure(browserSetupFailure("browser-install-failed", "Browser and OS dependency preparation failed; run 'vlint browser install' in a terminal with Playwright's required permissions"));
+  try {
+    const before = await inspectManagedBrowsers(options.signal);
+    if (signalAborted(options.signal)) return boundaryFailure(interruptFailure());
+    const outcome = await runInstallAction(options);
+    if (outcome.aborted) return boundaryFailure(interruptFailure());
+    if (!outcome.success) {
+      return boundaryFailure(browserSetupFailure("browser-install-failed", "Browser and OS dependency preparation failed; run 'vlint browser install' in a terminal with Playwright's required permissions"));
+    }
+    const after = await inspectManagedBrowsers(options.signal);
+    if (!after.ready) {
+      return boundaryFailure(browserSetupFailure("browser-install-failed", "Browser preparation completed but launch verification failed; run 'vlint browser status'"));
+    }
+    return boundarySuccess({
+      kind: options.force ? "repaired" : before.ready ? "already-present" : "installed",
+    });
+  } catch (error) {
+    if (isAbortError(error) || (signalAborted(options.signal) && error === options.signal?.reason)) {
+      return boundaryFailure(interruptFailure());
+    }
+    throw error;
   }
-  const after = await inspectManagedBrowsers(options.signal);
-  if (!after.ready) {
-    return boundaryFailure(browserSetupFailure("browser-install-failed", "Browser preparation completed but launch verification failed; run 'vlint browser status'"));
-  }
-  return boundarySuccess({
-    kind: options.force ? "repaired" : before.ready ? "already-present" : "installed",
-  });
 }

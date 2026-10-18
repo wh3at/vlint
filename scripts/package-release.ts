@@ -84,9 +84,24 @@ TARGET=$(mktemp "$INSTALL_DIR/.vlint.XXXXXX")
 install -m 0755 vlint "$TARGET"
 (cd "$INVOCATION_DIR" && PLAYWRIGHT_SKIP_BROWSER_GC=1 "$TARGET" browser install)
 (cd "$INVOCATION_DIR" && "$TARGET" browser status)
-mv -f "$TARGET" "$INSTALL_DIR/vlint"
-TARGET=
-COMMITTED=true
+if [ -d "$INSTALL_DIR/vlint" ]; then
+  printf 'vlint installer: destination is a directory\\n' >&2
+  exit 2
+fi
+SIGNAL_STATUS=0
+trap 'SIGNAL_STATUS=129' HUP
+trap 'SIGNAL_STATUS=130' INT
+trap 'SIGNAL_STATUS=143' TERM
+if mv -fT "$TARGET" "$INSTALL_DIR/vlint"; then
+  COMMITTED=true
+  TARGET=
+else
+  exit $?
+fi
+if [ "$SIGNAL_STATUS" -ne 0 ]; then exit "$SIGNAL_STATUS"; fi
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 printf 'vlint %s installed to %s/vlint\\n' "$TAG" "$INSTALL_DIR"
 printf 'Create project configuration with: vlint init --help\\n'
 case ":$PATH:" in

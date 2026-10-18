@@ -1,5 +1,6 @@
 import { boundaryFailure, boundarySuccess, type BoundaryResult } from "../contracts/failure";
 import { inspectManagedBrowsers } from "../browser/management";
+import { escapeTerminal } from "../output/terminal";
 
 export interface BrowserStatusOptions {
   readonly format: "terminal" | "json";
@@ -29,10 +30,10 @@ export async function runBrowserStatus(options: BrowserStatusOptions): Promise<B
       `    expected version: ${engine.expectedVersion ?? "unknown"}`,
       `    obtained version: ${engine.obtainedVersion ?? "unavailable"} (${engine.versionSource ?? "unavailable"})`,
       `    revision: ${engine.revision}`,
-      `    executable: ${engine.executablePath}`,
+      `    executable: ${escapeTerminal(engine.executablePath)}`,
       ...(engine.diagnostic === null ? [] : [`    diagnostic: ${engine.diagnostic}`]),
     ]),
-    ...(status.ready ? [] : ["  run 'vlint browser install' to repair"]), "",
+    ...(status.ready ? [] : ["  run 'vlint browser install --force' to repair"]), "",
   ].join("\n");
   return boundarySuccess({ output, ready: status.ready });
 }
