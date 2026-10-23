@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/wh3at/vlint/compare/v0.10.0...v1.0.0) (2026-10-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* add explicit inspection environments and managed three-engine checks ([#68](https://github.com/wh3at/vlint/issues/68))
+
+### Features
+
+* add explicit inspection environments and managed three-engine checks ([#68](https://github.com/wh3at/vlint/issues/68)) ([95adb74](https://github.com/wh3at/vlint/commit/95adb74894778dedc76e02a7d4bb51475f32f677))
+
 ## [0.10.0](https://github.com/wh3at/vlint/compare/v0.9.0...v0.10.0) (2026-10-15)
 
 
