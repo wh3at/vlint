@@ -5,12 +5,16 @@ Acquisition checks the requested URL against explicitly allowed arrival URLs and
 that arrival URL for subsequent rules. A later move to another allowed URL is still a
 failure. URL matching includes path, query and fragment.
 
-Each rule samples the fixed URL, declared ready condition and font state before and
-after evaluation. A registered FontFace with observable `error` status fails the
-boundary even when `document.fonts.status` has returned to `loaded`. That evaluation's
-facts are discarded. URL/font/ready failures stop remaining rules in that case; other
-cases continue. Rule-specific failures retain their facts and allow independent
-later rules to run. Interruption stops subsequent work.
+Before each rule, fonts needed by the current rendering are given a fresh `timeoutMs`
+budget, independent of acquisition and other rules. The fixed URL, declared ready
+condition and font state are then sampled; the DOM condition is not waited for again.
+The ending boundary samples them immediately without waiting or retrying. A loading
+font at that boundary produces `ready-lost` and discards the rule's facts; later
+completion does not restore them. Font waits that exhaust their budget report
+`font-load-timeout`, and an observable FontFace `error` reports `font-load-failed`
+even when `document.fonts.status` has returned to `loaded`. URL/font/ready failures
+stop remaining rules in that case; other cases continue. Rule-specific failures retain
+their facts and allow independent later rules to run. Interruption stops subsequent work.
 
 These are samples, not continuous monitoring or atomic snapshots (ADR-0004).
 Temporary URL or ready-state changes that recover by the ending boundary are allowed.

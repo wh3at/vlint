@@ -245,7 +245,7 @@ function productionDependencies(pluginRegistry: PluginRuntimeRegistry | null, pl
       const acquired = auditCaseByPage.get(page);
       if (acquired === undefined) return evaluateWithCancellation(page, rule, undefined, pluginRegistry, signal);
       return measureRule(page, acquired.auditCase, acquired.fixedUrl, (guarded) =>
-        evaluateWithCancellation(guarded, rule, acquired.auditCase, pluginRegistry, signal));
+        evaluateWithCancellation(guarded, rule, acquired.auditCase, pluginRegistry, signal), signal);
     },
     finalize: async (rule, ruleIndex, plan, cases, signal) => {
       if (rule.type !== "local") {

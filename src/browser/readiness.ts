@@ -150,7 +150,7 @@ export async function waitForFonts(
         },
         undefined,
         { timeout },
-      ),
+      ).then((handle) => handle.dispose()),
     );
   } catch (error) {
     if (isAbortError(error)) return boundaryFailure(interruptFailure());
@@ -162,15 +162,16 @@ export async function waitForFonts(
 
   let errorFaces = 0;
   try {
-    errorFaces = await page.evaluate(() => {
+    errorFaces = await raceAbort(signal, page.evaluate(() => {
       const global = globalThis as unknown as PageGlobal;
       let count = 0;
       global.document.fonts.forEach((face) => {
         if (face.status === "error") count += 1;
       });
       return count;
-    });
-  } catch {
+    }));
+  } catch (error) {
+    if (isAbortError(error)) return boundaryFailure(interruptFailure());
     return boundaryFailure(fontFailure("font-load-failed", "web font readiness check failed"));
   }
   if (errorFaces > 0) {
