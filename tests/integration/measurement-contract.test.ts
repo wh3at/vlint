@@ -1,5 +1,5 @@
 import { desktopEnvironment, executionFixture } from "../fixtures/environments";
-import { chromium, selectors, type Browser } from "playwright";
+import { chromium, selectors, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createBrowserRunScope, type BrowserRunScope } from "../../src/browser/lifecycle";
 import { findManagedBrowser } from "../../src/browser/install";
@@ -31,6 +31,18 @@ function auditCase(url: string, options: { allowedUrls?: readonly string[]; read
     readyCondition: options.ready === undefined ? null : { selector: options.ready, state: "visible" },
     rules: [{ ...rule, ...(options.minimum === undefined ? {} : { minimumInspected: options.minimum }) }],
   };
+}
+
+async function holdFont(page: Page, path: string, failed = false): Promise<{ requested: Promise<void>; release(): void }> {
+  const { promise: requested, resolve: requestStarted } = Promise.withResolvers<void>();
+  const { promise: released, resolve: release } = Promise.withResolvers<void>();
+  await page.route(`**/${path}`, async (route) => {
+    requestStarted();
+    await released;
+    if (failed) await route.fulfill({ status: 404, body: "missing" });
+    else await route.fulfill({ body: Buffer.from(await Bun.file("tests/fixtures/app/fonts/test-regular.ttf").arrayBuffer()), contentType: "font/ttf" });
+  });
+  return { requested, release };
 }
 
 interface PageServer {
@@ -83,6 +95,11 @@ beforeAll(async () => {
       (globalThis as any).boundaryChange = null;
       if (change === "url") history.pushState({}, "", "/changed-during-boundary");
       if (change === "fonts") Object.defineProperty(document.fonts, "status", { configurable: true, value: "loading" });
+      if (change === "start-font") (globalThis as any).startBoundaryFont();
+      if (change === "block") {
+        const until = Date.now() + 2500;
+        while (Date.now() < until) {}
+      }
       return Array.from(root.querySelectorAll(selector));
     },
   }), { contentScript: false });
@@ -871,8 +888,343 @@ test.each(["visible", "attached", "hidden"] as const)("shadow ready %s condition
   }
 });
 
-test.each(["transient", "start", "finish"] as const)("selector-free font readiness is checked at boundaries: %s", async (phase) => {
+test.each([undefined, "#ready"])("additional real fonts settle before each rule with ready selector %s", async (ready) => {
+  const audit = auditCase(`${pages.url}/text-mutation.html`, ready === undefined ? {} : { ready });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const { requested, release } = await holdFont(opened.value.page, "held-font.ttf");
+  try {
+    const page = opened.value.page;
+    const first = await measureRule(page, audit, audit.url, async () => ({ facts: { elementsInspected: 1, violations: [] }, failure: null }));
+    expect(first.failure).toBeNull();
+    await page.evaluate(() => {
+      const face = new FontFace("held", "url(/held-font.ttf)");
+      document.fonts.add(face);
+      document.body.style.fontFamily = "held";
+      void face.load().catch(() => undefined);
+    });
+    await requested;
+    expect(await page.evaluate(() => document.fonts.status)).toBe("loading");
+    let evaluated = false;
+    const pending = measureRule(page, audit, audit.url, async () => {
+      evaluated = true;
+      return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+    });
+    await Bun.sleep(150);
+    expect(evaluated).toBe(false);
+    release();
+    const outcome = await pending;
+    expect(outcome.failure).toBeNull();
+    expect(outcome.facts.elementsInspected).toBe(1);
+  } finally {
+    release();
+    await opened.value.close();
+  }
+});
+
+test.each(["timeout", "failed", "url", "ready"] as const)("pre-measurement held font reports %s without evaluating", async (mode) => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`, { ready: "#ready" }), timeoutMs: 900 };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const { requested, release } = await holdFont(opened.value.page, "held-font.ttf", mode === "failed");
+  try {
+    const page = opened.value.page;
+    await page.evaluate(() => {
+      const face = new FontFace("held", "url(/held-font.ttf)");
+      document.fonts.add(face);
+      document.body.style.fontFamily = "held";
+      void face.load().catch(() => undefined);
+    });
+    await requested;
+    let evaluated = false;
+    const start = Date.now();
+    const pending = measureRule(page, audit, audit.url, async () => {
+      evaluated = true;
+      return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+    });
+    await Bun.sleep(100);
+    if (mode === "url") await page.evaluate(() => history.pushState({}, "", "/changed"));
+    if (mode === "ready") await page.locator("#ready").evaluate((element) => element.remove());
+    if (mode !== "timeout") release();
+    const outcome = await pending;
+    expect(Date.now() - start).toBeLessThan(2500);
+    expect(evaluated).toBe(false);
+    expect(outcome.failure).toMatchObject({ code: { timeout: "font-load-timeout", failed: "font-load-failed", url: "url-mismatch", ready: "ready-lost" }[mode], target: "page", device: "desktop" });
+    if (mode === "timeout" || mode === "failed") expect(outcome.failure?.stage).toBe("web-font");
+    expect(outcome.facts).toEqual({ elementsInspected: 0, violations: [] });
+  } finally {
+    release();
+    await opened.value.close();
+  }
+});
+
+test.each(["url", "ready"] as const)("start boundary retains font failure priority when %s is also lost", async (mode) => {
+  const audit = auditCase(`${pages.url}/text-mutation.html`, { ready: "#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  try {
+    const page = opened.value.page;
+    await page.evaluate(async (mode) => {
+      const face = new FontFace("broken", "url(/missing-font.ttf)");
+      document.fonts.add(face);
+      await face.load().catch(() => undefined);
+      document.querySelector("#ready")!.remove();
+      if (mode === "url") history.pushState({}, "", "/different");
+    }, mode);
+    let evaluated = false;
+    const outcome = await measureRule(page, audit, audit.url, async () => {
+      evaluated = true;
+      return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+    });
+    expect(evaluated).toBe(false);
+    expect(outcome.failure?.code).toBe(mode === "url" ? "url-mismatch" : "font-load-failed");
+  } finally {
+    await opened.value.close();
+  }
+});
+
+test("a stalled start boundary cannot extend the rule preparation deadline", async () => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`, { ready: "boundarysample=#ready" }), timeoutMs: 600 };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  try {
+    const page = opened.value.page;
+    await page.evaluate(() => { (globalThis as any).boundaryChange = "block"; });
+    let evaluated = false;
+    const started = Date.now();
+    const outcome = await measureRule(page, audit, audit.url, async () => {
+      evaluated = true;
+      return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+    });
+    expect(Date.now() - started).toBeLessThan(1800);
+    expect(outcome.failure).toMatchObject({ stage: "web-font", code: "font-load-timeout", target: "page", device: "desktop" });
+    expect(outcome.facts).toEqual({ elementsInspected: 0, violations: [] });
+    expect(evaluated).toBe(false);
+  } finally {
+    await opened.value.close();
+  }
+});
+
+test("a stalled font error check cannot extend the rule preparation deadline", async () => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`), timeoutMs: 600 };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  try {
+    const page = opened.value.page;
+    await page.evaluate(() => {
+      document.fonts.forEach = () => {
+        const until = Date.now() + 2500;
+        while (Date.now() < until) {}
+      };
+    });
+    let evaluated = false;
+    const started = Date.now();
+    const outcome = await measureRule(page, audit, audit.url, async () => {
+      evaluated = true;
+      return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+    });
+    expect(Date.now() - started).toBeLessThan(1800);
+    expect(outcome.failure).toMatchObject({ stage: "web-font", code: "font-load-timeout", target: "page", device: "desktop" });
+    expect(outcome.facts).toEqual({ elementsInspected: 0, violations: [] });
+    expect(evaluated).toBe(false);
+  } finally {
+    await opened.value.close();
+  }
+});
+
+test("font loads discovered at the start boundary share the original rule deadline", async () => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`, { ready: "boundarysample=#ready" }), timeoutMs: 1200 };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const first = await holdFont(opened.value.page, "first.ttf");
+  const second = await holdFont(opened.value.page, "second.ttf");
+  try {
+    const page = opened.value.page;
+    await page.evaluate(() => {
+      const load = (name: string, url: string) => {
+        const face = new FontFace(name, `url(${url})`);
+        document.fonts.add(face);
+        void face.load().catch(() => undefined);
+      };
+      (globalThis as any).startBoundaryFont = () => load("second", "/second.ttf");
+      (globalThis as any).boundaryChange = "start-font";
+      load("first", "/first.ttf");
+    });
+    await first.requested;
+    let evaluated = false;
+    const started = Date.now();
+    const pending = measureRule(page, audit, audit.url, async () => {
+      evaluated = true;
+      return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+    });
+    await Bun.sleep(700);
+    first.release();
+    await second.requested;
+    const outcome = await pending;
+    expect(Date.now() - started).toBeLessThan(1750);
+    expect(outcome.failure?.code).toBe("font-load-timeout");
+    expect(evaluated).toBe(false);
+  } finally {
+    first.release();
+    second.release();
+    await opened.value.close();
+  }
+});
+
+test.each(["held", "completed", "failed"] as const)("font loading during evaluation is judged immediately at the end: %s", async (mode) => {
   const audit = auditCase(`${pages.url}/text-mutation.html`);
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const { requested, release } = await holdFont(opened.value.page, "during.ttf", mode === "failed");
+  try {
+    const page = opened.value.page;
+    const start = Date.now();
+    const outcome = await measureRule(page, audit, audit.url, async (page) => {
+      await page.evaluate(() => {
+        const face = new FontFace("during", "url(/during.ttf)");
+        document.fonts.add(face);
+        void face.load().catch(() => undefined);
+      });
+      await requested;
+      if (mode !== "held") {
+        release();
+        await page.waitForFunction(() => document.fonts.status === "loaded");
+      }
+      return { facts: { elementsInspected: 1, violations: [{ type: "local", locator: "body", geometry: { x: 0, y: 0, width: 1, height: 1 }, message: "test", details: null }] }, failure: null };
+    });
+    expect(Date.now() - start).toBeLessThan(2000);
+    expect(outcome.failure?.code ?? null).toBe(mode === "held" ? "ready-lost" : mode === "failed" ? "font-load-failed" : null);
+    if (mode === "completed") expect(outcome.facts.violations).toHaveLength(1);
+    else expect(outcome.facts).toEqual({ elementsInspected: 0, violations: [] });
+    release();
+    await page.waitForFunction(() => document.fonts.status === "loaded");
+    if (mode === "held") expect(outcome.facts).toEqual({ elementsInspected: 0, violations: [] });
+  } finally {
+    release();
+    await opened.value.close();
+  }
+});
+
+test("a font needed by a newly rendered style is loaded before evaluation", async () => {
+  const audit = auditCase(`${pages.url}/text-mutation.html`, { ready: "boundarysample=#ready" });
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  const { requested, release } = await holdFont(opened.value.page, "rendered.ttf");
+  try {
+    const page = opened.value.page;
+    await page.evaluate(() => {
+      (globalThis as any).startBoundaryFont = () => {
+        const style = document.createElement("style");
+        style.textContent = "@font-face{font-family:rendered;src:url(/rendered.ttf)}body{font-family:rendered}";
+        document.head.append(style);
+      };
+      (globalThis as any).boundaryChange = "start-font";
+    });
+    let evaluated = false;
+    const pending = measureRule(page, audit, audit.url, async () => {
+      evaluated = true;
+      return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+    });
+    await requested;
+    await Bun.sleep(100);
+    expect(evaluated).toBe(false);
+    release();
+    expect((await pending).failure).toBeNull();
+  } finally {
+    release();
+    await opened.value.close();
+  }
+});
+
+test("each rule gets a fresh font wait budget independent of acquisition and prior rules", async () => {
+  const audit = { ...auditCase(`${server.url}/slow?delay=700`), timeoutMs: 1100 };
+  const opened = await browser.acquireCase(audit);
+  if (!opened.ok) throw new Error(opened.failure.code);
+  try {
+    const page = opened.value.page;
+    for (const index of [1, 2]) {
+      const { requested, release } = await holdFont(page, `budget-${index}.ttf`);
+      await page.evaluate((index) => {
+        const face = new FontFace(`budget-${index}`, `url(/budget-${index}.ttf)`);
+        document.fonts.add(face);
+        void face.load().catch(() => undefined);
+      }, index);
+      await requested;
+      const pending = measureRule(page, audit, audit.url, async () => ({ facts: { elementsInspected: 1, violations: [] }, failure: null }));
+      await Bun.sleep(650);
+      release();
+      const outcome = await pending;
+      expect(outcome.failure).toBeNull();
+      expect(outcome.facts.elementsInspected).toBe(1);
+    }
+  } finally {
+    await opened.value.close();
+  }
+});
+
+test.each(["timeout", "interrupt"] as const)("execution releases browser resources after pre-rule font %s", async (mode) => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`), timeoutMs: mode === "timeout" ? 900 : 5000 };
+  const requested = Promise.withResolvers<void>();
+  const released = Promise.withResolvers<void>();
+  const controller = new AbortController();
+  let isolatedBrowser: Browser | undefined;
+  let evaluated = false;
+  try {
+    const pending = runResolvedCheck(
+      { environments: [desktopEnvironment], targets: [audit], cases: [audit], rules: audit.rules },
+      {
+        launch: async () => {
+          const scope = await createBrowserRunScope({ launch: async () => {
+            isolatedBrowser = await chromium.launch({ headless: true, executablePath: findManagedBrowser().executablePath });
+            return isolatedBrowser;
+          } });
+          if (!scope.ok) return scope;
+          return boundarySuccess({
+            execution: executionFixture,
+            openCase: (item, signal) => scope.value.acquireCase(item, signal),
+            close: async () => {
+              const closed = await scope.value.close();
+              return closed.ok ? [] : [closed.failure];
+            },
+          });
+        },
+        evaluate: async (page, _rule, signal) => {
+          await page.route("**/execution.ttf", async (route) => {
+            requested.resolve();
+            await released.promise;
+            await route.fulfill({ body: Buffer.from(await Bun.file("tests/fixtures/app/fonts/test-regular.ttf").arrayBuffer()), contentType: "font/ttf" });
+          });
+          await page.evaluate(() => {
+            const face = new FontFace("execution", "url(/execution.ttf)");
+            document.fonts.add(face);
+            void face.load().catch(() => undefined);
+          });
+          await requested.promise;
+          return measureRule(page, audit, audit.url, async () => {
+            evaluated = true;
+            return { facts: { elementsInspected: 1, violations: [] }, failure: null };
+          }, signal);
+        },
+      },
+      { toolVersion: "test", signal: controller.signal },
+    );
+    await requested.promise;
+    if (mode === "interrupt") controller.abort();
+    const result = await pending;
+    expect(evaluated).toBe(false);
+    expect(isolatedBrowser?.isConnected()).toBe(false);
+    expect(isolatedBrowser?.contexts()).toHaveLength(0);
+    if (mode === "interrupt") expect(result.failures[0]?.code).toBe("signal-interrupt");
+    else expect(result.cases[0]?.rules[0]?.failure).toMatchObject({ stage: "web-font", code: "font-load-timeout", target: "page", device: "desktop", rule: "coverage" });
+  } finally {
+    controller.abort();
+    released.resolve();
+    await isolatedBrowser?.close();
+  }
+});
+
+test.each(["transient", "start", "finish"] as const)("selector-free font readiness is checked at boundaries: %s", async (phase) => {
+  const audit = { ...auditCase(`${pages.url}/text-mutation.html`), timeoutMs: 700 };
   const opened = await browser.acquireCase(audit);
   if (!opened.ok) throw new Error(opened.failure.code);
   try {
@@ -890,7 +1242,7 @@ test.each(["transient", "start", "finish"] as const)("selector-free font readine
       return { facts: { elementsInspected: 1, violations: [] }, failure: null };
     });
     expect(evaluated).toBe(phase !== "start");
-    expect(outcome.failure?.code ?? null).toBe(phase === "transient" ? null : "ready-lost");
+    expect(outcome.failure?.code ?? null).toBe(phase === "transient" ? null : phase === "start" ? "font-load-timeout" : "ready-lost");
     expect(outcome.facts.elementsInspected).toBe(phase === "transient" ? 1 : 0);
   } finally {
     await opened.value.close();

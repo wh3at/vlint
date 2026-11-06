@@ -56,7 +56,7 @@ export type FailureCode =
   | "minimum-inspected-unmet"
   | "elements-inspected-invalid"
   | "font-load-failed"
-  | "font-timeout"
+  | "font-load-timeout"
   | "candidate-selector-invalid"
   | "exclude-selector-invalid"
   | "label-selector-invalid"

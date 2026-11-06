@@ -406,6 +406,68 @@ test("a failed target does not break the shared browser for the next target (cle
   if (next.ok) await next.value.close();
 });
 
+test("initial acquisition reports a timed-out font with its identity and releases the target", async () => {
+  const url = `${server.url}/font-hang.html`;
+  const result = await run.acquireCase(target(url, { timeoutMs: 800 }));
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    await result.value.close();
+    throw new Error("expected font timeout");
+  }
+  expect(result.failure).toMatchObject({ stage: "web-font", code: "font-load-timeout", target: "t", device: "test-device", rule: null, actualUrl: url });
+  const next = await run.acquireCase(target(`${server.url}/index.html`));
+  expect(next.ok).toBe(true);
+  if (next.ok) await next.value.close();
+});
+
+test("initial acquisition reports failed fonts with their identity", async () => {
+  const url = `${server.url}/font-error.html`;
+  const result = await run.acquireCase(target(url));
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    await result.value.close();
+    throw new Error("expected font failure");
+  }
+  expect(result.failure).toMatchObject({ stage: "web-font", code: "font-load-failed", target: "t", device: "test-device", rule: null, actualUrl: url });
+});
+
+test("cancelling a font wait releases the target and preserves the browser", async () => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 700);
+  try {
+    const result = await run.acquireCase(target(`${server.url}/font-hang.html`, { timeoutMs: 5000 }), controller.signal);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      await result.value.close();
+      throw new Error("expected interruption");
+    }
+    expect(result.failure).toMatchObject({ stage: "interrupt", code: "signal-interrupt", target: "t", device: "test-device" });
+    const next = await run.acquireCase(target(`${server.url}/index.html`));
+    expect(next.ok).toBe(true);
+    if (next.ok) await next.value.close();
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+
+test("navigation and DOM readiness consume the font acquisition budget", async () => {
+  const start = Date.now();
+  const result = await run.acquireCase(target(`${server.url}/slow-font-readiness`, {
+    timeoutMs: 1800,
+    readyCondition: { selector: "#ready", state: "visible" },
+  }));
+  const elapsed = Date.now() - start;
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    await result.value.close();
+    throw new Error("expected font timeout");
+  }
+  expect(result.failure).toMatchObject({ stage: "web-font", code: "font-load-timeout" });
+  expect(elapsed).toBeGreaterThanOrEqual(1500);
+  expect(elapsed).toBeLessThan(2600);
+});
+
 // Integration boundary: asserts real Playwright timeout/deadline behavior on the platform clock.
 // Fake timers cannot reproduce the browser-side wait semantics under test.
 test("remaining budget flows across stages: a slow navigation leaves only the remainder for ready", async () => {

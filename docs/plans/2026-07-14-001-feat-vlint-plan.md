@@ -473,7 +473,7 @@ Command executable stdoutは例えば`{"targets":[{"name":"settings","url":"http
 
 ad hocでもconfigはrequiredで、例えば上のいずれかと`vlint check --url http://127.0.0.1:4173/settings --format json`を使う。
 main-frame navigationはfinal response status `200..399`だけを成功とし、responseなし/network error、`400..599`、deadline消費を別codeへ分ける。
-ready condition後に`document.fonts.ready`を待ち、FontFaceSet内に`status=error`のfaceが一つでもあれば`font-load-failed`、remaining deadlineを使い切れば`font-timeout`とする。
+ready condition後に`document.fonts.ready`を待ち、FontFaceSet内に`status=error`のfaceが一つでもあれば`font-load-failed`、remaining deadlineを使い切れば`font-load-timeout`とする。
 
 **Normative JSON v1 contract**
 
@@ -576,7 +576,7 @@ Failure = {
 | `authentication` | `state-missing`, `state-read-failed`, `state-not-regular`, `state-too-large`, `state-invalid`, `state-apply-failed` |
 | `navigation` | `navigation-network`, `navigation-http-status`, `navigation-timeout` |
 | `ready-condition` | `ready-invalid-selector`, `ready-timeout` |
-| `web-font` | `font-load-failed`, `font-timeout` |
+| `web-font` | `font-load-failed`, `font-load-timeout` |
 | `rule-evaluation` | `candidate-selector-invalid`, `exclude-selector-invalid`, `label-selector-invalid`, `label-selector-cardinality`, `label-selector-not-rendered`, `minimum-labels-unmet`, `zero-labels-global`, `generated-content-unsupported`, `diagnostic-field-too-large`, `geometry-evaluation-failed`, `rule-script-failed` |
 | `interrupt` | `signal-interrupt` |
 

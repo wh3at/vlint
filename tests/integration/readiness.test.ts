@@ -77,12 +77,26 @@ test("waitForFonts maps a failed font face to font-load-failed", async () => {
   });
 });
 
+test("waitForFonts returns a timeout for an exhausted deadline on an acquired page", async () => {
+  await withPage(`${server.url}/font-ok.html`, async (page) => {
+    const controller = new AbortController();
+    const watchdog = setTimeout(() => controller.abort(), 2000);
+    try {
+      const result = await waitForFonts(page, createDeadline(0), controller.signal);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.failure).toMatchObject({ stage: "web-font", code: "font-load-timeout" });
+    } finally {
+      clearTimeout(watchdog);
+    }
+  });
+});
+
 // Integration boundary: a never-settling font exercises the real Playwright function-timeout path.
-test("waitForFonts maps a never-loading font to font-timeout", async () => {
+test("waitForFonts maps a never-loading font to font-load-timeout", async () => {
   await withPage(`${server.url}/font-hang.html`, async (page) => {
     const result = await waitForFonts(page, createDeadline(1500));
     if (!result.ok) {
-      expect(result.failure.code).toBe("font-timeout");
+      expect(result.failure.code).toBe("font-load-timeout");
       expect(result.failure.stage).toBe("web-font");
     }
   });

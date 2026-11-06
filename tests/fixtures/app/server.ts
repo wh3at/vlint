@@ -64,6 +64,11 @@ export function startFixtureServer(options: { readonly port?: number } = {}): Fi
         );
       }
 
+      if (pathname === "/slow-font-readiness") {
+        await delay(700);
+        return new Response(`<!doctype html><style>@font-face{font-family:Hanging;src:url(/hang)}body{font-family:Hanging}</style><main id="ready" hidden>ready</main><script>setTimeout(() => document.querySelector('#ready').hidden = false, 400)</script>`, { headers: HTML_HEADERS });
+      }
+
       if (pathname === "/auth-gated") {
         const cookie = request.headers.get("cookie") ?? "";
         const authenticated = cookie.includes("session=authenticated");

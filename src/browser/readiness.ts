@@ -90,6 +90,35 @@ export function raceAbort<T>(signal: AbortSignal | undefined, task: Promise<T>):
   return promise;
 }
 
+export function raceDeadline<T>(deadline: Deadline, signal: AbortSignal | undefined, task: () => Promise<T>): Promise<T> {
+  if (signalAborted(signal)) return Promise.reject(abortError());
+  const remaining = deadline.remainingMs();
+  if (remaining <= 0) return Promise.reject(deadlineError());
+  return new Promise<T>((resolve, reject) => {
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const onAbort = (): void => { cleanup(); reject(abortError()); };
+    const timer = setTimeout(() => { cleanup(); reject(deadlineError()); }, remaining);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    Promise.resolve().then(() => {
+      if (signalAborted(signal)) throw abortError();
+      if (deadline.remainingMs() <= 0) throw deadlineError();
+      return task();
+    }).then(
+      (value) => { cleanup(); if (deadline.remainingMs() <= 0) reject(deadlineError()); else resolve(value); },
+      (error: unknown) => { cleanup(); if (deadline.remainingMs() <= 0 && !isAbortError(error)) reject(deadlineError()); else reject(error); },
+    );
+  });
+}
+
+function deadlineError(): Error {
+  const error = new Error("deadline exceeded");
+  error.name = "TimeoutError";
+  return error;
+}
+
 function abortError(): Error {
   const error = new Error("cancelled");
   error.name = "AbortError";
@@ -129,7 +158,7 @@ export async function waitForReadyCondition(
 
 /**
  * Waits for web fonts to settle within the remaining target budget, then
- * verifies no face errored. A never-settling font set is `font-timeout`; a face
+ * verifies no face errored. A never-settling font set is `font-load-timeout`; a face
  * that failed to load is `font-load-failed`; an abort is an interrupt failure.
  */
 export async function waitForFonts(
@@ -139,9 +168,9 @@ export async function waitForFonts(
 ): Promise<BoundaryResult<void>> {
   if (signalAborted(signal)) return boundaryFailure(interruptFailure());
   const timeout = deadline.remainingMs();
+  if (timeout <= 0) return boundaryFailure(fontFailure("font-load-timeout", "web fonts did not settle within the target deadline"));
   try {
-    await raceAbort(
-      signal,
+    await raceDeadline(deadline, signal, () =>
       page.waitForFunction(
         () => {
           const global = globalThis as unknown as PageGlobal;
@@ -149,27 +178,29 @@ export async function waitForFonts(
         },
         undefined,
         { timeout },
-      ),
+      ).then((handle) => handle.dispose()),
     );
   } catch (error) {
     if (isAbortError(error)) return boundaryFailure(interruptFailure());
     if (isTimeoutError(error)) {
-      return boundaryFailure(fontFailure("font-timeout", "web fonts did not settle within the target deadline"));
+      return boundaryFailure(fontFailure("font-load-timeout", "web fonts did not settle within the target deadline"));
     }
     return boundaryFailure(fontFailure("font-load-failed", "web font readiness check failed"));
   }
 
   let errorFaces = 0;
   try {
-    errorFaces = await page.evaluate(() => {
+    errorFaces = await raceDeadline(deadline, signal, () => page.evaluate(() => {
       const global = globalThis as unknown as PageGlobal;
       let count = 0;
       global.document.fonts.forEach((face) => {
         if (face.status === "error") count += 1;
       });
       return count;
-    });
-  } catch {
+    }));
+  } catch (error) {
+    if (isAbortError(error)) return boundaryFailure(interruptFailure());
+    if (isTimeoutError(error)) return boundaryFailure(fontFailure("font-load-timeout", "web fonts did not settle within the target deadline"));
     return boundaryFailure(fontFailure("font-load-failed", "web font readiness check failed"));
   }
   if (errorFaces > 0) {
