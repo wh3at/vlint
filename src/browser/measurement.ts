@@ -2,7 +2,7 @@ import type { Frame, Page, Request } from "playwright";
 import type { EffectiveAuditCase } from "../contracts/config";
 import type { RuleEvaluationOutcome } from "../contracts/evaluation";
 import type { Failure } from "../contracts/failure";
-import { createDeadline, interruptFailure, isAbortError, raceAbort, waitForFonts } from "./readiness";
+import { createDeadline, interruptFailure, isAbortError, isTimeoutError, raceDeadline, waitForFonts } from "./readiness";
 
 export function sameUrl(left: string, right: string): boolean {
   return new URL(left).href === new URL(right).href;
@@ -83,6 +83,10 @@ async function checkBoundary(page: Page, auditCase: EffectiveAuditCase, fixedUrl
   };
 }
 
+function failedMeasurement(failure: Failure): RuleEvaluationOutcome {
+  return { facts: { elementsInspected: 0, violations: [] }, failure };
+}
+
 export async function measureRule(
   page: Page,
   auditCase: EffectiveAuditCase,
@@ -93,16 +97,17 @@ export async function measureRule(
   const deadline = createDeadline(auditCase.timeoutMs);
   while (true) {
     const fonts = await waitForFonts(page, deadline, signal);
-    if (!fonts.ok && fonts.failure.code === "signal-interrupt") return { facts: { elementsInspected: 0, violations: [] }, failure: fonts.failure };
+    if (!fonts.ok && fonts.failure.code === "signal-interrupt") return failedMeasurement(fonts.failure);
     let boundary: Failure | "fonts-loading" | null;
     try {
-      boundary = await raceAbort(signal, checkBoundary(page, auditCase, fixedUrl, true));
+      boundary = await raceDeadline(deadline, signal, () => checkBoundary(page, auditCase, fixedUrl, true));
     } catch (error) {
-      if (isAbortError(error)) return { facts: { elementsInspected: 0, violations: [] }, failure: interruptFailure() };
+      if (isAbortError(error)) return failedMeasurement(interruptFailure());
+      if (isTimeoutError(error)) return failedMeasurement({ stage: "web-font", code: "font-load-timeout", message: "web fonts did not settle within the target deadline", target: auditCase.name, device: auditCase.deviceName, rule: null, actualUrl: page.url() });
       throw error;
     }
-    if (boundary !== null && boundary !== "fonts-loading") return { facts: { elementsInspected: 0, violations: [] }, failure: boundary };
-    if (!fonts.ok) return { facts: { elementsInspected: 0, violations: [] }, failure: { ...fonts.failure, target: auditCase.name, device: auditCase.deviceName, actualUrl: page.url() } };
+    if (boundary !== null && boundary !== "fonts-loading") return failedMeasurement(boundary);
+    if (!fonts.ok) return failedMeasurement({ ...fonts.failure, target: auditCase.name, device: auditCase.deviceName, actualUrl: page.url() });
     if (boundary === null) break;
   }
   let outcome: RuleEvaluationOutcome;
@@ -110,9 +115,9 @@ export async function measureRule(
     outcome = await evaluate(page);
   } catch (error) {
     const failure = await checkBoundary(page, auditCase, fixedUrl);
-    if (failure !== null) return { facts: { elementsInspected: 0, violations: [] }, failure };
+    if (failure !== null) return failedMeasurement(failure);
     throw error;
   }
   const failure = await checkBoundary(page, auditCase, fixedUrl);
-  return failure === null ? outcome : { facts: { elementsInspected: 0, violations: [] }, failure };
+  return failure === null ? outcome : failedMeasurement(failure);
 }

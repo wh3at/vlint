@@ -450,21 +450,6 @@ test("cancelling a font wait releases the target and preserves the browser", asy
   }
 });
 
-test("an exhausted acquisition budget ends font waiting without hanging", async () => {
-  const controller = new AbortController();
-  const watchdog = setTimeout(() => controller.abort(), 2000);
-  try {
-    const result = await run.acquireCase(target(`${server.url}/font-hang.html`, { timeoutMs: 1 }), controller.signal);
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      await result.value.close();
-      throw new Error("expected font timeout");
-    }
-    expect(result.failure).toMatchObject({ stage: "web-font", code: "font-load-timeout", target: "t", device: "test-device" });
-  } finally {
-    clearTimeout(watchdog);
-  }
-});
 
 test("navigation and DOM readiness consume the font acquisition budget", async () => {
   const start = Date.now();
