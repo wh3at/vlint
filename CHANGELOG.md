@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/wh3at/vlint/compare/v1.0.0...v1.0.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* bound entire font readiness preparation ([#70](https://github.com/wh3at/vlint/issues/70)) ([#73](https://github.com/wh3at/vlint/issues/73)) ([c5a1561](https://github.com/wh3at/vlint/commit/c5a1561ba101fe4e19aca4b8bfa5c4ffc202ecc5))
+
 ## [1.0.0](https://github.com/wh3at/vlint/compare/v0.10.0...v1.0.0) (2026-10-18)
 
 
