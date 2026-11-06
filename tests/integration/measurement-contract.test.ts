@@ -442,13 +442,18 @@ test("an evaluator error is rethrown when the final boundary is satisfied", asyn
   const audit = auditCase(`${server.url}/`, { ready: "#ready" });
   const opened = await browser.acquireCase(audit);
   if (!opened.ok) throw new Error(opened.failure.code);
-  const page = opened.value.page;
-  await page.evaluate(() => { (globalThis as any).originalPushState = (globalThis as any).history.pushState; });
-  await expect(measureRule(page, audit, page.url(), async () => {
-    throw new Error("evaluation failed");
-  })).rejects.toThrow("evaluation failed");
-  expect(await page.evaluate(() => (globalThis as any).history.pushState === (globalThis as any).originalPushState)).toBe(true);
-  await opened.value.close();
+  try {
+    const page = opened.value.page;
+    await page.evaluate(() => { (globalThis as any).originalPushState = (globalThis as any).history.pushState; });
+    const evaluationError = new Error("evaluation failed");
+    const outcome = await measureRule(page, audit, page.url(), async () => {
+      throw evaluationError;
+    }).catch((error: unknown) => error);
+    expect(outcome).toBe(evaluationError);
+    expect(await page.evaluate(() => (globalThis as any).history.pushState === (globalThis as any).originalPushState)).toBe(true);
+  } finally {
+    await opened.value.close();
+  }
 });
 
 test("live browser counts below a per-case minimum produce incomplete exit 2", async () => {
