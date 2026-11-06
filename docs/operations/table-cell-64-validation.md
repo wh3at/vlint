@@ -4,7 +4,7 @@ The boundary is the compiled CLI, its JSON summary and persisted report. The fix
 
 ## Reproduce
 
-Build with pinned Bun 1.3.14:
+Build with the Bun version pinned in `package.json` and `mise.toml`:
 
 ```sh
 bun install --frozen-lockfile

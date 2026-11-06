@@ -96,13 +96,11 @@ async function main(): Promise<void> {
     container = `vlint-${group}-${randomUUID()}`;
     await command(["docker", "create", "--name", container, "--init", "--network", "host",
       "-e", "PLAYWRIGHT_SKIP_BROWSER_GC=1", "-e", "PLAYWRIGHT_BROWSERS_PATH=/tmp/vlint-browsers",
-      ...(group === "three-engine" ? ["-e", "DEBUG=pw:browser", "-e", "DEBUG_FILE=/tmp/vlint-browser-debug.log", "-e", "VLINT_DEBUG_BROWSER_CLOSE=1"] : []),
       "-v", `${root}:/lane:ro`, "-v", `${join(root, "tests/fixtures")}:/lane/tests/fixtures`,
       "ubuntu@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf", "sleep", "infinity"], "create");
     await command(["docker", "start", container], "start");
     await command(["docker", "cp", process.execPath, `${container}:/usr/local/bin/bun`], "bun");
     await command(["docker", "exec", container, "sh", "-ec", "apt-get update && apt-get install -y ca-certificates && /lane/dist/vlint-linux-x64 browser install"], "prepare");
-    if (group === "three-engine") await command(["docker", "exec", container, "chmod", "a+rw", "/tmp/vlint-browser-debug.log"], "debug-permissions");
     const status = JSON.parse(await command(["docker", "exec", "-e", "PLAYWRIGHT_DOWNLOAD_HOST=http://127.0.0.1:1", container, "/lane/dist/vlint-linux-x64", "browser", "status", "--format", "json"], "readiness"));
     if (status.ready !== true || JSON.stringify(status.engines.map((engine: { engine: string }) => engine.engine)) !== JSON.stringify(["chromium", "firefox", "webkit"])) throw new Error("three managed engines are not ready");
     if (group === "privilege") {
@@ -122,7 +120,7 @@ async function main(): Promise<void> {
   } finally {
     if (container !== undefined) {
       try {
-        await command(["docker", "exec", container, "sh", "-ec", "find /tmp -mindepth 1 -maxdepth 2 \\( -path '/tmp/vlint-*/report.json' -o -path '/tmp/vlint-browser-debug.log' \\) -printf '%P\\0' | tar --null -C /tmp -czf /tmp/acceptance-reports.tar.gz -T -"], "collect", process.env, true);
+        await command(["docker", "exec", container, "sh", "-ec", "find /tmp -mindepth 2 -maxdepth 2 -path '/tmp/vlint-*/report.json' -printf '%P\\0' | tar --null -C /tmp -czf /tmp/acceptance-reports.tar.gz -T -"], "collect", process.env, true);
         await command(["docker", "cp", `${container}:/tmp/acceptance-reports.tar.gz`, join(output, "complete-reports.tar.gz")], "reports", process.env, true);
       } catch (error) {
         console.error(error);

@@ -219,22 +219,8 @@ export async function createBrowserRunScope(
   const close = async (): Promise<BoundaryResult<void>> => {
     if (closed) return boundarySuccess(undefined);
     closed = true;
-    const started = Date.now();
-    try {
-      await raceTimeout(browser.close(), closeTimeoutMs);
-      return boundarySuccess(undefined);
-    } catch (error) {
-      if (process.env.VLINT_DEBUG_BROWSER_CLOSE === "1") {
-        console.error("[DEBUG-browser-close]", JSON.stringify({
-          engine,
-          elapsedMs: Date.now() - started,
-          timeoutMs: closeTimeoutMs,
-          connected: browser.isConnected(),
-          error: error instanceof Error ? { name: error.name, message: error.message.slice(0, 2000) } : String(error).slice(0, 2000),
-        }));
-      }
-      return boundaryFailure(cleanupFailure(null, null, "failed to close the managed browser process"));
-    }
+    if (await settleClose(browser.close(), closeTimeoutMs)) return boundarySuccess(undefined);
+    return boundaryFailure(cleanupFailure(null, null, "failed to close the managed browser process"));
   };
   const version = browser.version();
 
