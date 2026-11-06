@@ -78,11 +78,11 @@ test("waitForFonts maps a failed font face to font-load-failed", async () => {
 });
 
 // Integration boundary: a never-settling font exercises the real Playwright function-timeout path.
-test("waitForFonts maps a never-loading font to font-timeout", async () => {
+test("waitForFonts maps a never-loading font to font-load-timeout", async () => {
   await withPage(`${server.url}/font-hang.html`, async (page) => {
     const result = await waitForFonts(page, createDeadline(1500));
     if (!result.ok) {
-      expect(result.failure.code).toBe("font-timeout");
+      expect(result.failure.code).toBe("font-load-timeout");
       expect(result.failure.stage).toBe("web-font");
     }
   });

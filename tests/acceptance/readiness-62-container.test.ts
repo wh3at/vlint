@@ -106,7 +106,7 @@ const container = process.env.VLINT_READINESS_CONTAINER;
         expect(get(name).rules.every((rule: any) => rule.status === "clean")).toBe(true);
       }
       for (const name of ["css-error", "js-error"]) expect(get(name).failures[0].code).toBe("font-load-failed");
-      expect(get("js-slow").failures[0].code).toBe("font-timeout");
+      expect(get("js-slow").failures[0].code).toBe("font-load-timeout");
       expect(get("redirect-denied").failures[0].code).toBe("url-mismatch");
       for (const [name, code] of [["url-away", "url-mismatch"], ["ready-away", "ready-lost"]] as const) {
         expect(get(name).rules[0].status).toBe("clean");

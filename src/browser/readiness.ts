@@ -129,7 +129,7 @@ export async function waitForReadyCondition(
 
 /**
  * Waits for web fonts to settle within the remaining target budget, then
- * verifies no face errored. A never-settling font set is `font-timeout`; a face
+ * verifies no face errored. A never-settling font set is `font-load-timeout`; a face
  * that failed to load is `font-load-failed`; an abort is an interrupt failure.
  */
 export async function waitForFonts(
@@ -139,6 +139,7 @@ export async function waitForFonts(
 ): Promise<BoundaryResult<void>> {
   if (signalAborted(signal)) return boundaryFailure(interruptFailure());
   const timeout = deadline.remainingMs();
+  if (timeout <= 0) return boundaryFailure(fontFailure("font-load-timeout", "web fonts did not settle within the target deadline"));
   try {
     await raceAbort(
       signal,
@@ -154,7 +155,7 @@ export async function waitForFonts(
   } catch (error) {
     if (isAbortError(error)) return boundaryFailure(interruptFailure());
     if (isTimeoutError(error)) {
-      return boundaryFailure(fontFailure("font-timeout", "web fonts did not settle within the target deadline"));
+      return boundaryFailure(fontFailure("font-load-timeout", "web fonts did not settle within the target deadline"));
     }
     return boundaryFailure(fontFailure("font-load-failed", "web font readiness check failed"));
   }
